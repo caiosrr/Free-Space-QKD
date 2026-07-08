@@ -19,7 +19,8 @@ from otimizacao.otimizar_acoplamento_pm100 import PM100Reader
 
 DEFAULT_WAVELENGTH_NM = 632.8
 DEFAULT_SETTLE_S = 0.8
-DEFAULT_SAMPLES = 5
+DEFAULT_SAMPLES = 7
+DEFAULT_WARMUP_SAMPLES = 3
 DEFAULT_STEPS = "0.02,0.01,0.005,0.002"
 DEFAULT_CAMERA_EXPOSURE_S = 32e-6
 RESULTS_JSON = json_output_path("otimizacao_receptor_local_pm100.json")
@@ -31,6 +32,8 @@ class Measurement:
     timestamp_epoch: float
     power_w: float
     power_uw: float
+    min_uw: float
+    max_uw: float
     label: str
 
 
@@ -51,18 +54,36 @@ def parse_steps(text: str) -> list[float]:
     return [abs(float(item.strip())) for item in text.split(",") if item.strip()]
 
 
-def measure_pm(pm: PM100Reader, samples: int, label: str, log: list[Measurement]) -> float:
-    power_w = pm.read_average_w(samples)
+def measure_pm(
+    pm: PM100Reader,
+    samples: int,
+    warmup_samples: int,
+    label: str,
+    log: list[Measurement],
+) -> float:
+    for _ in range(max(0, warmup_samples)):
+        pm.read_power_w()
+        time.sleep(0.03)
+
+    values_w = []
+    for _ in range(samples):
+        values_w.append(pm.read_power_w())
+        time.sleep(0.08)
+
+    values_uw = [value * 1e6 for value in values_w]
+    power_w = float(sorted(values_w)[len(values_w) // 2])
     power_uw = power_w * 1e6
     log.append(
         Measurement(
             timestamp_epoch=time.time(),
             power_w=power_w,
             power_uw=power_uw,
+            min_uw=float(min(values_uw)),
+            max_uw=float(max(values_uw)),
             label=label,
         )
     )
-    print(f"{label}: {power_uw:.5f} uW")
+    print(f"{label}: {power_uw:.5f} uW (mediana; min={min(values_uw):.5f}, max={max(values_uw):.5f})")
     return power_uw
 
 
@@ -76,6 +97,7 @@ def move_local(delta_az: float, delta_alt: float, settle_s: float) -> None:
 def test_offset(
     pm: PM100Reader,
     samples: int,
+    warmup_samples: int,
     settle_s: float,
     offset_az: float,
     offset_alt: float,
@@ -86,7 +108,7 @@ def test_offset(
 ) -> float:
     label = f"teste ciclo={cycle} step={step:.5f} dAz={offset_az:+.5f} dAlt={offset_alt:+.5f}"
     move_local(offset_az, offset_alt, settle_s)
-    power_uw = measure_pm(pm, samples, label, measurements)
+    power_uw = measure_pm(pm, samples, warmup_samples, label, measurements)
     move_local(-offset_az, -offset_alt, settle_s)
     trials.append(
         Trial(
@@ -107,12 +129,13 @@ def optimize_local_receiver(
     steps: list[float],
     cycles: int,
     samples: int,
+    warmup_samples: int,
     settle_s: float,
 ) -> tuple[list[Measurement], list[Trial]]:
     measurements: list[Measurement] = []
     trials: list[Trial] = []
 
-    current_uw = measure_pm(pm, samples, "inicial", measurements)
+    current_uw = measure_pm(pm, samples, warmup_samples, "inicial", measurements)
 
     for cycle in range(1, cycles + 1):
         print(f"\n=== Ciclo {cycle}/{cycles} ===")
@@ -138,6 +161,7 @@ def optimize_local_receiver(
                 power_uw = test_offset(
                     pm,
                     samples,
+                    warmup_samples,
                     settle_s,
                     offset_az,
                     offset_alt,
@@ -160,7 +184,13 @@ def optimize_local_receiver(
                 f"| {current_uw:.5f} -> {best_uw:.5f} uW"
             )
             move_local(best_az, best_alt, settle_s)
-            current_uw = measure_pm(pm, samples, "apos aceitar melhor vizinho", measurements)
+            current_uw = measure_pm(
+                pm,
+                samples,
+                warmup_samples,
+                "apos aceitar melhor vizinho",
+                measurements,
+            )
 
             for trial in reversed(trials):
                 if (
@@ -227,6 +257,7 @@ def save_results(pm: PM100Reader, measurements: list[Measurement], trials: list[
         "steps_deg": parse_steps(args.steps),
         "cycles": args.cycles,
         "samples": args.samples,
+        "warmup_samples": args.warmup_samples,
         "settle_s": args.settle_s,
         "measurements": [asdict(item) for item in measurements],
         "trials": [asdict(item) for item in trials],
@@ -244,6 +275,7 @@ def main() -> None:
     parser.add_argument("--wavelength-nm", type=float, default=DEFAULT_WAVELENGTH_NM)
     parser.add_argument("--settle-s", type=float, default=DEFAULT_SETTLE_S)
     parser.add_argument("--samples", type=int, default=DEFAULT_SAMPLES)
+    parser.add_argument("--warmup-samples", type=int, default=DEFAULT_WARMUP_SAMPLES)
     parser.add_argument("--steps", default=DEFAULT_STEPS, help="Passos em graus. Ex: 0.02,0.01,0.005")
     parser.add_argument("--cycles", type=int, default=2)
     parser.add_argument("--focus-mode", default="dual", help="Modo para salvar alvo da camera: single ou dual.")
@@ -275,6 +307,7 @@ def main() -> None:
             steps=parse_steps(args.steps),
             cycles=args.cycles,
             samples=args.samples,
+            warmup_samples=args.warmup_samples,
             settle_s=args.settle_s,
         )
     except KeyboardInterrupt:
