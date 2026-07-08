@@ -1,4 +1,5 @@
 import argparse
+import cv2
 import json
 import sys
 import time
@@ -11,6 +12,8 @@ if str(ROOT_DIR) not in sys.path:
 
 from artifact_paths import json_output_path
 from controle import mount_control
+from controle.alvo_alinhamento import salvar_alvo
+from foco_multiplos import Center_of_Mass_foco_temp as foco_temp
 from otimizacao.otimizar_acoplamento_pm100 import PM100Reader
 
 
@@ -18,7 +21,9 @@ DEFAULT_WAVELENGTH_NM = 632.8
 DEFAULT_SETTLE_S = 0.8
 DEFAULT_SAMPLES = 5
 DEFAULT_STEPS = "0.02,0.01,0.005,0.002"
+DEFAULT_CAMERA_EXPOSURE_S = 32e-6
 RESULTS_JSON = json_output_path("otimizacao_receptor_local_pm100.json")
+CAMERA_TARGET_DEBUG = ROOT_DIR / "resultados" / "debug" / "otimizacao_receptor_alvo_camera.png"
 
 
 @dataclass
@@ -170,6 +175,49 @@ def optimize_local_receiver(
     return measurements, trials
 
 
+def save_camera_target_at_current_position(focus_mode: str, exposure_s: float) -> None:
+    print("\nSalvando alvo da camera na posicao atual do melhor acoplamento...")
+    foco_temp.set_focus_mode(focus_mode)
+    foco_temp.connect_camera()
+    try:
+        frame = foco_temp.capture_frame(exposure_s, light=True)
+        cm = foco_temp.centro_massa(frame)
+        if cm is None:
+            CAMERA_TARGET_DEBUG.parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(CAMERA_TARGET_DEBUG), frame)
+            print("Nao consegui detectar o laser na camera para salvar o alvo.")
+            print(f"Frame salvo para diagnostico: {CAMERA_TARGET_DEBUG}")
+            return
+
+        x_cm, y_cm, intensidade, toca_borda = cm
+        target_path = salvar_alvo(
+            x_cm,
+            y_cm,
+            source="pm100_peak_receiver_local",
+            frame_shape=frame.shape,
+            focus_mode=focus_mode,
+            samples=1,
+            std_x_px=0.0,
+            std_y_px=0.0,
+        )
+
+        marked = frame.copy()
+        if marked.ndim == 2:
+            marked = cv2.cvtColor(marked, cv2.COLOR_GRAY2BGR)
+        cv2.circle(marked, (int(round(x_cm)), int(round(y_cm))), 10, (0, 255, 0), -1)
+        CAMERA_TARGET_DEBUG.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(CAMERA_TARGET_DEBUG), marked)
+
+        print(f"Alvo salvo em: {target_path}")
+        print(
+            f"Alvo camera: x={x_cm:.2f}px y={y_cm:.2f}px "
+            f"| intensidade={intensidade:.1f} | toca_borda={toca_borda}"
+        )
+        print(f"Frame marcado salvo em: {CAMERA_TARGET_DEBUG}")
+    finally:
+        foco_temp.disconnect_camera()
+
+
 def save_results(pm: PM100Reader, measurements: list[Measurement], trials: list[Trial], args) -> None:
     payload = {
         "timestamp_epoch": time.time(),
@@ -198,6 +246,13 @@ def main() -> None:
     parser.add_argument("--samples", type=int, default=DEFAULT_SAMPLES)
     parser.add_argument("--steps", default=DEFAULT_STEPS, help="Passos em graus. Ex: 0.02,0.01,0.005")
     parser.add_argument("--cycles", type=int, default=2)
+    parser.add_argument("--focus-mode", default="dual", help="Modo para salvar alvo da camera: single ou dual.")
+    parser.add_argument("--camera-exposure-s", type=float, default=DEFAULT_CAMERA_EXPOSURE_S)
+    parser.add_argument(
+        "--no-save-camera-target",
+        action="store_true",
+        help="Nao salva alvo da camera ao final/interrupcao.",
+    )
     args = parser.parse_args()
 
     mount_control.BASE_URL = args.base_url
@@ -230,6 +285,11 @@ def main() -> None:
             mount_control.move_axis(1, 0.0, True)
         except Exception:
             pass
+        if not args.no_save_camera_target:
+            try:
+                save_camera_target_at_current_position(args.focus_mode, args.camera_exposure_s)
+            except Exception as exc:
+                print(f"Aviso: nao consegui salvar alvo da camera: {exc}")
         save_results(pm, measurements, trials, args)
 
 
