@@ -5,22 +5,64 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
-from controle.mov_mount_remoto import (
-    DEFAULT_BASE_URL,
-    TOLERANCIA_GRAUS,
-    TelescopeClient,
-    calc_error_az,
-    move_relative_remote,
-)
+import controle.mount_control as mount_control
 
 
 class MountAgentState:
     def __init__(self, base_url: str, label: str):
         self.label = label
-        self.telescope = TelescopeClient(base_url)
+        self.base_url = base_url
         self.lock = threading.Lock()
         self.last_move = None
         self.last_error = None
+
+    def ensure_ready(self) -> None:
+        mount_control.BASE_URL = self.base_url
+        mount_control.ensure_connected()
+        mount_control.ensure_unparked()
+        mount_control.ensure_not_tracking()
+
+    def read_altaz(self):
+        mount_control.BASE_URL = self.base_url
+        return mount_control.read_altaz()
+
+    def stop(self) -> None:
+        mount_control.BASE_URL = self.base_url
+        mount_control.move_axis(0, 0.0, True)
+        mount_control.move_axis(1, 0.0, True)
+
+    def move_relative(self, delta_az: float, delta_alt: float, tolerance: float) -> dict:
+        mount_control.BASE_URL = self.base_url
+        az0, alt0 = mount_control.read_altaz()
+        target_az = (az0 + delta_az) % 360.0
+        target_alt = alt0 + delta_alt
+
+        old_tolerance = mount_control.TOLERANCIA_GRAUS
+        mount_control.TOLERANCIA_GRAUS = tolerance
+        try:
+            mount_control.move_axes_pid_2d(True, delta_az, delta_alt)
+        finally:
+            mount_control.TOLERANCIA_GRAUS = old_tolerance
+
+        azf, altf = mount_control.read_altaz()
+        final_err_az = mount_control.calc_error(0, target_az, azf)
+        final_err_alt = mount_control.calc_error(1, target_alt, altf)
+
+        return {
+            "ok": abs(final_err_az) <= tolerance and abs(final_err_alt) <= tolerance,
+            "label": self.label,
+            "delta_az_deg": delta_az,
+            "delta_alt_deg": delta_alt,
+            "az_before_deg": az0,
+            "alt_before_deg": alt0,
+            "az_after_deg": azf,
+            "alt_after_deg": altf,
+            "target_az_deg": target_az,
+            "target_alt_deg": target_alt,
+            "final_err_az_deg": final_err_az,
+            "final_err_alt_deg": final_err_alt,
+            "timestamp_epoch": time.time(),
+        }
 
 
 def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
@@ -46,7 +88,7 @@ def make_handler(state: MountAgentState):
                     _json_response(self, 200, {"ok": True, "label": state.label})
                     return
                 if path == "/position":
-                    az, alt = state.telescope.read_altaz()
+                    az, alt = state.read_altaz()
                     _json_response(
                         self,
                         200,
@@ -60,7 +102,7 @@ def make_handler(state: MountAgentState):
                     )
                     return
                 if path == "/status":
-                    az, alt = state.telescope.read_altaz()
+                    az, alt = state.read_altaz()
                     _json_response(
                         self,
                         200,
@@ -87,39 +129,17 @@ def make_handler(state: MountAgentState):
                 payload = json.loads(raw or "{}")
 
                 if path == "/stop":
-                    state.telescope.stop()
+                    state.stop()
                     _json_response(self, 200, {"ok": True, "label": state.label, "stopped": True})
                     return
 
                 if path == "/move_relative":
                     delta_az = float(payload.get("delta_az_deg", 0.0))
                     delta_alt = float(payload.get("delta_alt_deg", 0.0))
-                    tolerance = float(payload.get("tolerance_deg", TOLERANCIA_GRAUS))
+                    tolerance = float(payload.get("tolerance_deg", mount_control.TOLERANCIA_GRAUS))
 
                     with state.lock:
-                        az0, alt0 = state.telescope.read_altaz()
-                        ok = move_relative_remote(
-                            state.telescope,
-                            delta_az,
-                            delta_alt,
-                            tolerance=tolerance,
-                        )
-                        azf, altf = state.telescope.read_altaz()
-                        target_az = (az0 + delta_az) % 360.0
-                        target_alt = alt0 + delta_alt
-                        result = {
-                            "ok": bool(ok),
-                            "label": state.label,
-                            "delta_az_deg": delta_az,
-                            "delta_alt_deg": delta_alt,
-                            "az_before_deg": az0,
-                            "alt_before_deg": alt0,
-                            "az_after_deg": azf,
-                            "alt_after_deg": altf,
-                            "final_err_az_deg": calc_error_az(target_az, azf),
-                            "final_err_alt_deg": target_alt - altf,
-                            "timestamp_epoch": time.time(),
-                        }
+                        result = state.move_relative(delta_az, delta_alt, tolerance)
                         state.last_move = result
                     _json_response(self, 200, result)
                     return
@@ -128,7 +148,7 @@ def make_handler(state: MountAgentState):
             except Exception as exc:
                 state.last_error = str(exc)
                 try:
-                    state.telescope.stop()
+                    state.stop()
                 except Exception:
                     pass
                 _json_response(self, 500, {"ok": False, "error": str(exc)})
@@ -143,14 +163,14 @@ def main() -> None:
     parser.add_argument("--label", default="mount-agent", help="Human-readable mount label.")
     parser.add_argument(
         "--base-url",
-        default=DEFAULT_BASE_URL,
+        default=mount_control.BASE_URL,
         help="Local ASCOM/Alpaca telescope URL, e.g. http://127.0.0.1:11111/api/v1/telescope/0",
     )
     args = parser.parse_args()
 
     state = MountAgentState(args.base_url, args.label)
-    state.telescope.ensure_ready()
-    az, alt = state.telescope.read_altaz()
+    state.ensure_ready()
+    az, alt = state.read_altaz()
     print(f"{args.label}: conectado em {args.base_url}")
     print(f"Pos inicial: Az={az:.6f} deg | Alt={alt:.6f} deg")
     print(f"Servidor agent em http://{args.host}:{args.port}")
@@ -162,7 +182,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nEncerrando agente...")
     finally:
-        state.telescope.stop()
+        state.stop()
         server.server_close()
 
 
