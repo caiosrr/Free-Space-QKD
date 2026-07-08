@@ -123,7 +123,27 @@ def _roi_params_for_target(
     target_y: float,
     mode: str,
 ) -> tuple[int, int, float, float]:
+    if mode == "rot180_ascom_axes":
+        raw_target_x = (sensor_w - 1) - target_y
+        raw_target_y = (sensor_h - 1) - target_x
+        start_x, start_y, raw_local_x, raw_local_y = roi_incluindo_alvo(
+            sensor_w,
+            sensor_h,
+            roi_w,
+            roi_h,
+            raw_target_x,
+            raw_target_y,
+        )
+        return (
+            start_x,
+            start_y,
+            float((roi_h - 1) - raw_local_y),
+            float((roi_w - 1) - raw_local_x),
+        )
+
     if mode == "rot180":
+        target_x = float(np.clip(target_x, 0, sensor_w - 1))
+        target_y = float(np.clip(target_y, 0, sensor_h - 1))
         raw_target_x = (sensor_w - 1) - target_x
         raw_target_y = (sensor_h - 1) - target_y
         start_x, start_y, local_x, local_y = roi_incluindo_alvo(
@@ -136,6 +156,8 @@ def _roi_params_for_target(
         )
         return start_x, start_y, float((roi_w - 1) - local_x), float((roi_h - 1) - local_y)
 
+    target_x = float(np.clip(target_x, 0, sensor_w - 1))
+    target_y = float(np.clip(target_y, 0, sensor_h - 1))
     start_x, start_y, local_x, local_y = roi_incluindo_alvo(
         sensor_w,
         sensor_h,
@@ -194,15 +216,21 @@ def set_camera_roi_validated(
     focus_mode: str,
 ) -> tuple[int, int, float, float]:
     max_x, max_y = get_camera_size()
-    target_x = float(np.clip(target_x, 0, max_x - 1))
-    target_y = float(np.clip(target_y, 0, max_y - 1))
+    display_w = max_y
+    display_h = max_x
+    target_x = float(np.clip(target_x, 0, display_w - 1))
+    target_y = float(np.clip(target_y, 0, display_h - 1))
 
     candidates = [
-        ("rot180", "coordenada corrigida pela rotacao 180"),
-        ("direct", "coordenada direta do sensor"),
-        ("direct_rotlocal", "crop direto com alvo local invertido"),
+        ("rot180_ascom_axes", "frame rotacionado 180 com eixos ASCOM"),
+        ("rot180", "coordenada corrigida pela rotacao 180 antiga"),
+        ("direct", "coordenada direta do sensor antiga"),
     ]
     best = None
+    print(
+        f"Sensor ASCOM: {max_x}x{max_y}; frame esperado apos captura: "
+        f"{display_w}x{display_h}; alvo global=({target_x:.1f}, {target_y:.1f})"
+    )
 
     for mode, description in candidates:
         start_x, start_y, target_x_local, target_y_local = _roi_params_for_target(
@@ -219,6 +247,8 @@ def set_camera_roi_validated(
             f"alvo local=({target_x_local:.1f}, {target_y_local:.1f})"
         )
         _apply_camera_roi(w, h, start_x, start_y)
+        if _normalize_focus_mode(focus_mode) == "dual":
+            foco_temp.reset_focus_lock()
         frame_test = capture_frame(EXPOSURE_SECONDS)
         cm = medir_laser(frame_test, focus_mode)
         if cm is None:
@@ -237,6 +267,8 @@ def set_camera_roi_validated(
 
     _, start_x, start_y, target_x_local, target_y_local, mode, frame_test = best
     _apply_camera_roi(w, h, start_x, start_y)
+    if _normalize_focus_mode(focus_mode) == "dual":
+        foco_temp.reset_focus_lock()
     debug_path = ROOT_DIR / "resultados" / "debug" / "tracker_roi_teste.png"
     debug_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(debug_path), frame_test)
