@@ -1,4 +1,5 @@
 import argparse
+import ctypes
 import json
 import sys
 import time
@@ -44,6 +45,9 @@ class MoveLog:
 
 class PM100Reader:
     def __init__(self, wavelength_nm: float, resource_name: str | None = None):
+        self.backend = "pyvisa"
+        self.tlpm = None
+        self.tlpm_session = None
         try:
             import pyvisa
         except ImportError as exc:
@@ -52,10 +56,14 @@ class PM100Reader:
             ) from exc
 
         self.pyvisa = pyvisa
-        self.rm = pyvisa.ResourceManager()
+        try:
+            self.rm = pyvisa.ResourceManager()
+        except ValueError:
+            self.rm = pyvisa.ResourceManager("@py")
         resources = list(self.rm.list_resources())
         if not resources:
-            raise RuntimeError("Nenhum recurso VISA encontrado. Confira driver Thorlabs/OPM e USB.")
+            self._init_tlpm(wavelength_nm)
+            return
 
         if resource_name is None:
             resource_name = self._pick_pm100_resource(resources)
@@ -65,6 +73,58 @@ class PM100Reader:
 
         self.idn = self._query_first(["*IDN?"]).strip()
         self.set_wavelength(wavelength_nm)
+
+    def _init_tlpm(self, wavelength_nm: float) -> None:
+        dll_candidates = [
+            r"C:\Program Files\IVI Foundation\VISA\Win64\Bin\TLPM_64.dll",
+            r"C:\Program Files\IVI Foundation\VISA\Win64\Bin\TLPMX_64.dll",
+            r"C:\Program Files (x86)\IVI Foundation\VISA\WinNT\Bin\TLPM_32.dll",
+        ]
+        last_exc = None
+        for dll_path in dll_candidates:
+            try:
+                tlpm = ctypes.WinDLL(dll_path)
+                prefix = "TLPMX" if "TLPMX" in dll_path.upper() else "TLPM"
+                session = ctypes.c_uint32(0)
+                count = ctypes.c_uint32(0)
+                status = getattr(tlpm, f"{prefix}_findRsrc")(session, ctypes.byref(count))
+                if status != 0 or count.value <= 0:
+                    continue
+
+                resource = ctypes.create_string_buffer(1024)
+                status = getattr(tlpm, f"{prefix}_getRsrcName")(
+                    session,
+                    ctypes.c_uint32(0),
+                    resource,
+                )
+                if status != 0:
+                    continue
+
+                opened_session = ctypes.c_uint32(0)
+                status = getattr(tlpm, f"{prefix}_init")(
+                    resource,
+                    ctypes.c_bool(True),
+                    ctypes.c_bool(True),
+                    ctypes.byref(opened_session),
+                )
+                if status != 0:
+                    continue
+
+                self.backend = "tlpm"
+                self.tlpm = tlpm
+                self.tlpm_prefix = prefix
+                self.tlpm_session = opened_session
+                self.resource_name = resource.value.decode(errors="replace")
+                self.idn = f"Thorlabs {prefix} ({self.resource_name})"
+                self.set_wavelength(wavelength_nm)
+                return
+            except Exception as exc:
+                last_exc = exc
+
+        raise RuntimeError(
+            "Nenhum recurso VISA encontrado e nao consegui abrir a API TLPM da Thorlabs. "
+            "Feche o app da Thorlabs, confira o USB e teste novamente."
+        ) from last_exc
 
     @staticmethod
     def _pick_pm100_resource(resources: list[str]) -> str:
@@ -87,6 +147,19 @@ class PM100Reader:
         raise RuntimeError(f"Falha consultando PM100 com {commands}: {last_exc}")
 
     def set_wavelength(self, wavelength_nm: float) -> None:
+        if self.backend == "tlpm":
+            try:
+                status = getattr(self.tlpm, f"{self.tlpm_prefix}_setWavelength")(
+                    self.tlpm_session,
+                    ctypes.c_double(wavelength_nm),
+                )
+                if status == 0:
+                    return
+            except Exception:
+                pass
+            print("Aviso: nao consegui configurar wavelength via TLPM; confira no OPM.")
+            return
+
         commands = [
             f"SENS:CORR:WAV {wavelength_nm}",
             f"SENSE:CORRECTION:WAVELENGTH {wavelength_nm}",
@@ -100,6 +173,16 @@ class PM100Reader:
         print("Aviso: nao consegui configurar wavelength via SCPI; confira no OPM.")
 
     def read_power_w(self) -> float:
+        if self.backend == "tlpm":
+            power = ctypes.c_double()
+            status = getattr(self.tlpm, f"{self.tlpm_prefix}_measPower")(
+                self.tlpm_session,
+                ctypes.byref(power),
+            )
+            if status != 0:
+                raise RuntimeError(f"TLPM_measPower falhou com status {status}")
+            return float(power.value)
+
         response = self._query_first(["READ?", "MEAS:POW?", "MEASURE:POWER?"])
         return float(response.strip().split(",")[0])
 
