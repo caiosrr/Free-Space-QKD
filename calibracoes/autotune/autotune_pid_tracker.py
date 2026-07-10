@@ -40,6 +40,7 @@ DEFAULT_RECEIVER_DEVICE = 0  # "telescopio 1": recebe o laser e corrige.
 DEFAULT_SENDER_DEVICE = 1  # "telescopio 2": envia o laser e gera perturbacoes.
 DEFAULT_RECEIVER_ALPACA_ROOT = "http://127.0.0.1:11111/api/v1"
 DEFAULT_SENDER_ALPACA_ROOT = "http://127.0.0.1:11111/api/v1"
+DEFAULT_SENDER_AGENT_URL = "http://10.4.0.145:18080"
 DEFAULT_RECEIVER_INVERT_AZ = True
 DEFAULT_RECEIVER_INVERT_ALT = False
 DEFAULT_SENDER_INVERT_AZ = True
@@ -501,6 +502,76 @@ class AlpacaTelescope:
             "final_alt_deg": altf,
             "elapsed_s": elapsed,
         }
+
+    def move_to_altaz(self, target_az_deg: float, target_alt_deg: float, verbose: bool = True) -> dict:
+        az, alt = self.read_altaz()
+        delta_az = calc_error(0, target_az_deg, az)
+        delta_alt = float(target_alt_deg) - alt
+        return self.move_relative_pid(delta_az, delta_alt, verbose=verbose)
+
+
+class MountAgentTelescope:
+    def __init__(self, agent_url: str, label: str):
+        self.label = label
+        self.agent_url = agent_url.rstrip("/")
+        self.base_url = self.agent_url
+        self.session = requests.Session()
+        self.invert_az = None
+        self.invert_alt = None
+
+    def _request(self, method: str, endpoint: str, timeout: float = 5.0, **kwargs) -> dict:
+        resp = self.session.request(
+            method,
+            f"{self.agent_url}{endpoint}",
+            timeout=timeout,
+            **kwargs,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+        if not payload.get("ok", False):
+            raise RuntimeError(f"{self.label} {endpoint}: {payload.get('error', payload)}")
+        return payload
+
+    def prepare(self):
+        print(f"Conectando {self.label} via mount_agent em {self.agent_url}...")
+        payload = self._request("GET", "/health", timeout=5.0)
+        print(f"  Agent OK: {payload.get('label', self.label)}")
+        self.read_altaz()
+
+    def read_altaz(self) -> tuple[float, float]:
+        payload = self._request("GET", "/position", timeout=5.0)
+        return float(payload["az_deg"]), float(payload["alt_deg"])
+
+    def stop_all(self):
+        try:
+            self._request("POST", "/stop", timeout=5.0, json={})
+        except Exception:
+            pass
+
+    def move_relative_pid(
+        self,
+        delta_az_deg: float,
+        delta_alt_deg: float,
+        verbose: bool = True,
+    ) -> dict:
+        if verbose:
+            print(
+                f"  {self.label}: requisitando move_relative "
+                f"dAz={delta_az_deg:+.4f} deg dAlt={delta_alt_deg:+.4f} deg"
+            )
+        payload = self._request(
+            "POST",
+            "/move_relative",
+            timeout=MOVE_TIMEOUT_S + 10.0,
+            json={
+                "delta_az_deg": float(delta_az_deg),
+                "delta_alt_deg": float(delta_alt_deg),
+                "tolerance_deg": MOVE_TOLERANCE_DEG,
+            },
+        )
+        if not payload.get("ok", False):
+            raise RuntimeError(f"{self.label}: movimento remoto nao convergiu: {payload}")
+        return payload
 
     def move_to_altaz(self, target_az_deg: float, target_alt_deg: float, verbose: bool = True) -> dict:
         az, alt = self.read_altaz()
@@ -1773,26 +1844,44 @@ def main():
             "Device Alpaca do telescopio 1 / receiver",
             DEFAULT_RECEIVER_DEVICE,
         )
-        sender_device = _input_int_default(
-            "Device Alpaca do telescopio 2 / sender",
-            DEFAULT_SENDER_DEVICE,
-        )
         receiver_root = _input_str_default(
             "Alpaca root do telescopio 1 / receiver",
             DEFAULT_RECEIVER_ALPACA_ROOT,
         )
-        sender_root = _input_str_default(
-            "Alpaca root do telescopio 2 / sender",
-            DEFAULT_SENDER_ALPACA_ROOT,
-        )
-        same_root = receiver_root.rstrip("/") == sender_root.rstrip("/")
-        if receiver_device == sender_device and same_root:
-            raise ValueError("Receiver e sender precisam ser devices Alpaca diferentes.")
 
-        sender_invert_alt = _input_bool_default(
-            "Inverter sinal de altitude do telescopio 2 / sender",
-            DEFAULT_SENDER_INVERT_ALT,
-        )
+        sender_mode = _input_str_default(
+            "Controle do telescopio 2 / sender (agent/alpaca)",
+            "agent",
+        ).strip().lower()
+        if sender_mode not in {"agent", "alpaca"}:
+            raise ValueError("Controle do sender precisa ser 'agent' ou 'alpaca'.")
+
+        sender_device = None
+        sender_root = None
+        sender_agent_url = None
+        sender_invert_alt = None
+        if sender_mode == "agent":
+            sender_agent_url = _input_str_default(
+                "URL do mount_agent no PC1 / sender",
+                DEFAULT_SENDER_AGENT_URL,
+            )
+        else:
+            sender_device = _input_int_default(
+                "Device Alpaca do telescopio 2 / sender",
+                DEFAULT_SENDER_DEVICE,
+            )
+            sender_root = _input_str_default(
+                "Alpaca root do telescopio 2 / sender",
+                DEFAULT_SENDER_ALPACA_ROOT,
+            )
+            same_root = receiver_root.rstrip("/") == sender_root.rstrip("/")
+            if receiver_device == sender_device and same_root:
+                raise ValueError("Receiver e sender precisam ser devices Alpaca diferentes.")
+
+            sender_invert_alt = _input_bool_default(
+                "Inverter sinal de altitude do telescopio 2 / sender",
+                DEFAULT_SENDER_INVERT_ALT,
+            )
 
         focus_input = input("Modo do laser (1=foco unico, 2=dupla reflexao) [1]: ").strip() or "1"
         focus_mode = _normalize_focus_mode(focus_input)
@@ -1806,21 +1895,28 @@ def main():
             invert_az=DEFAULT_RECEIVER_INVERT_AZ,
             invert_alt=DEFAULT_RECEIVER_INVERT_ALT,
         )
-        sender = AlpacaTelescope(
-            sender_device,
-            "T2 sender",
-            alpaca_root=sender_root,
-            invert_az=DEFAULT_SENDER_INVERT_AZ,
-            invert_alt=sender_invert_alt,
-        )
+        if sender_mode == "agent":
+            sender = MountAgentTelescope(
+                sender_agent_url,
+                "T2 sender agent",
+            )
+        else:
+            sender = AlpacaTelescope(
+                sender_device,
+                "T2 sender",
+                alpaca_root=sender_root,
+                invert_az=DEFAULT_SENDER_INVERT_AZ,
+                invert_alt=sender_invert_alt,
+            )
         receiver.prepare()
         sender.prepare()
         connect_camera()
 
         print("\nConfiguracao:")
         print(f"  T1 receiver: {receiver.base_url}")
-        print(f"  T2 sender:   {sender.base_url}")
-        print(f"  Inverter Alt T2: {'sim' if sender_invert_alt else 'nao'}")
+        print(f"  T2 sender:   {sender.base_url} ({sender_mode})")
+        if sender_mode == "alpaca":
+            print(f"  Inverter Alt T2: {'sim' if sender_invert_alt else 'nao'}")
         print(f"  Modo foco:   {focus_mode}")
         print(f"  Matriz fine:   {matrices['fine_path']}")
         print(f"  Matriz coarse: {matrices['coarse_path']}")
@@ -1834,6 +1930,8 @@ def main():
         metadata = {
             "receiver_device": receiver_device,
             "sender_device": sender_device,
+            "sender_control_mode": sender_mode,
+            "sender_agent_url": sender_agent_url,
             "receiver_base_url": receiver.base_url,
             "sender_base_url": sender.base_url,
             "receiver_invert_az": receiver.invert_az,

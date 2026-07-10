@@ -38,11 +38,17 @@ SETTLE_S = 1.50
 CAPTURES_PER_CENTER = 2
 CAPTURES_PER_POINT = 2
 MAX_SAMPLE_ATTEMPTS = 3
+POST_FIT_REMEASURE_PASSES = 2
 CENTER_DRIFT_WEIGHT = 0.50
 DISCONNECT_CAMERA_ON_EXIT = True
+FINE_FIT_USE_SMALLEST_RADIUS = True
 DRIFT_LIMITS_PX = {
-    "coarse": {"accept": 10.0, "warn": 15.0},
-    "fine": {"accept": 6.0, "warn": 10.0},
+    "coarse": {"accept": 10.0, "warn": 15.0, "reject": 20.0},
+    "fine": {"accept": 6.0, "warn": 10.0, "reject": 10.0},
+}
+RESIDUAL_RETRY_LIMITS_PX = {
+    "coarse": 15.0,
+    "fine": 7.0,
 }
 MAX_COND = 1.0e4
 MIN_SPREAD_DEG = 0.008
@@ -50,7 +56,7 @@ ROBUST_ITERS = 8
 HUBER_K = 1.5
 
 COARSE_RADII_DEG = [0.04]
-FINE_RADII_DEG = [0.010, 0.015]
+FINE_RADII_DEG = [0.010]
 
 QUALITY_LIMITS = {
     "coarse": {"warn_rms_px": 10.0, "max_rms_px": 18.0},
@@ -226,8 +232,10 @@ def _collect_bracketed_sample_once(
     exposure: float,
     mount: bool,
     attempt_idx: int,
+    audit_label: str | None = None,
 ) -> RegistroDual | None:
-    tag_base = f"{regime}_{label}_try{attempt_idx + 1:02d}"
+    audit_label = label if audit_label is None else audit_label
+    tag_base = f"{regime}_{audit_label}_try{attempt_idx + 1:02d}"
 
     center_before = _capture_cm_estavel(
         exposure,
@@ -332,6 +340,7 @@ def _collect_bracketed_sample(
     target_alt_deg: float,
     exposure: float,
     mount: bool,
+    audit_label: str | None = None,
 ) -> RegistroDual | None:
     limits = DRIFT_LIMITS_PX[regime]
     best_record = None
@@ -348,6 +357,7 @@ def _collect_bracketed_sample(
             exposure=exposure,
             mount=mount,
             attempt_idx=attempt_idx,
+            audit_label=audit_label,
         )
         if registro is None:
             continue
@@ -381,6 +391,14 @@ def _build_star_sequence(radii_deg: list[float]):
                 )
             )
     return sequence
+
+
+def _replace_record(registros: list[RegistroDual], novo: RegistroDual) -> None:
+    for idx, registro in enumerate(registros):
+        if registro.label == novo.label:
+            registros[idx] = novo
+            return
+    registros.append(novo)
 
 
 def _collect_regime(
@@ -419,6 +437,119 @@ def _collect_regime(
 
     print(f"Registros validos {regime}: {len(registros)}")
     return registros
+
+
+def _residuals_for_records(A: np.ndarray, registros: list[RegistroDual]) -> list[dict]:
+    residuals = []
+    for registro in registros:
+        offset = np.array([registro.target_az_deg, registro.target_alt_deg], dtype=float)
+        pred = A @ offset
+        residual_px = float(
+            np.hypot(
+                pred[0] - registro.corrected_x_px,
+                pred[1] - registro.corrected_y_px,
+            )
+        )
+        residuals.append(
+            {
+                "label": registro.label,
+                "residual_px": residual_px,
+                "pred_x_px": float(pred[0]),
+                "pred_y_px": float(pred[1]),
+                "measured_x_px": registro.corrected_x_px,
+                "measured_y_px": registro.corrected_y_px,
+                "center_drift_px": registro.center_drift_px,
+                "jitter_px": registro.jitter_px,
+            }
+        )
+    return residuals
+
+
+def _records_fit_ready(registros: list[RegistroDual]) -> bool:
+    if len(registros) < 8:
+        return False
+    offsets = np.array(
+        [[r.target_az_deg, r.target_alt_deg] for r in registros],
+        dtype=float,
+    )
+    spread_az = float(np.ptp(offsets[:, 0]))
+    spread_alt = float(np.ptp(offsets[:, 1]))
+    return (
+        spread_az >= MIN_SPREAD_DEG
+        and spread_alt >= MIN_SPREAD_DEG
+        and np.linalg.matrix_rank(offsets) >= 2
+    )
+
+
+def _filter_records_for_fit(registros: list[RegistroDual], regime: str) -> tuple[list[RegistroDual], list[dict]]:
+    reject_limit = DRIFT_LIMITS_PX[regime].get("reject")
+    if reject_limit is None:
+        return registros, []
+
+    kept = []
+    rejected = []
+    for registro in registros:
+        if registro.center_drift_px > reject_limit:
+            rejected.append(
+                {
+                    "label": registro.label,
+                    "center_drift_px": registro.center_drift_px,
+                    "reject_limit_px": reject_limit,
+                }
+            )
+        else:
+            kept.append(registro)
+
+    if not rejected:
+        return registros, []
+
+    if not _records_fit_ready(kept):
+        print(
+            f"Aviso: {regime} teve {len(rejected)} ponto(s) com drift alto, "
+            "mas eles foram mantidos para preservar cobertura minima do ajuste."
+        )
+        return registros, []
+
+    print(
+        f"{regime}: descartando {len(rejected)} ponto(s) com drift acima de "
+        f"{reject_limit:.1f}px antes do fit."
+    )
+    for item in rejected:
+        print(f"  -> {item['label']}: drift={item['center_drift_px']:.2f}px")
+    return kept, rejected
+
+
+def _select_records_for_fit_scale(registros: list[RegistroDual], regime: str) -> tuple[list[RegistroDual], list[dict]]:
+    if regime != "fine" or not FINE_FIT_USE_SMALLEST_RADIUS or not registros:
+        return registros, []
+
+    smallest_radius = min(r.radius_deg for r in registros)
+    selected = [
+        r for r in registros
+        if abs(r.radius_deg - smallest_radius) <= 1e-9
+    ]
+    if not _records_fit_ready(selected):
+        print(
+            "Aviso: pontos fine do menor raio nao cobrem o ajuste; "
+            "mantendo todos os raios no fit."
+        )
+        return registros, []
+
+    excluded = [
+        {
+            "label": r.label,
+            "radius_deg": r.radius_deg,
+            "selected_radius_deg": smallest_radius,
+        }
+        for r in registros
+        if abs(r.radius_deg - smallest_radius) > 1e-9
+    ]
+    if excluded:
+        print(
+            f"fine: usando apenas raio {smallest_radius:.4f} deg no fit "
+            f"({len(selected)}/{len(registros)} pontos)."
+        )
+    return selected, excluded
 
 
 def _evaluate_matrix(A: np.ndarray, registros: list[RegistroDual]):
@@ -539,6 +670,89 @@ def _fit_robusto_sem_intercepto(registros: list[RegistroDual], regime: str):
     }
 
 
+def _prepare_fit_records(registros: list[RegistroDual], regime: str):
+    fit_records, rejected = _filter_records_for_fit(registros, regime)
+    fit_records, scale_excluded = _select_records_for_fit_scale(fit_records, regime)
+    return fit_records, rejected, scale_excluded
+
+
+def _fit_regime_with_outlier_remeasure(
+    regime: str,
+    radii_deg: list[float],
+    exposure: float,
+    mount: bool,
+) -> tuple[dict, list[RegistroDual]]:
+    sequence = _build_star_sequence(radii_deg)
+    sequence_by_label = {label: item for item in sequence for label in [item[0]]}
+    registros = _collect_regime(
+        regime=regime,
+        radii_deg=radii_deg,
+        exposure=exposure,
+        mount=mount,
+    )
+    remeasure_log = []
+    residual_limit = RESIDUAL_RETRY_LIMITS_PX[regime]
+
+    for pass_idx in range(POST_FIT_REMEASURE_PASSES + 1):
+        fit_records, rejected, scale_excluded = _prepare_fit_records(registros, regime)
+        result = _fit_robusto_sem_intercepto(fit_records, regime=regime)
+        residuals = _residuals_for_records(result["A"], fit_records)
+        bad_residuals = [
+            item for item in residuals
+            if item["residual_px"] > residual_limit
+        ]
+
+        if not bad_residuals or pass_idx >= POST_FIT_REMEASURE_PASSES:
+            result["fit_rejected_records"] = rejected
+            result["fit_excluded_scale_records"] = scale_excluded
+            result["num_collected_points"] = len(registros)
+            result["post_fit_remeasure_log"] = remeasure_log
+            result["post_fit_residuals"] = residuals
+            return result, registros
+
+        print(
+            f"{regime}: {len(bad_residuals)} ponto(s) com residuo acima de "
+            f"{residual_limit:.1f}px; recolhendo antes de refazer o fit."
+        )
+        for item in sorted(bad_residuals, key=lambda value: value["residual_px"], reverse=True):
+            label = item["label"]
+            if label not in sequence_by_label:
+                continue
+            _, radius_deg, target_az_deg, target_alt_deg = sequence_by_label[label]
+            print(f"  -> refazendo {label}: residuo={item['residual_px']:.2f}px")
+            novo = _collect_bracketed_sample(
+                regime=regime,
+                label=label,
+                radius_deg=radius_deg,
+                target_az_deg=target_az_deg,
+                target_alt_deg=target_alt_deg,
+                exposure=exposure,
+                mount=mount,
+                audit_label=f"{label}_refit{pass_idx + 1:02d}",
+            )
+            if novo is None:
+                remeasure_log.append(
+                    {
+                        **item,
+                        "refit_pass": pass_idx + 1,
+                        "remeasured": False,
+                    }
+                )
+                continue
+            _replace_record(registros, novo)
+            remeasure_log.append(
+                {
+                    **item,
+                    "refit_pass": pass_idx + 1,
+                    "remeasured": True,
+                    "new_center_drift_px": novo.center_drift_px,
+                    "new_jitter_px": novo.jitter_px,
+                }
+            )
+
+    raise RuntimeError(f"{regime}: falha inesperada no refit com remedicao.")
+
+
 def _load_existing_matrix():
     for meta_path in json_candidates("calibracao_meta.json"):
         if meta_path.exists():
@@ -578,6 +792,64 @@ def _compare_with_existing(existing, coarse_result, fine_result, coarse_records,
     return comparison
 
 
+def _calibration_config_payload() -> dict:
+    return {
+        "exposure_seconds": EXPOSURE_SECONDS,
+        "settle_s": SETTLE_S,
+        "captures_per_center": CAPTURES_PER_CENTER,
+        "captures_per_point": CAPTURES_PER_POINT,
+        "max_sample_attempts": MAX_SAMPLE_ATTEMPTS,
+        "post_fit_remeasure_passes": POST_FIT_REMEASURE_PASSES,
+        "center_drift_weight": CENTER_DRIFT_WEIGHT,
+        "fine_fit_use_smallest_radius": FINE_FIT_USE_SMALLEST_RADIUS,
+        "drift_limits_px": DRIFT_LIMITS_PX,
+        "residual_retry_limits_px": RESIDUAL_RETRY_LIMITS_PX,
+        "coarse_radii_deg": COARSE_RADII_DEG,
+        "fine_radii_deg": FINE_RADII_DEG,
+        "directions": DIRECTIONS,
+        "robust_iters": ROBUST_ITERS,
+        "huber_k": HUBER_K,
+        "focus_mode": get_focus_mode(),
+        "focus_method": "temporary locked-focus center of mass",
+        "focus_audit_dir": None if AUDIT_DIR is None else str(AUDIT_DIR.relative_to(ROOT_DIR)),
+    }
+
+
+def _matrix_paths_for_regime(regime: str, output_dir=None) -> tuple[Path, Path]:
+    if regime == "coarse":
+        return (
+            matrix_output_path(COARSE_A_PATH, output_dir),
+            matrix_output_path(COARSE_A_INV_PATH, output_dir),
+        )
+    if regime == "fine":
+        return (
+            matrix_output_path(FINE_A_PATH, output_dir),
+            matrix_output_path(FINE_A_INV_PATH, output_dir),
+        )
+    raise ValueError(f"Regime invalido: {regime}")
+
+
+def _save_regime_results(regime: str, result, records, output_dir=None) -> None:
+    a_path, a_inv_path = _matrix_paths_for_regime(regime, output_dir)
+    np.save(a_path, result["A"])
+    np.save(a_inv_path, result["A_inv"])
+
+    payload = {
+        "timestamp_epoch": time.time(),
+        "config": _calibration_config_payload(),
+        "focus_audit": AUDIT_LOG,
+        regime: {
+            **{k: v for k, v in result.items() if k not in {"A", "A_inv", "weights"}},
+            "A": result["A"].tolist(),
+            "A_inv": result["A_inv"].tolist(),
+            "records": [asdict(r) for r in records],
+        },
+    }
+    meta_output_path = json_output_path(f"{OUTPUT_PREFIX}_{regime}_meta.json", output_dir)
+    with meta_output_path.open("w", encoding="utf-8") as fp:
+        json.dump(payload, fp, indent=2)
+
+
 def _save_dual_results(coarse_result, fine_result, coarse_records, fine_records, comparison, output_dir=None):
     coarse_a_path = matrix_output_path(COARSE_A_PATH, output_dir)
     coarse_a_inv_path = matrix_output_path(COARSE_A_INV_PATH, output_dir)
@@ -591,23 +863,7 @@ def _save_dual_results(coarse_result, fine_result, coarse_records, fine_records,
 
     payload = {
         "timestamp_epoch": time.time(),
-        "config": {
-            "exposure_seconds": EXPOSURE_SECONDS,
-            "settle_s": SETTLE_S,
-            "captures_per_center": CAPTURES_PER_CENTER,
-            "captures_per_point": CAPTURES_PER_POINT,
-            "max_sample_attempts": MAX_SAMPLE_ATTEMPTS,
-            "center_drift_weight": CENTER_DRIFT_WEIGHT,
-            "drift_limits_px": DRIFT_LIMITS_PX,
-            "coarse_radii_deg": COARSE_RADII_DEG,
-            "fine_radii_deg": FINE_RADII_DEG,
-            "directions": DIRECTIONS,
-            "robust_iters": ROBUST_ITERS,
-            "huber_k": HUBER_K,
-            "focus_mode": get_focus_mode(),
-            "focus_method": "temporary locked-focus center of mass",
-            "focus_audit_dir": None if AUDIT_DIR is None else str(AUDIT_DIR.relative_to(ROOT_DIR)),
-        },
+        "config": _calibration_config_payload(),
         "focus_audit": AUDIT_LOG,
         "coarse": {
             **{k: v for k, v in coarse_result.items() if k not in {"A", "A_inv", "weights"}},
@@ -631,14 +887,26 @@ def _save_dual_results(coarse_result, fine_result, coarse_records, fine_records,
 
 def _print_summary(name: str, result):
     quality = "OK" if result["quality_ok"] else "RESSALVAS"
+    collected = result.get("num_collected_points", result["num_points"])
     print(
-        f"{name}: pontos={result['num_points']} | "
+        f"{name}: pontos_fit={result['num_points']}/{collected} | "
         f"RMS={result['rms_residual_px']:.2f}px | "
         f"max={result['max_residual_px']:.2f}px | "
         f"cond={result['condition_number']:.2e} | "
         f"pesos_rebaixados={result['downweighted_points']} | "
         f"{quality}"
     )
+    rejected = result.get("fit_rejected_records", [])
+    if rejected:
+        labels = ", ".join(item["label"] for item in rejected)
+        print(f"  -> descartados por drift alto no fit: {labels}")
+    scale_excluded = result.get("fit_excluded_scale_records", [])
+    if scale_excluded:
+        selected_radius = scale_excluded[0]["selected_radius_deg"]
+        print(
+            f"  -> fit priorizou raio {selected_radius:.4f} deg; "
+            f"{len(scale_excluded)} ponto(s) de outro raio ficaram fora do fit."
+        )
     if result["quality_warning"]:
         print(f"  -> {result['quality_warning']}")
 
@@ -666,39 +934,78 @@ def main():
 
     focus_input = input("Modo do laser (1=foco unico, 2=dupla reflexao) [2]: ").strip() or "2"
     focus_mode = set_focus_mode(focus_input)
+    target_input = (
+        input("O que calibrar? (coarse/fine/ambos) [ambos]: ").strip().lower()
+        or "ambos"
+    )
+    if target_input in {"both", "ambas", "todos", "tudo"}:
+        target_input = "ambos"
+    if target_input not in {"coarse", "fine", "ambos"}:
+        raise ValueError("Escolha coarse, fine ou ambos.")
+
     mount = True
     AUDIT_LOG = []
     AUDIT_DIR = _novo_diretorio_auditoria()
 
     print(f"Modo de foco temporario: {focus_mode}")
+    print(f"Regime de calibracao: {target_input}")
     print("Usando montagem real. Esta versao temporaria nao pergunta por simulador.")
     print(f"Auditoria visual do foco em: {AUDIT_DIR}")
 
     try:
         connect_camera()
 
-        coarse_records = _collect_regime(
-            regime="coarse",
-            radii_deg=COARSE_RADII_DEG,
-            exposure=EXPOSURE_SECONDS,
-            mount=mount,
-        )
-        fine_records = _collect_regime(
-            regime="fine",
-            radii_deg=FINE_RADII_DEG,
-            exposure=EXPOSURE_SECONDS,
-            mount=mount,
-        )
+        coarse_result = None
+        coarse_records = None
+        fine_result = None
+        fine_records = None
 
-        coarse_result = _fit_robusto_sem_intercepto(coarse_records, regime="coarse")
-        fine_result = _fit_robusto_sem_intercepto(fine_records, regime="fine")
+        if target_input in {"coarse", "ambos"}:
+            coarse_result, coarse_records = _fit_regime_with_outlier_remeasure(
+                regime="coarse",
+                radii_deg=COARSE_RADII_DEG,
+                exposure=EXPOSURE_SECONDS,
+                mount=mount,
+            )
+        if target_input in {"fine", "ambos"}:
+            fine_result, fine_records = _fit_regime_with_outlier_remeasure(
+                regime="fine",
+                radii_deg=FINE_RADII_DEG,
+                exposure=EXPOSURE_SECONDS,
+                mount=mount,
+            )
+
+        if target_input == "coarse":
+            _save_regime_results("coarse", coarse_result, coarse_records)
+            print("\n=== Resumo Nova Calibracao COARSE ===")
+            _print_summary("COARSE", coarse_result)
+            print(
+                f"\nArquivos salvos: "
+                f"{display_path(matrix_output_path(COARSE_A_PATH, ROOT_DIR))}, "
+                f"{display_path(matrix_output_path(COARSE_A_INV_PATH, ROOT_DIR))}, "
+                f"{display_path(json_output_path(f'{OUTPUT_PREFIX}_coarse_meta.json', ROOT_DIR))}"
+            )
+            return
+
+        if target_input == "fine":
+            _save_regime_results("fine", fine_result, fine_records)
+            print("\n=== Resumo Nova Calibracao FINE ===")
+            _print_summary("FINE", fine_result)
+            print(
+                f"\nArquivos salvos: "
+                f"{display_path(matrix_output_path(FINE_A_PATH, ROOT_DIR))}, "
+                f"{display_path(matrix_output_path(FINE_A_INV_PATH, ROOT_DIR))}, "
+                f"{display_path(json_output_path(f'{OUTPUT_PREFIX}_fine_meta.json', ROOT_DIR))}"
+            )
+            return
+
         existing = _load_existing_matrix()
         comparison = _compare_with_existing(
             existing,
             coarse_result,
             fine_result,
-            coarse_records,
-            fine_records,
+            coarse_fit_records,
+            fine_fit_records,
         )
         _save_dual_results(
             coarse_result,
