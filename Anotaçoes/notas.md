@@ -1,5 +1,57 @@
 <h1 align="center">Notas IC</h1>
 
+## Retorno das ferias - plano de retomada
+
+Data da anotacao: 2026-07-10.
+
+Contexto: o setup esta usando dois computadores e dois telescopios. O notebook controla o telescopio emissor via `mount_agent`; o Alien e o PC do laboratorio e controla o telescopio receptor e a camera. A comunicacao entre eles esta sendo feita por HTTP, sem depender de conexao Alpaca direta entre PCs para os dois mounts.
+
+### Antes de retomar testes longos
+
+1. Fazer `git pull` no notebook e no Alien.
+2. Conferir `git status` nos dois PCs antes de rodar qualquer coisa.
+3. Verificar se o ambiente Python/`.venv` esta ativo e com as dependencias instaladas.
+4. Conferir cabos USB, fontes dos telescopios, camera e laser antes de energizar.
+5. Ligar o laser somente depois de checar tampas, caminho optico e seguranca.
+6. Rodar um teste simples de movimento em cada mount antes do tracker.
+
+### Estado bom antes das ferias
+
+O tracker melhorou bastante depois do autotune com dois telescopios. O melhor conjunto encontrado foi:
+
+* `KpAz = 1.500`
+* `KpAlt = 1.440`
+* `KdAz = 0.180`
+* `KdAlt = 0.180`
+* `Trim = 1.200`
+* `Alpha = 0.650`
+* `Accel = 2.000`
+
+Esse conjunto teve `sucessos=6/6` no autotune e deve ser usado como ponto de partida tanto no `Tracker.py` quanto no `autotune_pid_tracker.py`.
+
+### Pendencias principais
+
+* Investigar e corrigir o comportamento em que movimentos bruscos deixam o tracker "em orbita" por um tempo antes de estabilizar e trazer o spot de volta para o centro.
+* Rodar mais um autotune do tracker com os parametros acima como ponto inicial, procurando melhorias menores ao redor desse conjunto.
+* Antes de tentar maximizar o acoplamento na fibra, testar bem o alinhamento por camera com os dois telescopios.
+* Testar o alinhamento com dois telescopios usando o notebook e o Alien:
+  * notebook: telescopio emissor, rodando `mount_agent`;
+  * Alien: telescopio receptor, camera, tracker e autotune.
+* Confirmar que o `mount_agent_client.py` consegue mover o telescopio emissor por angulo e que o retorno para a posicao inicial funciona.
+* Depois de realinhar manualmente os telescopios, refazer a calibracao das matrizes antes de confiar no tracker/autotune.
+* Centralizar o spot com `foco_multiplos/Center_of_Mass_foco_temp.py` antes de rodar tracker/autotune.
+* Verificar se o tracker esta usando as matrizes corretas para o modo dual:
+  * `foco_temp_A_inv_fine.npy`;
+  * `foco_temp_A_inv_coarse.npy`.
+
+### Cuidados tecnicos ao voltar
+
+* Se o spot comecar perto do centro e a centralizacao automatica tentar joga-lo para fora, parar e verificar matriz/sinal antes de continuar.
+* O laser provavelmente nao precisa de novo ajuste, mas conferir se potencia, foco e posicao inicial parecem consistentes depois das ferias.
+* Se houver perda de camera via Alpaca/driver, reiniciar a camera antes de insistir em calibracao longa.
+* Se o tracker tiver muitos `runaway events`, nao ir direto para otimizacao por potencia; primeiro melhorar estabilidade na camera.
+* Registrar o alvo de camera associado ao melhor acoplamento quando a fibra comecar a acoplar bem.
+
 ## Ideia principal: autotune do tracker com dois telescopios
 
 Data da anotacao: 2026-04-30.
