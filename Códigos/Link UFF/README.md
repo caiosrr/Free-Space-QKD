@@ -37,3 +37,29 @@ ao intervalo aceito pela camera e informa o valor realmente aplicado.
 Em algumas variantes NIR, `ExposureAuto` e `GainAuto` nao sao expostos como
 parametros gravaveis. Nesse caso o teste informa isso e continua, pois exposicao
 e ganhos sao escritos diretamente nos respectivos parametros manuais.
+
+## Centro de massa e calibracao com a IDS
+
+Os executaveis abaixo reutilizam a logica de `foco_multiplos` e o mesmo
+`controle/mount_control.py`, trocando apenas a aquisicao Alpaca pelo IDS peak.
+Feche o IDS peak Cockpit antes de executar.
+
+Centro de massa/centralizacao:
+
+```powershell
+python ".\Link UFF\Center_of_Mass_foco_temp_IDS.py"
+```
+
+Calibracao angular-pixel:
+
+```powershell
+python ".\Link UFF\Calibracao_ang_pix_foco_temp_IDS.py"
+```
+
+Ambos usam por padrao `7276 us`, `20 fps`, ganho analogico `1`, ganho digital
+`1`, sensor completo e `Mono8`. A calibracao movimenta o mount e deve ser feita
+com o spot visivel, folga mecanica disponivel e possibilidade de interromper com
+`Ctrl+C`.
+
+Os programas originais continuam usando a camera Alpaca/ASI. O backend IDS so e
+selecionado pelos executaveis desta pasta.

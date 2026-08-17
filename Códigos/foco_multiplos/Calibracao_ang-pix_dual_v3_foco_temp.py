@@ -21,6 +21,7 @@ from artifact_paths import (
     matrix_output_path,
 )
 from foco_multiplos.Center_of_Mass_foco_temp import (
+    backend_name,
     capture_frame,
     centro_massa,
     connect_camera,
@@ -34,8 +35,8 @@ from controle.mount_control import ensure_connected, ensure_not_tracking, ensure
 
 FOCO_DIR = ROOT_DIR / "foco_multiplos"
 
-CAMERA_GAIN = 5
-EXPOSURE_SECONDS = 100e-3
+CAMERA_GAIN = 1 if backend_name() == "ids" else 5
+EXPOSURE_SECONDS = 7.276e-3 if backend_name() == "ids" else 100e-3
 SETTLE_S = 1.50
 CAPTURES_PER_CENTER = 2
 CAPTURES_PER_POINT = 2
@@ -151,7 +152,11 @@ def _save_audit_frame(frame: np.ndarray, path: Path, x_cm: float | None, y_cm: f
     if x_cm is not None and y_cm is not None:
         cv2.circle(marked, (int(round(x_cm)), int(round(y_cm))), 8, (0, 255, 0), -1)
 
-    cv2.imwrite(str(path), marked)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ok, encoded = cv2.imencode(path.suffix or ".png", marked)
+    if not ok:
+        raise RuntimeError(f"OpenCV nao conseguiu codificar a auditoria: {path}")
+    path.write_bytes(encoded.tobytes())
 
 
 def _audit_capture(tag: str, repeat_idx: int, frame: np.ndarray, cm, debug: dict):

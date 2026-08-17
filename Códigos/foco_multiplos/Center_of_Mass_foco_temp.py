@@ -12,13 +12,12 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 FOCO_DIR = ROOT_DIR / "foco_multiplos"
 
-from controle.Center_of_Mass import (
+from controle.camera_backend import (
+    backend_name,
+    capture_raw_frame,
     connect_camera,
     disconnect_camera,
-    fetch_image_array,
     set_gain,
-    start_exposure,
-    wait_until_image_ready,
 )
 from controle.alvo_alinhamento import escolher_posicao_inicial_ou_centro
 from artifact_paths import display_path, matrix_candidates
@@ -26,7 +25,7 @@ from controle.mount_control import ensure_connected, ensure_not_tracking, ensure
 
 
 FOCUS_MODE = "single"
-RAW_SIGNAL_MIN = 200.0
+RAW_SIGNAL_MIN = 20.0 if backend_name() == "ids" else 200.0
 DUAL_THRESHOLD_PERCENT = 0.25
 LOCAL_RADIUS_PX = 90
 MIN_LOCAL_PIXELS = 8
@@ -35,11 +34,11 @@ LOCK_FOCUS_IDENTITY = True
 LOCK_MIN_SIMILARITY = 0.35
 LOCK_STRONG_SIMILARITY = 0.65
 lim_px = 2.0
-CAMERA_GAIN = 5
-EXPOSURE_SECONDS = 100e-3
+CAMERA_GAIN = 1 if backend_name() == "ids" else 5
+EXPOSURE_SECONDS = 7.276e-3 if backend_name() == "ids" else 100e-3
 CAPTURE_HTTP_ATTEMPTS = 3
 CAPTURE_RETRY_SLEEP_S = 0.75
-CAPTURE_COOLDOWN_SLEEP_S = 0.05
+CAPTURE_COOLDOWN_SLEEP_S = 0.0 if backend_name() == "ids" else 0.05
 FINE_MATRIX_ENTER_RADIUS_PX = 8.0
 CENTERING_STEP_GAIN = 0.65
 MAX_CORRECTION_NORM_DEG = 0.015
@@ -92,9 +91,7 @@ def capture_frame(exposure_seconds: float, light: bool = True) -> np.ndarray:
     last_exc = None
     for attempt in range(1, CAPTURE_HTTP_ATTEMPTS + 1):
         try:
-            start_exposure(exposure_seconds, light=light)
-            wait_until_image_ready()
-            frame = fetch_image_array().astype(np.float32)
+            frame = capture_raw_frame(exposure_seconds, light=light).astype(np.float32)
 
             min_val = float(frame.min())
             max_val = float(frame.max())
@@ -130,7 +127,7 @@ def capture_frame(exposure_seconds: float, light: bool = True) -> np.ndarray:
             last_exc = exc
             if attempt < CAPTURE_HTTP_ATTEMPTS:
                 print(
-                    f"Aviso: falha HTTP/camera na captura "
+                    f"Aviso: falha na captura ({backend_name()}) "
                     f"({attempt}/{CAPTURE_HTTP_ATTEMPTS}); tentando de novo..."
                 )
                 time.sleep(CAPTURE_RETRY_SLEEP_S)
