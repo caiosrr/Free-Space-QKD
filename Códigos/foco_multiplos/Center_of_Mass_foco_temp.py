@@ -1,6 +1,7 @@
 import cv2
 import copy
 import numpy as np
+import os
 import sys
 import time
 from pathlib import Path
@@ -40,8 +41,12 @@ LOCK_FOCUS_IDENTITY = True
 LOCK_MIN_SIMILARITY = 0.35
 LOCK_STRONG_SIMILARITY = 0.65
 lim_px = 2.0
-CAMERA_GAIN = 1 if backend_name() == "ids" else 5
-EXPOSURE_SECONDS = 7.276e-3 if backend_name() == "ids" else 100e-3
+CAMERA_GAIN = float(os.environ.get("QKD_IDS_ANALOG_GAIN", "1")) if backend_name() == "ids" else 5
+EXPOSURE_SECONDS = (
+    float(os.environ.get("QKD_IDS_EXPOSURE_US", "7276")) * 1e-6
+    if backend_name() == "ids"
+    else 100e-3
+)
 CAPTURE_HTTP_ATTEMPTS = 3
 CAPTURE_RETRY_SLEEP_S = 0.75
 CAPTURE_COOLDOWN_SLEEP_S = 0.0 if backend_name() == "ids" else 0.05

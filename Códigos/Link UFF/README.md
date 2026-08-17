@@ -1,5 +1,22 @@
 # Teste da camera IDS U3-3680XCP
 
+## Configuracao da imagem
+
+Altere os parametros em `Link UFF\config_camera_ids.py`. No inicio do arquivo
+ficam reunidos os valores usados por todos os programas IDS:
+
+```python
+EXPOSURE_US = 7276.0       # 7.276 ms
+FRAME_RATE_FPS = 20.0
+ANALOG_GAIN = 1.0
+DIGITAL_GAIN = 1.0
+```
+
+Depois de salvar o arquivo, teste novamente a aquisicao. Nao e necessario
+editar separadamente centro de massa, calibracao ou tracker. As opcoes de linha
+de comando do `teste_camera_ids.py` ainda podem sobrescrever temporariamente os
+valores apenas naquele teste.
+
 Este teste acessa somente a camera pelo IDS peak. Ele nao conecta nem movimenta
 o mount.
 

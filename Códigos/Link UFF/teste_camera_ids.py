@@ -15,6 +15,12 @@ from typing import Any
 import cv2
 import numpy as np
 
+LINK_UFF_DIR = Path(__file__).resolve().parent
+if str(LINK_UFF_DIR) not in sys.path:
+    sys.path.insert(0, str(LINK_UFF_DIR))
+
+import config_camera_ids as camera_config
+
 try:
     from ids_peak import ids_peak
 except ImportError as exc:
@@ -24,11 +30,11 @@ except ImportError as exc:
     ) from exc
 
 
-DEFAULT_OUTPUT = Path(__file__).resolve().parent / "resultados" / "teste_ids.png"
-DEFAULT_EXPOSURE_US = 7276.0
-DEFAULT_FPS = 20.0
-DEFAULT_ANALOG_GAIN = 1.0
-DEFAULT_DIGITAL_GAIN = 1.0
+DEFAULT_OUTPUT = LINK_UFF_DIR / "resultados" / "teste_ids.png"
+DEFAULT_EXPOSURE_US = camera_config.EXPOSURE_US
+DEFAULT_FPS = camera_config.FRAME_RATE_FPS
+DEFAULT_ANALOG_GAIN = camera_config.ANALOG_GAIN
+DEFAULT_DIGITAL_GAIN = camera_config.DIGITAL_GAIN
 PREFERRED_8BIT_FORMATS = (
     "Mono8",
     "BayerGR8",
@@ -144,8 +150,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Captura frames da IDS U3-3680XCP sem usar ASCOM ou mover o mount."
     )
-    parser.add_argument("--device", type=int, default=0, help="Indice da camera (padrao: 0).")
-    parser.add_argument("--frames", type=int, default=50, help="Quantidade de frames (padrao: 50).")
+    parser.add_argument(
+        "--device", type=int, default=camera_config.DEVICE_INDEX, help="Indice da camera."
+    )
+    parser.add_argument(
+        "--frames", type=int, default=camera_config.TEST_FRAMES, help="Quantidade de frames."
+    )
     parser.add_argument(
         "--exposure-us",
         type=float,
@@ -165,7 +175,12 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_DIGITAL_GAIN,
         help="Ganho DigitalAll (padrao: 1).",
     )
-    parser.add_argument("--timeout-ms", type=int, default=5000, help="Timeout por frame.")
+    parser.add_argument(
+        "--timeout-ms",
+        type=int,
+        default=camera_config.CAPTURE_TIMEOUT_MS,
+        help="Timeout por frame.",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="PNG de saida.")
     parser.add_argument("--list-only", action="store_true", help="Somente lista as cameras.")
     return parser.parse_args()

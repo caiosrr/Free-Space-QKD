@@ -44,7 +44,8 @@ def disconnect_camera() -> None:
 
 def set_gain(gain: float) -> None:
     if backend_name() == "ids":
-        _ids_camera().set_gain(float(gain), float(gain))
+        digital_gain = float(os.environ.get("QKD_IDS_DIGITAL_GAIN", str(gain)))
+        _ids_camera().set_gain(float(gain), digital_gain)
         return
     from controle.Center_of_Mass import set_gain as alpaca_set_gain
 
@@ -64,4 +65,3 @@ def capture_raw_frame(exposure_seconds: float, light: bool = True) -> np.ndarray
     start_exposure(float(exposure_seconds), light=light)
     wait_until_image_ready()
     return fetch_image_array()
-

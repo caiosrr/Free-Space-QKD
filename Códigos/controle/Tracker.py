@@ -1,4 +1,5 @@
 import itertools
+import os
 import sys
 import threading
 import time
@@ -42,8 +43,12 @@ DISPLAY_HZ = 6.0
 TOLERANCIA_PX = 2.0
 CONTROL_DEADBAND_PX = 0.35
 RECENTER_SETTLE_S = 1.0
-EXPOSURE_SECONDS = 7.276e-3 if backend_name() == "ids" else 32e-6
-CONTROL_HZ = 20.0 if backend_name() == "ids" else 45.0
+EXPOSURE_SECONDS = (
+    float(os.environ.get("QKD_IDS_EXPOSURE_US", "7276")) * 1e-6
+    if backend_name() == "ids"
+    else 32e-6
+)
+CONTROL_HZ = float(os.environ.get("QKD_IDS_FPS", "20")) if backend_name() == "ids" else 45.0
 SIGNAL_TIMEOUT_S = 0.45
 VEL_MAX_TESTE = min(1.6, VEL_MAX_LIMITE)
 FINE_MATRIX_ENTER_RADIUS_PX = 8.0
