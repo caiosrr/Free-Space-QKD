@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -39,7 +40,7 @@ from controle.mount_control import (
     stop_axes_safely,
 )
 
-FOCO_DIR = ROOT_DIR / "foco_multiplos"
+FOCO_DIR = Path(os.environ.get("QKD_CAMERA_OUTPUT_DIR", ROOT_DIR / "foco_multiplos"))
 
 CAMERA_GAIN = 1 if backend_name() == "ids" else 5
 EXPOSURE_SECONDS = 7.276e-3 if backend_name() == "ids" else 100e-3

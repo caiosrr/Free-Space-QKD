@@ -17,6 +17,10 @@ editar separadamente centro de massa, calibracao ou tracker. As opcoes de linha
 de comando do `teste_camera_ids.py` ainda podem sobrescrever temporariamente os
 valores apenas naquele teste.
 
+Frames marcados, ultimo frame e auditorias da IDS sao gravados em
+`Link UFF\resultados`. As matrizes continuam em `resultados\matrizes`, pois esse
+e o caminho compartilhado usado pelo tracker.
+
 Este teste acessa somente a camera pelo IDS peak. Ele nao conecta nem movimenta
 o mount.
 
