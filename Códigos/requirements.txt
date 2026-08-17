@@ -4,3 +4,5 @@ requests
 pyvisa
 pyvisa-py
 pyusb
+ids_peak
+ids_peak_ipl
