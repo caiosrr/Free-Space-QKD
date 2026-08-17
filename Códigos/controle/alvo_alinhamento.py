@@ -17,6 +17,8 @@ class AlvoAlinhamento:
     y_px: float
     source: str
     path: str | None = None
+    focus_mode: str | None = None
+    focus_signature: dict | None = None
 
 
 def centro_frame(frame: np.ndarray) -> tuple[float, float]:
@@ -34,6 +36,8 @@ def carregar_alvo_salvo() -> AlvoAlinhamento | None:
             y_px=float(data["target_y_px"]),
             source=str(data.get("source", "saved_target")),
             path=display_path(path),
+            focus_mode=data.get("focus_mode"),
+            focus_signature=data.get("focus_signature"),
         )
     return None
 
@@ -48,6 +52,7 @@ def salvar_alvo(
     samples: int | None = None,
     std_x_px: float | None = None,
     std_y_px: float | None = None,
+    focus_signature: dict | None = None,
 ) -> Path:
     payload = {
         "timestamp_epoch": time.time(),
@@ -59,6 +64,7 @@ def salvar_alvo(
         "samples": samples,
         "std_x_px": std_x_px,
         "std_y_px": std_y_px,
+        "focus_signature": focus_signature,
     }
     path = json_output_path(TARGET_FILENAME)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -95,6 +101,8 @@ def escolher_posicao_inicial_ou_centro(
     prompt: str = "Referencia de alinhamento",
     salvar_novo_alvo: bool = True,
     default_choice: str = "1",
+    focus_mode: str | None = None,
+    focus_signature: dict | None = None,
 ) -> AlvoAlinhamento:
     salvo = carregar_alvo_salvo()
     cx, cy = centro_frame(frame)
@@ -118,7 +126,14 @@ def escolher_posicao_inicial_ou_centro(
         choice = "2"
 
     if choice == "3":
-        return AlvoAlinhamento(x_px=float(cx), y_px=float(cy), source="camera_center", path=None)
+        return AlvoAlinhamento(
+            x_px=float(cx),
+            y_px=float(cy),
+            source="camera_center",
+            path=None,
+            focus_mode=focus_mode,
+            focus_signature=focus_signature,
+        )
 
     path = None
     if salvar_novo_alvo:
@@ -130,6 +145,8 @@ def escolher_posicao_inicial_ou_centro(
             samples=1,
             std_x_px=0.0,
             std_y_px=0.0,
+            focus_mode=focus_mode,
+            focus_signature=focus_signature,
         )
         path = display_path(path_obj)
         print(f"Novo alvo salvo em: {path}")
@@ -139,6 +156,8 @@ def escolher_posicao_inicial_ou_centro(
         y_px=float(y_inicial),
         source="initial_laser_position",
         path=path,
+        focus_mode=focus_mode,
+        focus_signature=focus_signature,
     )
 
 

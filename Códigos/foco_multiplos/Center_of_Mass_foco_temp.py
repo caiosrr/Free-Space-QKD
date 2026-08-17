@@ -25,7 +25,7 @@ from controle.camera_backend import (
     disconnect_camera,
     set_gain,
 )
-from controle.alvo_alinhamento import escolher_posicao_inicial_ou_centro
+from controle.alvo_alinhamento import escolher_posicao_inicial_ou_centro, salvar_alvo
 from artifact_paths import display_path, matrix_candidates
 from controle.mount_control import (
     ensure_connected,
@@ -99,6 +99,59 @@ def reset_focus_lock() -> None:
     FOCUS_LOCK["secondary"] = None
     FOCUS_LOCK["last_x"] = None
     FOCUS_LOCK["last_y"] = None
+
+
+def get_focus_signature() -> dict | None:
+    """Retorna uma referencia serializavel da identidade do foco dual travado."""
+    if not FOCUS_LOCK["active"] or FOCUS_LOCK["primary"] is None:
+        return None
+    return {
+        "version": 1,
+        "primary": copy.deepcopy(FOCUS_LOCK["primary"]),
+        "secondary": copy.deepcopy(FOCUS_LOCK["secondary"]),
+    }
+
+
+def initialize_focus_lock(
+    signature: dict | None,
+    expected_x: float | None = None,
+    expected_y: float | None = None,
+) -> bool:
+    """Inicializa o lock dual com assinatura persistida e posicao esperada."""
+    reset_focus_lock()
+    if not isinstance(signature, dict):
+        return False
+
+    def normalize_reference(reference):
+        if not isinstance(reference, dict):
+            return None
+        try:
+            normalized = {
+                "raw_peak": float(reference["raw_peak"]),
+                "raw_total": float(reference["raw_total"]),
+                "area": float(reference["area"]),
+            }
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not all(np.isfinite(value) and value > 0 for value in normalized.values()):
+            return None
+        return normalized
+
+    primary = normalize_reference(signature.get("primary"))
+    if primary is None:
+        return False
+    secondary = normalize_reference(signature.get("secondary"))
+
+    FOCUS_LOCK["active"] = True
+    FOCUS_LOCK["primary"] = primary
+    FOCUS_LOCK["secondary"] = secondary
+    if expected_x is not None and expected_y is not None:
+        expected_x = float(expected_x)
+        expected_y = float(expected_y)
+        if np.isfinite(expected_x) and np.isfinite(expected_y):
+            FOCUS_LOCK["last_x"] = expected_x
+            FOCUS_LOCK["last_y"] = expected_y
+    return True
 
 
 def capture_frame(exposure_seconds: float, light: bool = True) -> np.ndarray:
@@ -576,6 +629,35 @@ def _save_image(path: Path, image: np.ndarray) -> None:
         raise OSError(f"A imagem nao foi gravada corretamente em: {path}")
 
 
+def _save_confirmed_dual_focus_target(
+    target_x: float,
+    target_y: float,
+    frame: np.ndarray,
+    measured_x: float,
+    measured_y: float,
+) -> Path | None:
+    if FOCUS_MODE != "dual":
+        return None
+    if abs(measured_x - target_x) > lim_px or abs(measured_y - target_y) > lim_px:
+        return None
+    signature = get_focus_signature()
+    if signature is None:
+        return None
+    path = salvar_alvo(
+        target_x,
+        target_y,
+        source="confirmed_dual_focus_target",
+        frame_shape=frame.shape,
+        focus_mode=FOCUS_MODE,
+        samples=1,
+        std_x_px=0.0,
+        std_y_px=0.0,
+        focus_signature=signature,
+    )
+    print(f"Referencia e assinatura do foco confirmadas em: {display_path(path)}")
+    return path
+
+
 def main() -> None:
     mode = input("Modo do laser (1=foco unico, 2=dupla reflexao) [2]: ").strip() or "2"
     set_focus_mode(mode)
@@ -612,6 +694,8 @@ def main() -> None:
             y_cm,
             prompt="Referencia para centralizacao",
             default_choice="3",
+            focus_mode=FOCUS_MODE,
+            focus_signature=get_focus_signature() if FOCUS_MODE == "dual" else None,
         )
         cx, cy = alvo.x_px, alvo.y_px
         print(f"Modo: {FOCUS_MODE}")
@@ -632,6 +716,7 @@ def main() -> None:
         output_path = FOCO_DIR / "foco_temp_inicial_cm_centro.png"
         _save_marked_frame(frame, output_path, cx, cy, x_cm, y_cm)
         print(f"Frame inicial salvo em: {output_path}")
+        _save_confirmed_dual_focus_target(cx, cy, frame, x_cm, y_cm)
 
         move = input("\nDeseja centralizar o laser? (s/n): ").strip().lower()
         if move != "s":
@@ -730,6 +815,7 @@ def main() -> None:
         output_path = FOCO_DIR / "foco_temp_final_cm_trajetoria.png"
         _save_marked_frame(frame, output_path, cx, cy, x_cm, y_cm, x_cm0, y_cm0)
         print(f"Frame final salvo em: {output_path}")
+        _save_confirmed_dual_focus_target(cx, cy, frame, x_cm, y_cm)
     except KeyboardInterrupt:
         print("\nInterrompido pelo usuario (Ctrl+C). Encerrando de forma limpa...")
     finally:

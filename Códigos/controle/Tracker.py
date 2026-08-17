@@ -20,6 +20,7 @@ if str(ROOT_DIR) not in sys.path:
 from artifact_paths import display_path, matrix_candidates
 from controle.alvo_alinhamento import (
     AlvoAlinhamento,
+    carregar_alvo_salvo,
     escolher_posicao_inicial_ou_centro,
     roi_incluindo_alvo,
 )
@@ -228,6 +229,7 @@ def set_camera_roi_validated(
     target_x: float,
     target_y: float,
     focus_mode: str,
+    focus_signature: dict | None = None,
 ) -> tuple[int, int, float, float]:
     max_x, max_y = get_camera_size()
     if backend_name() == "ids":
@@ -272,7 +274,11 @@ def set_camera_roi_validated(
         )
         _apply_camera_roi(w, h, start_x, start_y)
         if _normalize_focus_mode(focus_mode) == "dual":
-            foco_temp.reset_focus_lock()
+            foco_temp.initialize_focus_lock(
+                focus_signature,
+                target_x_local,
+                target_y_local,
+            )
         frame_test = capture_frame(EXPOSURE_SECONDS)
         cm = medir_laser(frame_test, focus_mode)
         if cm is None:
@@ -287,12 +293,23 @@ def set_camera_roi_validated(
 
     if best is None:
         print("Aviso: nenhuma ROI de teste encontrou o laser; usando ROI corrigida pela rotacao.")
-        return set_camera_roi(w, h, target_x, target_y)
+        fallback = set_camera_roi(w, h, target_x, target_y)
+        if _normalize_focus_mode(focus_mode) == "dual":
+            foco_temp.initialize_focus_lock(
+                focus_signature,
+                fallback[2],
+                fallback[3],
+            )
+        return fallback
 
     _, start_x, start_y, target_x_local, target_y_local, mode, frame_test = best
     _apply_camera_roi(w, h, start_x, start_y)
     if _normalize_focus_mode(focus_mode) == "dual":
-        foco_temp.reset_focus_lock()
+        foco_temp.initialize_focus_lock(
+            focus_signature,
+            target_x_local,
+            target_y_local,
+        )
     debug_path = TRACKER_OUTPUT_DIR / "tracker_roi_teste.png"
     debug_path.parent.mkdir(parents=True, exist_ok=True)
     ok, encoded = cv2.imencode(".png", frame_test)
@@ -323,20 +340,48 @@ def reset_camera_roi() -> None:
 
 def escolher_referencia_tracker(sensor_w: int, sensor_h: int, focus_mode: str) -> AlvoAlinhamento:
     reset_camera_roi()
+    saved_target = carregar_alvo_salvo()
+    saved_signature = None
+    if (
+        _normalize_focus_mode(focus_mode) == "dual"
+        and saved_target is not None
+        and saved_target.focus_signature is not None
+        and saved_target.focus_mode in {None, "dual"}
+    ):
+        saved_signature = saved_target.focus_signature
+        if foco_temp.initialize_focus_lock(
+            saved_signature,
+            saved_target.x_px,
+            saved_target.y_px,
+        ):
+            print("Assinatura do foco salva carregada antes da busca no frame completo.")
+    elif _normalize_focus_mode(focus_mode) == "dual":
+        foco_temp.reset_focus_lock()
+
     frame = capture_frame(EXPOSURE_SECONDS)
     cm = medir_laser(frame, focus_mode)
     if cm is None:
+        if saved_target is not None:
+            print("Nao identifiquei o foco no frame completo; mantendo o alvo salvo para testar a ROI.")
+            return saved_target
         cx = (sensor_w - 1) / 2
         cy = (sensor_h - 1) / 2
         print("Nao encontrei o laser no frame inicial; usando centro da camera.")
         return AlvoAlinhamento(x_px=float(cx), y_px=float(cy), source="camera_center")
 
     x_cm, y_cm = cm
+    current_signature = (
+        foco_temp.get_focus_signature()
+        if _normalize_focus_mode(focus_mode) == "dual"
+        else None
+    )
     return escolher_posicao_inicial_ou_centro(
         frame,
         float(x_cm),
         float(y_cm),
         prompt="Referencia do tracker",
+        focus_mode=focus_mode,
+        focus_signature=current_signature,
     )
 
 
@@ -1034,6 +1079,7 @@ def main():
             alvo.x_px,
             alvo.y_px,
             focus_mode,
+            alvo.focus_signature,
         )
 
         t_prev = time.perf_counter()

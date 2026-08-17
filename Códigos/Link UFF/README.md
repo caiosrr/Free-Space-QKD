@@ -105,6 +105,19 @@ alinhadas aos passos de hardware (`OffsetX=8`, `OffsetY=2`). Antes do primeiro
 uso, gere as matrizes com a calibracao IDS e teste com velocidade/erro pequenos,
 mantendo `q` ou `Ctrl+C` prontos para interromper.
 
+No modo de dupla reflexao, ao definir uma nova referencia pela posicao inicial,
+o centro de massa salva junto ao alvo uma assinatura do foco escolhido: pico,
+intensidade integrada e area. O tracker carrega essa assinatura antes de analisar
+o frame completo e novamente ao testar a ROI, combinando semelhanca e proximidade
+ao alvo. Assim, uma fonte concorrente apenas mais brilhante nao substitui
+automaticamente o foco salvo. Alvos antigos sem assinatura continuam aceitos e
+usam o comportamento anterior.
+
+O centro de massa tambem atualiza automaticamente essa referencia sempre que o
+foco duplo medido estiver dentro da tolerancia de `2 px` do alvo escolhido. A
+imagem PNG continua sendo apenas uma auditoria visual; o tracker usa as
+coordenadas e a assinatura gravadas em `alvo_alinhamento_camera.json`.
+
 Por seguranca, a calibracao IDS salva matrizes separadas com prefixo
 `ids_foco_temp_`. O tracker IDS se recusa a iniciar se essas matrizes ainda nao
 existirem, em vez de usar acidentalmente as matrizes antigas da ASI.
