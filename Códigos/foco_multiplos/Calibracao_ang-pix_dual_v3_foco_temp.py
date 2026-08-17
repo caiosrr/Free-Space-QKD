@@ -33,6 +33,7 @@ from foco_multiplos.Center_of_Mass_foco_temp import (
     set_focus_mode,
 )
 from controle.mount_control import (
+    TOLERANCIA_GRAUS,
     calc_error,
     ensure_connected,
     ensure_not_tracking,
@@ -71,7 +72,7 @@ MAX_COND = 1.0e4
 MIN_SPREAD_DEG = 0.008
 ROBUST_ITERS = 8
 HUBER_K = 1.5
-RETURN_POSITION_TOLERANCE_DEG = 0.001
+RETURN_POSITION_TOLERANCE_DEG = TOLERANCIA_GRAUS
 MAX_AUTO_RETURN_DELTA_DEG = 0.25
 MAX_AUTO_RETURN_ATTEMPTS = 2
 

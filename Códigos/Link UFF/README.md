@@ -118,6 +118,7 @@ energia acessivel ao operador.
 A calibracao tambem registra a posicao absoluta inicial do mount em
 `posicao_inicial_mount.json`, dentro da auditoria da execucao. Ao terminar, ser
 interrompida com `Ctrl+C` ou encontrar um erro, ela tenta retornar a essa posicao
-e verifica o erro final. Por seguranca, um retorno maior que `0.25 deg` em qualquer
+e verifica o erro final com a mesma tolerancia de `0.0005 deg` usada pelo controle.
+Por seguranca, um retorno maior que `0.25 deg` em qualquer
 eixo e recusado; nesse caso o operador deve conferir a situacao antes de mover.
 Um segundo `Ctrl+C` durante o retorno interrompe o retorno e manda parar os eixos.
