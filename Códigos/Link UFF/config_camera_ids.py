@@ -22,7 +22,18 @@ DIGITAL_GAIN = 1.0
 DEVICE_INDEX = 0
 CAPTURE_TIMEOUT_MS = 5000
 TEST_FRAMES = 50
-OUTPUT_DIR = Path(__file__).resolve().parent / "resultados"
+
+# Cada etapa do experimento grava e le somente dentro de Link UFF/resultados.
+RESULTS_DIR = Path(__file__).resolve().parent / "resultados"
+ACQUISITION_OUTPUT_DIR = RESULTS_DIR / "aquisicao"
+CENTER_OF_MASS_OUTPUT_DIR = RESULTS_DIR / "centro_de_massa"
+CALIBRATION_OUTPUT_DIR = RESULTS_DIR / "calibracao"
+CALIBRATION_METADATA_DIR = CALIBRATION_OUTPUT_DIR / "metadados"
+MATRICES_OUTPUT_DIR = RESULTS_DIR / "matrizes"
+TRACKER_OUTPUT_DIR = RESULTS_DIR / "tracker"
+
+# Alias mantido para compatibilidade com scripts locais que importavam OUTPUT_DIR.
+OUTPUT_DIR = RESULTS_DIR
 
 
 def apply_environment() -> None:
@@ -34,4 +45,9 @@ def apply_environment() -> None:
     os.environ["QKD_IDS_DIGITAL_GAIN"] = str(DIGITAL_GAIN)
     os.environ["QKD_IDS_DEVICE"] = str(DEVICE_INDEX)
     os.environ["QKD_IDS_TIMEOUT_MS"] = str(CAPTURE_TIMEOUT_MS)
-    os.environ["QKD_CAMERA_OUTPUT_DIR"] = str(OUTPUT_DIR)
+    os.environ["QKD_CAMERA_OUTPUT_DIR"] = str(RESULTS_DIR)
+    os.environ["QKD_CENTER_OF_MASS_OUTPUT_DIR"] = str(CENTER_OF_MASS_OUTPUT_DIR)
+    os.environ["QKD_CALIBRATION_OUTPUT_DIR"] = str(CALIBRATION_OUTPUT_DIR)
+    os.environ["QKD_CALIBRATION_METADATA_DIR"] = str(CALIBRATION_METADATA_DIR)
+    os.environ["QKD_CALIBRATION_MATRIX_DIR"] = str(MATRICES_OUTPUT_DIR)
+    os.environ["QKD_TRACKER_OUTPUT_DIR"] = str(TRACKER_OUTPUT_DIR)

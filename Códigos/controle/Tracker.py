@@ -49,6 +49,9 @@ EXPOSURE_SECONDS = (
     else 32e-6
 )
 CONTROL_HZ = float(os.environ.get("QKD_IDS_FPS", "20")) if backend_name() == "ids" else 45.0
+TRACKER_OUTPUT_DIR = Path(
+    os.environ.get("QKD_TRACKER_OUTPUT_DIR", ROOT_DIR / "resultados" / "debug")
+)
 SIGNAL_TIMEOUT_S = 0.45
 VEL_MAX_TESTE = min(1.6, VEL_MAX_LIMITE)
 FINE_MATRIX_ENTER_RADIUS_PX = 8.0
@@ -290,7 +293,7 @@ def set_camera_roi_validated(
     _apply_camera_roi(w, h, start_x, start_y)
     if _normalize_focus_mode(focus_mode) == "dual":
         foco_temp.reset_focus_lock()
-    debug_path = ROOT_DIR / "resultados" / "debug" / "tracker_roi_teste.png"
+    debug_path = TRACKER_OUTPUT_DIR / "tracker_roi_teste.png"
     debug_path.parent.mkdir(parents=True, exist_ok=True)
     ok, encoded = cv2.imencode(".png", frame_test)
     if ok:
@@ -299,7 +302,7 @@ def set_camera_roi_validated(
         f"ROI escolhida: {mode} | Start=({start_x}, {start_y}) | "
         f"alvo local=({target_x_local:.1f}, {target_y_local:.1f})"
     )
-    print(f"Frame de teste da ROI salvo em: resultados\\debug\\tracker_roi_teste.png")
+    print(f"Frame de teste da ROI salvo em: {display_path(debug_path)}")
     return start_x, start_y, target_x_local, target_y_local
 
 

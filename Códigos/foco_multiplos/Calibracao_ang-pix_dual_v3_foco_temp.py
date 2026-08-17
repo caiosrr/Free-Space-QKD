@@ -40,7 +40,12 @@ from controle.mount_control import (
     stop_axes_safely,
 )
 
-FOCO_DIR = Path(os.environ.get("QKD_CAMERA_OUTPUT_DIR", ROOT_DIR / "foco_multiplos"))
+FOCO_DIR = Path(
+    os.environ.get(
+        "QKD_CALIBRATION_OUTPUT_DIR",
+        os.environ.get("QKD_CAMERA_OUTPUT_DIR", ROOT_DIR / "foco_multiplos"),
+    )
+)
 
 CAMERA_GAIN = 1 if backend_name() == "ids" else 5
 EXPOSURE_SECONDS = 7.276e-3 if backend_name() == "ids" else 100e-3
@@ -997,9 +1002,9 @@ def main():
             _print_summary("COARSE", coarse_result)
             print(
                 f"\nArquivos salvos: "
-                f"{display_path(matrix_output_path(COARSE_A_PATH, ROOT_DIR))}, "
-                f"{display_path(matrix_output_path(COARSE_A_INV_PATH, ROOT_DIR))}, "
-                f"{display_path(json_output_path(f'{OUTPUT_PREFIX}_coarse_meta.json', ROOT_DIR))}"
+                f"{display_path(matrix_output_path(COARSE_A_PATH))}, "
+                f"{display_path(matrix_output_path(COARSE_A_INV_PATH))}, "
+                f"{display_path(json_output_path(f'{OUTPUT_PREFIX}_coarse_meta.json'))}"
             )
             return
 
@@ -1009,9 +1014,9 @@ def main():
             _print_summary("FINE", fine_result)
             print(
                 f"\nArquivos salvos: "
-                f"{display_path(matrix_output_path(FINE_A_PATH, ROOT_DIR))}, "
-                f"{display_path(matrix_output_path(FINE_A_INV_PATH, ROOT_DIR))}, "
-                f"{display_path(json_output_path(f'{OUTPUT_PREFIX}_fine_meta.json', ROOT_DIR))}"
+                f"{display_path(matrix_output_path(FINE_A_PATH))}, "
+                f"{display_path(matrix_output_path(FINE_A_INV_PATH))}, "
+                f"{display_path(json_output_path(f'{OUTPUT_PREFIX}_fine_meta.json'))}"
             )
             return
 
@@ -1055,11 +1060,11 @@ def main():
 
         print(
             f"\nArquivos salvos: "
-            f"{display_path(matrix_output_path(COARSE_A_PATH, ROOT_DIR))}, "
-            f"{display_path(matrix_output_path(COARSE_A_INV_PATH, ROOT_DIR))}, "
-            f"{display_path(matrix_output_path(FINE_A_PATH, ROOT_DIR))}, "
-            f"{display_path(matrix_output_path(FINE_A_INV_PATH, ROOT_DIR))}, "
-            f"{display_path(json_output_path(f'{OUTPUT_PREFIX}_meta.json', ROOT_DIR))}"
+            f"{display_path(matrix_output_path(COARSE_A_PATH))}, "
+            f"{display_path(matrix_output_path(COARSE_A_INV_PATH))}, "
+            f"{display_path(matrix_output_path(FINE_A_PATH))}, "
+            f"{display_path(matrix_output_path(FINE_A_INV_PATH))}, "
+            f"{display_path(json_output_path(f'{OUTPUT_PREFIX}_meta.json'))}"
         )
 
     except KeyboardInterrupt:

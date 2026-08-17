@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 
@@ -5,6 +6,8 @@ ROOT_DIR = Path(__file__).resolve().parent
 RESULTS_DIRNAME = "resultados"
 JSON_DIRNAME = "json"
 MATRICES_DIRNAME = "matrizes"
+JSON_DIR_ENV = "QKD_CALIBRATION_METADATA_DIR"
+MATRICES_DIR_ENV = "QKD_CALIBRATION_MATRIX_DIR"
 
 
 def _resolve_base_dir(base_dir: str | Path | None = None) -> Path:
@@ -17,10 +20,14 @@ def _resolve_base_dir(base_dir: str | Path | None = None) -> Path:
 
 
 def json_dir(base_dir: str | Path | None = None) -> Path:
+    if base_dir is None and os.environ.get(JSON_DIR_ENV):
+        return Path(os.environ[JSON_DIR_ENV]).resolve()
     return _resolve_base_dir(base_dir) / RESULTS_DIRNAME / JSON_DIRNAME
 
 
 def matrices_dir(base_dir: str | Path | None = None) -> Path:
+    if base_dir is None and os.environ.get(MATRICES_DIR_ENV):
+        return Path(os.environ[MATRICES_DIR_ENV]).resolve()
     return _resolve_base_dir(base_dir) / RESULTS_DIRNAME / MATRICES_DIRNAME
 
 
@@ -63,10 +70,16 @@ def _artifact_candidates(
 
 
 def json_candidates(*filenames: str) -> list[Path]:
+    if os.environ.get(JSON_DIR_ENV):
+        output_dir = json_dir()
+        return [output_dir / Path(filename).name for filename in filenames]
     return _artifact_candidates(filenames, json_dir)
 
 
 def matrix_candidates(*filenames: str) -> list[Path]:
+    if os.environ.get(MATRICES_DIR_ENV):
+        output_dir = matrices_dir()
+        return [output_dir / Path(filename).name for filename in filenames]
     return _artifact_candidates(filenames, matrices_dir)
 
 

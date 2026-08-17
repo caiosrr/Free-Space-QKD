@@ -30,7 +30,7 @@ except ImportError as exc:
     ) from exc
 
 
-DEFAULT_OUTPUT = LINK_UFF_DIR / "resultados" / "teste_ids.png"
+DEFAULT_OUTPUT = camera_config.ACQUISITION_OUTPUT_DIR / "teste_ids.png"
 DEFAULT_EXPOSURE_US = camera_config.EXPOSURE_US
 DEFAULT_FPS = camera_config.FRAME_RATE_FPS
 DEFAULT_ANALOG_GAIN = camera_config.ANALOG_GAIN

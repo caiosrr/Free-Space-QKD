@@ -17,9 +17,17 @@ editar separadamente centro de massa, calibracao ou tracker. As opcoes de linha
 de comando do `teste_camera_ids.py` ainda podem sobrescrever temporariamente os
 valores apenas naquele teste.
 
-Frames marcados, ultimo frame e auditorias da IDS sao gravados em
-`Link UFF\resultados`. As matrizes continuam em `resultados\matrizes`, pois esse
-e o caminho compartilhado usado pelo tracker.
+Todos os artefatos da IDS ficam isolados em `Link UFF\resultados`:
+
+- `aquisicao`: imagem do teste isolado da camera;
+- `centro_de_massa`: frames marcados e ultimo frame;
+- `calibracao`: auditorias e metadados da calibracao;
+- `matrizes`: matrizes produzidas pela calibracao e lidas pelo centro de massa e tracker;
+- `tracker`: frame de teste da ROI.
+
+Quando os executaveis IDS desta pasta sao usados, centro de massa e tracker
+procuram as matrizes exclusivamente em `Link UFF\resultados\matrizes`. Eles nao
+usam como fallback uma calibracao da ASI ou de outro arranjo.
 
 Este teste acessa somente a camera pelo IDS peak. Ele nao conecta nem movimenta
 o mount.
@@ -35,7 +43,7 @@ python ".\Link UFF\teste_camera_ids.py"
 ```
 
 O programa captura 50 frames por padrao, mostra a taxa medida e salva o ultimo
-frame em `Link UFF\resultados\teste_ids.png`. Os valores padrao copiam o teste
+frame em `Link UFF\resultados\aquisicao\teste_ids.png`. Os valores padrao copiam o teste
 feito no IDS peak Cockpit:
 
 - exposicao: `7276 us` (`7.276 ms`);

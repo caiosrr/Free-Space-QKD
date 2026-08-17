@@ -11,7 +11,12 @@ if not (ROOT_DIR / "Center_of_Mass.py").exists():
     ROOT_DIR = ROOT_DIR.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
-FOCO_DIR = Path(os.environ.get("QKD_CAMERA_OUTPUT_DIR", ROOT_DIR / "foco_multiplos"))
+FOCO_DIR = Path(
+    os.environ.get(
+        "QKD_CENTER_OF_MASS_OUTPUT_DIR",
+        os.environ.get("QKD_CAMERA_OUTPUT_DIR", ROOT_DIR / "foco_multiplos"),
+    )
+)
 
 from controle.camera_backend import (
     backend_name,
