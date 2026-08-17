@@ -33,3 +33,7 @@ python ".\Link UFF\teste_camera_ids.py" --list-only
 
 `--exposure-us` usa microssegundos. O programa limita automaticamente o valor
 ao intervalo aceito pela camera e informa o valor realmente aplicado.
+
+Em algumas variantes NIR, `ExposureAuto` e `GainAuto` nao sao expostos como
+parametros gravaveis. Nesse caso o teste informa isso e continua, pois exposicao
+e ganhos sao escritos diretamente nos respectivos parametros manuais.

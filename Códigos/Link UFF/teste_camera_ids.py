@@ -81,7 +81,19 @@ def disable_auto_feature(nodemap: Any, name: str) -> None:
             node.SetCurrentEntry("Off")
             print(f"{name}: Off")
     except Exception:
-        print(f"Aviso: nao consegui desligar {name}; continuando.")
+        print(f"{name}: recurso nao disponivel ou nao gravavel; continuando em modo manual.")
+
+
+def save_png_unicode(path: Path, frame: np.ndarray) -> None:
+    """Salva PNG em caminhos Unicode no Windows (ex.: pasta 'Codigos' com acento)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ok, encoded = cv2.imencode(".png", frame)
+    if not ok:
+        raise RuntimeError("O OpenCV nao conseguiu codificar o frame como PNG.")
+    try:
+        encoded.tofile(str(path))
+    except OSError as exc:
+        raise RuntimeError(f"Falha do Windows ao gravar {path.resolve()}: {exc}") from exc
 
 
 def configure_frame_rate(nodemap: Any, requested_fps: float) -> float:
@@ -270,9 +282,7 @@ def main() -> int:
         if last_frame is None:
             raise RuntimeError("Nenhum frame completo foi recebido.")
 
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        if not cv2.imwrite(str(args.output), last_frame):
-            raise RuntimeError(f"Nao consegui salvar {args.output}.")
+        save_png_unicode(args.output, last_frame)
         print(
             f"Ultimo frame: min={int(last_frame.min())}, max={int(last_frame.max())}, "
             f"media={float(last_frame.mean()):.2f}"
