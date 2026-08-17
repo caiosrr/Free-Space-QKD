@@ -23,7 +23,7 @@ from controle.alvo_alinhamento import (
     roi_incluindo_alvo,
 )
 from controle.mount_control import ensure_connected, ensure_not_tracking, ensure_unparked
-from controle.mount_control import VEL_MAX_LIMITE, VEL_MIN_LIMITE, move_axis
+from controle.mount_control import VEL_MAX_LIMITE, VEL_MIN_LIMITE, move_axis, stop_axes_safely
 from controle.camera_backend import backend_name
 from foco_multiplos import Center_of_Mass_foco_temp as foco_temp
 
@@ -977,8 +977,7 @@ def control_loop_continuo(
                     time.sleep(dt_target - elapsed)
 
         finally:
-            move_axis(0, 0.0, usar_mount)
-            move_axis(1, 0.0, usar_mount)
+            stop_axes_safely()
 
 
 def main():
@@ -1292,8 +1291,7 @@ def main():
 
         try:
             if "usar_mount" in locals():
-                move_axis(0, 0.0, usar_mount)
-                move_axis(1, 0.0, usar_mount)
+                stop_axes_safely()
         except Exception:
             pass
 

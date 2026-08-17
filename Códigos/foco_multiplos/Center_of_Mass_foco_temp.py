@@ -21,7 +21,13 @@ from controle.camera_backend import (
 )
 from controle.alvo_alinhamento import escolher_posicao_inicial_ou_centro
 from artifact_paths import display_path, matrix_candidates
-from controle.mount_control import ensure_connected, ensure_not_tracking, ensure_unparked, move_axes_pid_2d
+from controle.mount_control import (
+    ensure_connected,
+    ensure_not_tracking,
+    ensure_unparked,
+    move_axes_pid_2d,
+    stop_axes_safely,
+)
 
 
 FOCUS_MODE = "single"
@@ -717,6 +723,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nInterrompido pelo usuario (Ctrl+C). Encerrando de forma limpa...")
     finally:
+        stop_axes_safely()
         disconnect_camera()
 
 

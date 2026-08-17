@@ -79,3 +79,9 @@ mantendo `q` ou `Ctrl+C` prontos para interromper.
 Por seguranca, a calibracao IDS salva matrizes separadas com prefixo
 `ids_foco_temp_`. O tracker IDS se recusa a iniciar se essas matrizes ainda nao
 existirem, em vez de usar acidentalmente as matrizes antigas da ASI.
+
+Ao receber `Ctrl+C` ou sair normalmente, centro de massa, calibracao e tracker
+tentam enviar velocidade zero ate duas vezes e de forma independente para cada eixo.
+Essa protecao depende de o Windows, a rede, o ASCOM Remote e o driver ainda
+estarem respondendo; ela nao substitui parada fisica, limite mecanico ou corte de
+energia acessivel ao operador.

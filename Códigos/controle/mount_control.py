@@ -134,6 +134,31 @@ def move_axis(axis: int, rate_deg_per_s: float, mount: bool):
     call("PUT", "moveaxis", data={"Axis": axis, "Rate": float(rate_deg_per_s)})
 
 
+def stop_axes_safely(attempts: int = 2, timeout: float = 2.0) -> bool:
+    """Tenta zerar cada eixo de forma independente, mesmo se o outro falhar."""
+    failed_axes = []
+    for axis in (0, 1):
+        stopped = False
+        for _ in range(max(1, int(attempts))):
+            try:
+                call(
+                    "PUT",
+                    "moveaxis",
+                    data={"Axis": axis, "Rate": 0.0},
+                    timeout=timeout,
+                )
+                stopped = True
+                break
+            except Exception:
+                continue
+        if not stopped:
+            failed_axes.append(axis)
+    if failed_axes:
+        print(f"ALERTA: nao consegui confirmar parada dos eixos {failed_axes}.")
+        return False
+    return True
+
+
 def calc_error(axis:int, alvo: float, pos: float) -> float:
     if axis == 0:
         diff = (alvo - pos) % 360
@@ -334,8 +359,7 @@ def move_axes_pid_2d(mount: bool, delta_az: float, delta_alt: float):
 
         finally:
             # Parada dura sequencial para emergências e fim de execução
-            call("PUT", "moveaxis", data={"Axis": 0, "Rate": 0.0}, timeout=2.0)
-            call("PUT", "moveaxis", data={"Axis": 1, "Rate": 0.0}, timeout=2.0)
+            stop_axes_safely()
 
             _status_clear()
             azf, altf = read_altaz()

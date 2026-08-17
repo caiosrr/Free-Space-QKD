@@ -31,7 +31,13 @@ from foco_multiplos.Center_of_Mass_foco_temp import (
     set_gain,
     set_focus_mode,
 )
-from controle.mount_control import ensure_connected, ensure_not_tracking, ensure_unparked, move_axes_pid_2d
+from controle.mount_control import (
+    ensure_connected,
+    ensure_not_tracking,
+    ensure_unparked,
+    move_axes_pid_2d,
+    stop_axes_safely,
+)
 
 FOCO_DIR = ROOT_DIR / "foco_multiplos"
 
@@ -1060,6 +1066,7 @@ def main():
     except Exception as exc:
         print(f"\nErro na calibracao dual V3: {exc}")
     finally:
+        stop_axes_safely()
         if DISCONNECT_CAMERA_ON_EXIT:
             try:
                 disconnect_camera()
