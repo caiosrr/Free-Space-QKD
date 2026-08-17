@@ -56,6 +56,12 @@ Calibracao angular-pixel:
 python ".\Link UFF\Calibracao_ang_pix_foco_temp_IDS.py"
 ```
 
+Tracker continuo (somente depois de calibrar com a IDS):
+
+```powershell
+python ".\Link UFF\Tracker_IDS.py"
+```
+
 Ambos usam por padrao `7276 us`, `20 fps`, ganho analogico `1`, ganho digital
 `1`, sensor completo e `Mono8`. A calibracao movimenta o mount e deve ser feita
 com o spot visivel, folga mecanica disponivel e possibilidade de interromper com
@@ -63,3 +69,9 @@ com o spot visivel, folga mecanica disponivel e possibilidade de interromper com
 
 Os programas originais continuam usando a camera Alpaca/ASI. O backend IDS so e
 selecionado pelos executaveis desta pasta.
+
+O tracker IDS usa ROI nativa de `192 x 192` pixels. Esse tamanho respeita os
+incrementos de largura da U3-3680XCP-NIR. As posicoes da ROI tambem sao
+alinhadas aos passos de hardware (`OffsetX=8`, `OffsetY=2`). Antes do primeiro
+uso, gere as matrizes com a calibracao IDS e teste com velocidade/erro pequenos,
+mantendo `q` ou `Ctrl+C` prontos para interromper.

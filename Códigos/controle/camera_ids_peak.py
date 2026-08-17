@@ -80,6 +80,20 @@ class IDSPeakCamera:
             except Exception:
                 pass
 
+    @staticmethod
+    def _set_integer(node: Any, requested: int) -> int:
+        minimum = int(node.Minimum())
+        maximum = int(node.Maximum())
+        value = int(np.clip(requested, minimum, maximum))
+        try:
+            increment = max(1, int(node.Increment()))
+        except Exception:
+            increment = 1
+        value = minimum + round((value - minimum) / increment) * increment
+        value = int(np.clip(value, minimum, maximum))
+        node.SetValue(value)
+        return int(node.Value())
+
     def _set_pixel_format(self) -> str:
         node = self._node("PixelFormat")
         available = self._available_entries(node)
@@ -162,22 +176,7 @@ class IDSPeakCamera:
 
             width = int(self._node("Width").Value())
             height = int(self._node("Height").Value())
-            payload_size = int(self._node("PayloadSize").Value())
-            for _ in range(self.data_stream.NumBuffersAnnouncedMinRequired()):
-                buffer = self.data_stream.AllocAndAnnounceBuffer(payload_size)
-                self.data_stream.QueueBuffer(buffer)
-
-            try:
-                self._node("TLParamsLocked").SetValue(1)
-                self.params_locked = True
-            except Exception:
-                pass
-
-            self.data_stream.StartAcquisition()
-            start = self._node("AcquisitionStart")
-            start.Execute()
-            start.WaitUntilDone()
-            self.acquisition_started = True
+            self._start_acquisition()
 
             print(
                 f"Camera IDS conectada: {descriptor.DisplayName()} | {width}x{height} | "
@@ -190,6 +189,90 @@ class IDSPeakCamera:
         except Exception:
             self.disconnect()
             raise
+
+    def get_sensor_size(self) -> tuple[int, int]:
+        if self.nodemap is None:
+            raise RuntimeError("Camera IDS nao conectada.")
+        return int(self._node("WidthMax").Value()), int(self._node("HeightMax").Value())
+
+    def _start_acquisition(self) -> None:
+        if self.data_stream is None:
+            raise RuntimeError("DataStream IDS nao aberto.")
+        payload_size = int(self._node("PayloadSize").Value())
+        for _ in range(self.data_stream.NumBuffersAnnouncedMinRequired()):
+            buffer = self.data_stream.AllocAndAnnounceBuffer(payload_size)
+            self.data_stream.QueueBuffer(buffer)
+        try:
+            self._node("TLParamsLocked").SetValue(1)
+            self.params_locked = True
+        except Exception:
+            pass
+        self.data_stream.StartAcquisition()
+        start = self._node("AcquisitionStart")
+        start.Execute()
+        start.WaitUntilDone()
+        self.acquisition_started = True
+
+    def _stop_acquisition(self, revoke_buffers: bool = True) -> None:
+        if self.data_stream is None:
+            return
+        if self.acquisition_started:
+            try:
+                stop = self._node("AcquisitionStop")
+                stop.Execute()
+                stop.WaitUntilDone()
+            except Exception:
+                pass
+        try:
+            if self.data_stream.IsGrabbing():
+                self.data_stream.StopAcquisition(self.ids_peak.AcquisitionStopMode_Default)
+        except Exception:
+            pass
+        try:
+            self.data_stream.Flush(self.ids_peak.DataStreamFlushMode_DiscardAll)
+        except Exception:
+            pass
+        if self.params_locked:
+            try:
+                self._node("TLParamsLocked").SetValue(0)
+            except Exception:
+                pass
+        self.acquisition_started = False
+        self.params_locked = False
+        if revoke_buffers:
+            try:
+                for buffer in self.data_stream.AnnouncedBuffers():
+                    self.data_stream.RevokeBuffer(buffer)
+            except Exception:
+                pass
+
+    def set_roi(self, width: int, height: int, offset_x: int, offset_y: int) -> tuple[int, int, int, int]:
+        if self.nodemap is None or self.data_stream is None:
+            raise RuntimeError("Camera IDS nao conectada.")
+        self._stop_acquisition(revoke_buffers=True)
+        try:
+            # Zerar os offsets primeiro permite aumentar a largura/altura sem
+            # ultrapassar o limite direito ou inferior do sensor.
+            self._set_integer(self._node("OffsetX"), 0)
+            self._set_integer(self._node("OffsetY"), 0)
+            actual_w = self._set_integer(self._node("Width"), int(width))
+            actual_h = self._set_integer(self._node("Height"), int(height))
+            actual_x = self._set_integer(self._node("OffsetX"), int(offset_x))
+            actual_y = self._set_integer(self._node("OffsetY"), int(offset_y))
+            self._start_acquisition()
+            return actual_w, actual_h, actual_x, actual_y
+        except Exception:
+            # Tenta deixar a camera utilizavel mesmo se uma ROI for rejeitada.
+            if not self.acquisition_started:
+                try:
+                    self._start_acquisition()
+                except Exception:
+                    pass
+            raise
+
+    def reset_roi(self) -> tuple[int, int, int, int]:
+        width, height = self.get_sensor_size()
+        return self.set_roi(width, height, 0, 0)
 
     def set_gain(self, analog: float, digital: float) -> None:
         if self.nodemap is None:
@@ -244,30 +327,8 @@ class IDSPeakCamera:
     def disconnect(self) -> None:
         if self.ids_peak is None and not self.library_initialized:
             return
-        if self.acquisition_started and self.nodemap is not None:
-            try:
-                stop = self._node("AcquisitionStop")
-                stop.Execute()
-                stop.WaitUntilDone()
-            except Exception:
-                pass
         if self.data_stream is not None:
-            try:
-                if self.data_stream.IsGrabbing():
-                    self.data_stream.StopAcquisition(self.ids_peak.AcquisitionStopMode_Default)
-            except Exception:
-                pass
-            try:
-                self.data_stream.Flush(self.ids_peak.DataStreamFlushMode_DiscardAll)
-                for buffer in self.data_stream.AnnouncedBuffers():
-                    self.data_stream.RevokeBuffer(buffer)
-            except Exception:
-                pass
-        if self.params_locked and self.nodemap is not None:
-            try:
-                self._node("TLParamsLocked").SetValue(0)
-            except Exception:
-                pass
+            self._stop_acquisition(revoke_buffers=True)
 
         self.acquisition_started = False
         self.params_locked = False

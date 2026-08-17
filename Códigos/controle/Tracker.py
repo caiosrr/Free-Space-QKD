@@ -24,6 +24,7 @@ from controle.alvo_alinhamento import (
 )
 from controle.mount_control import ensure_connected, ensure_not_tracking, ensure_unparked
 from controle.mount_control import VEL_MAX_LIMITE, VEL_MIN_LIMITE, move_axis
+from controle.camera_backend import backend_name
 from foco_multiplos import Center_of_Mass_foco_temp as foco_temp
 
 # ==== Configuracoes Alpaca da camera ====
@@ -35,14 +36,14 @@ _transaction_ids = itertools.count(1)
 session = requests.Session()
 
 # ===== Parametros do tracker continuo =====
-WINDOW_SIZE = 200
+WINDOW_SIZE = 192 if backend_name() == "ids" else 200
 TARGET_H = 1080
 DISPLAY_HZ = 6.0
 TOLERANCIA_PX = 2.0
 CONTROL_DEADBAND_PX = 0.35
 RECENTER_SETTLE_S = 1.0
-EXPOSURE_SECONDS = 32e-6
-CONTROL_HZ = 45.0
+EXPOSURE_SECONDS = 7.276e-3 if backend_name() == "ids" else 32e-6
+CONTROL_HZ = 20.0 if backend_name() == "ids" else 45.0
 SIGNAL_TIMEOUT_S = 0.45
 VEL_MAX_TESTE = min(1.6, VEL_MAX_LIMITE)
 FINE_MATRIX_ENTER_RADIUS_PX = 8.0
@@ -108,7 +109,15 @@ def call(method: str, command: str, timeout: float = 5.0, **extra_args):
     return payload.get("Value")
 
 
+def _ids_camera():
+    from controle.camera_ids_peak import camera
+
+    return camera
+
+
 def get_camera_size() -> tuple[int, int]:
+    if backend_name() == "ids":
+        return _ids_camera().get_sensor_size()
     max_x = int(call("GET", "cameraxsize"))
     max_y = int(call("GET", "cameraysize"))
     return max_x, max_y
@@ -123,17 +132,22 @@ def _roi_params_for_target(
     target_y: float,
     mode: str,
 ) -> tuple[int, int, float, float]:
+    def roi_for(raw_x: float, raw_y: float) -> tuple[int, int, float, float]:
+        start_x, start_y, local_x, local_y = roi_incluindo_alvo(
+            sensor_w, sensor_h, roi_w, roi_h, raw_x, raw_y
+        )
+        if backend_name() == "ids":
+            # Incrementos de Offset da U3-3680XCP-NIR.
+            start_x = int(np.clip(round(start_x / 8) * 8, 0, sensor_w - roi_w))
+            start_y = int(np.clip(round(start_y / 2) * 2, 0, sensor_h - roi_h))
+            local_x = float(raw_x - start_x)
+            local_y = float(raw_y - start_y)
+        return start_x, start_y, local_x, local_y
+
     if mode == "rot180_ascom_axes":
         raw_target_x = (sensor_w - 1) - target_y
         raw_target_y = (sensor_h - 1) - target_x
-        start_x, start_y, raw_local_x, raw_local_y = roi_incluindo_alvo(
-            sensor_w,
-            sensor_h,
-            roi_w,
-            roi_h,
-            raw_target_x,
-            raw_target_y,
-        )
+        start_x, start_y, raw_local_x, raw_local_y = roi_for(raw_target_x, raw_target_y)
         return (
             start_x,
             start_y,
@@ -146,32 +160,24 @@ def _roi_params_for_target(
         target_y = float(np.clip(target_y, 0, sensor_h - 1))
         raw_target_x = (sensor_w - 1) - target_x
         raw_target_y = (sensor_h - 1) - target_y
-        start_x, start_y, local_x, local_y = roi_incluindo_alvo(
-            sensor_w,
-            sensor_h,
-            roi_w,
-            roi_h,
-            raw_target_x,
-            raw_target_y,
-        )
+        start_x, start_y, local_x, local_y = roi_for(raw_target_x, raw_target_y)
         return start_x, start_y, float((roi_w - 1) - local_x), float((roi_h - 1) - local_y)
 
     target_x = float(np.clip(target_x, 0, sensor_w - 1))
     target_y = float(np.clip(target_y, 0, sensor_h - 1))
-    start_x, start_y, local_x, local_y = roi_incluindo_alvo(
-        sensor_w,
-        sensor_h,
-        roi_w,
-        roi_h,
-        target_x,
-        target_y,
-    )
+    start_x, start_y, local_x, local_y = roi_for(target_x, target_y)
     if mode == "direct_rotlocal":
         return start_x, start_y, float((roi_w - 1) - local_x), float((roi_h - 1) - local_y)
     return start_x, start_y, local_x, local_y
 
 
 def _apply_camera_roi(w: int, h: int, start_x: int, start_y: int) -> None:
+    if backend_name() == "ids":
+        actual = _ids_camera().set_roi(w, h, start_x, start_y)
+        expected = (w, h, start_x, start_y)
+        if actual != expected:
+            raise RuntimeError(f"ROI IDS ajustada de {expected} para {actual}.")
+        return
     call("PUT", "numx", data={"NumX": w})
     call("PUT", "numy", data={"NumY": h})
     call("PUT", "startx", data={"StartX": start_x})
@@ -216,19 +222,29 @@ def set_camera_roi_validated(
     focus_mode: str,
 ) -> tuple[int, int, float, float]:
     max_x, max_y = get_camera_size()
-    display_w = max_y
-    display_h = max_x
+    if backend_name() == "ids":
+        display_w = max_x
+        display_h = max_y
+    else:
+        display_w = max_y
+        display_h = max_x
     target_x = float(np.clip(target_x, 0, display_w - 1))
     target_y = float(np.clip(target_y, 0, display_h - 1))
 
-    candidates = [
-        ("rot180_ascom_axes", "frame rotacionado 180 com eixos ASCOM"),
-        ("rot180", "coordenada corrigida pela rotacao 180 antiga"),
-        ("direct", "coordenada direta do sensor antiga"),
-    ]
+    if backend_name() == "ids":
+        candidates = [
+            ("rot180", "IDS rotacionada 180 graus"),
+            ("direct", "IDS em coordenada direta"),
+        ]
+    else:
+        candidates = [
+            ("rot180_ascom_axes", "frame rotacionado 180 com eixos ASCOM"),
+            ("rot180", "coordenada corrigida pela rotacao 180 antiga"),
+            ("direct", "coordenada direta do sensor antiga"),
+        ]
     best = None
     print(
-        f"Sensor ASCOM: {max_x}x{max_y}; frame esperado apos captura: "
+        f"Sensor {backend_name()}: {max_x}x{max_y}; frame esperado apos captura: "
         f"{display_w}x{display_h}; alvo global=({target_x:.1f}, {target_y:.1f})"
     )
 
@@ -271,7 +287,9 @@ def set_camera_roi_validated(
         foco_temp.reset_focus_lock()
     debug_path = ROOT_DIR / "resultados" / "debug" / "tracker_roi_teste.png"
     debug_path.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(debug_path), frame_test)
+    ok, encoded = cv2.imencode(".png", frame_test)
+    if ok:
+        debug_path.write_bytes(encoded.tobytes())
     print(
         f"ROI escolhida: {mode} | Start=({start_x}, {start_y}) | "
         f"alvo local=({target_x_local:.1f}, {target_y_local:.1f})"
@@ -282,6 +300,9 @@ def set_camera_roi_validated(
 
 def reset_camera_roi() -> None:
     try:
+        if backend_name() == "ids":
+            _ids_camera().reset_roi()
+            return
         max_x = call("GET", "cameraxsize")
         max_y = call("GET", "cameraysize")
         call("PUT", "startx", data={"StartX": 0})
@@ -312,11 +333,17 @@ def escolher_referencia_tracker(sensor_w: int, sensor_h: int, focus_mode: str) -
 
 
 def connect_camera() -> None:
+    if backend_name() == "ids":
+        _ids_camera().connect()
+        return
     print("Conectando à câmera...")
     call("PUT", "connected", data={"Connected": True})
 
 
 def disconnect_camera() -> None:
+    if backend_name() == "ids":
+        _ids_camera().disconnect()
+        return
     print("Desconectando da câmera...")
     call("PUT", "connected", data={"Connected": False})
 
@@ -348,9 +375,12 @@ def fetch_image_array() -> np.ndarray:
 
 
 def capture_frame(exposure_seconds: float) -> np.ndarray:
-    start_exposure(exposure_seconds, light=True)
-    wait_until_image_ready()
-    frame = fetch_image_array().astype(np.float32)
+    if backend_name() == "ids":
+        frame = _ids_camera().capture(exposure_seconds).astype(np.float32)
+    else:
+        start_exposure(exposure_seconds, light=True)
+        wait_until_image_ready()
+        frame = fetch_image_array().astype(np.float32)
 
     pedestal = np.median(frame) + (0.5 * np.std(frame))
     max_val = frame.max()
