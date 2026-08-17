@@ -1,22 +1,11 @@
-__pycache__/
+# Pastas locais de bancada e material que nao faz parte do codigo.
+/Arquivos/
+/Anotaçoes/*.png
+/Anotaçoes/*.jpg
+/Anotaçoes/*.jpeg
+/Anotaçoes/*.mp4
+
+# Cache Python em qualquer nivel do repositorio.
+**/__pycache__/
 *.py[cod]
-.venv/
 
-# Imagens, videos e auditorias geradas em bancada.
-*.png
-*.jpg
-*.jpeg
-*.mp4
-foco_multiplos/auditoria_foco_temp*/
-resultados/debug/
-
-# Saidas numericas grandes/temporarias. As matrizes pequenas em resultados/matrizes
-# ficam versionadas porque o tracker pode precisar delas para rodar.
-resultados/json/*.json
-
-# Arquivos locais de editor/sistema.
-.vscode/*
-!.vscode/settings.json
-.idea/
-Thumbs.db
-.DS_Store

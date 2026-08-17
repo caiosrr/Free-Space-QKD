@@ -16,6 +16,7 @@ from controle.Center_of_Mass import (
     connect_camera,
     disconnect_camera,
     fetch_image_array,
+    set_gain,
     start_exposure,
     wait_until_image_ready,
 )
@@ -34,7 +35,8 @@ LOCK_FOCUS_IDENTITY = True
 LOCK_MIN_SIMILARITY = 0.35
 LOCK_STRONG_SIMILARITY = 0.65
 lim_px = 2.0
-EXPOSURE_SECONDS = 32e-6
+CAMERA_GAIN = 5
+EXPOSURE_SECONDS = 100e-3
 CAPTURE_HTTP_ATTEMPTS = 3
 CAPTURE_RETRY_SLEEP_S = 0.75
 CAPTURE_COOLDOWN_SLEEP_S = 0.05
@@ -539,7 +541,20 @@ def _save_marked_frame(
     else:
         cv2.circle(marked, (cm_ix, cm_iy), 8, (0, 255, 0), -1)
 
-    cv2.imwrite(str(path), marked)
+    _save_image(path, marked)
+
+
+def _save_image(path: Path, image: np.ndarray) -> None:
+    """Salva uma imagem mesmo quando o caminho contém caracteres Unicode."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    extension = path.suffix or ".png"
+    ok, encoded = cv2.imencode(extension, image)
+    if not ok:
+        raise RuntimeError(f"OpenCV nao conseguiu codificar a imagem como {extension}")
+    path.write_bytes(encoded.tobytes())
+    if not path.is_file() or path.stat().st_size == 0:
+        raise OSError(f"A imagem nao foi gravada corretamente em: {path}")
 
 
 def main() -> None:
@@ -547,6 +562,7 @@ def main() -> None:
     set_focus_mode(mode)
     connect_camera()
     try:
+        set_gain(CAMERA_GAIN)
         frame = capture_frame(EXPOSURE_SECONDS, light=True)
         cm = centro_massa(frame)
         if cm is None:
@@ -566,7 +582,7 @@ def main() -> None:
                     f"pedestal={LAST_CAPTURE_STATS['pedestal']:.1f}"
                 )
             output_path = FOCO_DIR / "foco_temp_ultimo_frame.png"
-            cv2.imwrite(str(output_path), frame)
+            _save_image(output_path, frame)
             print(f"Ultimo frame salvo em: {output_path}")
             return
 
@@ -661,7 +677,7 @@ def main() -> None:
                     if cm is not None:
                         x_cm, y_cm, intensidade, toca_borda = cm
                 output_path = FOCO_DIR / "foco_temp_ultimo_frame.png"
-                cv2.imwrite(str(output_path), frame)
+                _save_image(output_path, frame)
                 print(f"Ultimo frame salvo em: {output_path}")
                 break
 

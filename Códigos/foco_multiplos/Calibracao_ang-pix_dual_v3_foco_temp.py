@@ -27,13 +27,15 @@ from foco_multiplos.Center_of_Mass_foco_temp import (
     disconnect_camera,
     get_focus_debug,
     get_focus_mode,
+    set_gain,
     set_focus_mode,
 )
 from controle.mount_control import ensure_connected, ensure_not_tracking, ensure_unparked, move_axes_pid_2d
 
 FOCO_DIR = ROOT_DIR / "foco_multiplos"
 
-EXPOSURE_SECONDS = 32e-6
+CAMERA_GAIN = 5
+EXPOSURE_SECONDS = 100e-3
 SETTLE_S = 1.50
 CAPTURES_PER_CENTER = 2
 CAPTURES_PER_POINT = 2
@@ -954,6 +956,7 @@ def main():
 
     try:
         connect_camera()
+        set_gain(CAMERA_GAIN)
 
         coarse_result = None
         coarse_records = None
