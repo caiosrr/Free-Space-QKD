@@ -25,6 +25,10 @@ except ImportError as exc:
 
 
 DEFAULT_OUTPUT = Path(__file__).resolve().parent / "resultados" / "teste_ids.png"
+DEFAULT_EXPOSURE_US = 7276.0
+DEFAULT_FPS = 20.0
+DEFAULT_ANALOG_GAIN = 1.0
+DEFAULT_DIGITAL_GAIN = 1.0
 PREFERRED_8BIT_FORMATS = (
     "Mono8",
     "BayerGR8",
@@ -69,6 +73,40 @@ def configure_pixel_format(nodemap: Any) -> str:
     return selected
 
 
+def disable_auto_feature(nodemap: Any, name: str) -> None:
+    try:
+        node = find_node(nodemap, name)
+        available = [entry.StringValue() for entry in node.AvailableEntries()]
+        if "Off" in available:
+            node.SetCurrentEntry("Off")
+            print(f"{name}: Off")
+    except Exception:
+        print(f"Aviso: nao consegui desligar {name}; continuando.")
+
+
+def configure_frame_rate(nodemap: Any, requested_fps: float) -> float:
+    try:
+        enable_node = find_node(nodemap, "AcquisitionFrameRateEnable")
+        if enable_node.IsWriteable():
+            enable_node.SetValue(True)
+    except Exception:
+        pass
+    return clamp_float_node(find_node(nodemap, "AcquisitionFrameRate"), requested_fps)
+
+
+def configure_gain(nodemap: Any, selector_name: str, requested: float) -> float | None:
+    selector = find_node(nodemap, "GainSelector")
+    available = [entry.StringValue() for entry in selector.AvailableEntries()]
+    if selector_name not in available:
+        print(
+            f"Aviso: GainSelector={selector_name} nao esta disponivel. "
+            f"Opcoes: {', '.join(available)}"
+        )
+        return None
+    selector.SetCurrentEntry(selector_name)
+    return clamp_float_node(find_node(nodemap, "Gain"), requested)
+
+
 def buffer_to_numpy(buffer: Any) -> np.ndarray:
     """Copia um buffer 8-bit antes de devolve-lo para a fila da camera."""
     width = int(buffer.Width())
@@ -99,10 +137,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--exposure-us",
         type=float,
-        default=32.0,
-        help="Exposicao solicitada em microssegundos (padrao: 32).",
+        default=DEFAULT_EXPOSURE_US,
+        help=f"Exposicao em microssegundos (padrao: {DEFAULT_EXPOSURE_US:g}).",
     )
-    parser.add_argument("--gain", type=float, help="Ganho solicitado; omita para manter o atual.")
+    parser.add_argument("--fps", type=float, default=DEFAULT_FPS, help="FPS solicitado (padrao: 20).")
+    parser.add_argument(
+        "--analog-gain",
+        type=float,
+        default=DEFAULT_ANALOG_GAIN,
+        help="Ganho AnalogAll (padrao: 1).",
+    )
+    parser.add_argument(
+        "--digital-gain",
+        type=float,
+        default=DEFAULT_DIGITAL_GAIN,
+        help="Ganho DigitalAll (padrao: 1).",
+    )
     parser.add_argument("--timeout-ms", type=int, default=5000, help="Timeout por frame.")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="PNG de saida.")
     parser.add_argument("--list-only", action="store_true", help="Somente lista as cameras.")
@@ -157,22 +207,22 @@ def main() -> int:
         except Exception:
             pass
 
+        disable_auto_feature(nodemap, "ExposureAuto")
+        disable_auto_feature(nodemap, "GainAuto")
+
         pixel_format = configure_pixel_format(nodemap)
+        frame_rate = configure_frame_rate(nodemap, args.fps)
         exposure = clamp_float_node(find_node(nodemap, "ExposureTime"), args.exposure_us)
         print(f"Formato: {pixel_format}")
+        print(f"Frame rate configurado: {frame_rate:.3f} fps")
         print(f"Exposicao aplicada: {exposure:.3f} us")
 
-        if args.gain is not None:
-            try:
-                selector = find_node(nodemap, "GainSelector")
-                available = [entry.StringValue() for entry in selector.AvailableEntries()]
-                choice = next((name for name in ("AnalogAll", "All", "DigitalAll") if name in available), None)
-                if choice is not None:
-                    selector.SetCurrentEntry(choice)
-            except Exception:
-                pass
-            gain = clamp_float_node(find_node(nodemap, "Gain"), args.gain)
-            print(f"Ganho aplicado: {gain:.3f}")
+        analog_gain = configure_gain(nodemap, "AnalogAll", args.analog_gain)
+        if analog_gain is not None:
+            print(f"Ganho analogico aplicado: {analog_gain:.3f}")
+        digital_gain = configure_gain(nodemap, "DigitalAll", args.digital_gain)
+        if digital_gain is not None:
+            print(f"Ganho digital aplicado: {digital_gain:.3f}")
 
         width = int(find_node(nodemap, "Width").Value())
         height = int(find_node(nodemap, "Height").Value())
