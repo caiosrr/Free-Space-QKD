@@ -33,10 +33,12 @@ from foco_multiplos.Center_of_Mass_foco_temp import (
     set_focus_mode,
 )
 from controle.mount_control import (
+    calc_error,
     ensure_connected,
     ensure_not_tracking,
     ensure_unparked,
     move_axes_pid_2d,
+    read_altaz,
     stop_axes_safely,
 )
 
@@ -69,6 +71,9 @@ MAX_COND = 1.0e4
 MIN_SPREAD_DEG = 0.008
 ROBUST_ITERS = 8
 HUBER_K = 1.5
+RETURN_POSITION_TOLERANCE_DEG = 0.001
+MAX_AUTO_RETURN_DELTA_DEG = 0.25
+MAX_AUTO_RETURN_ATTEMPTS = 2
 
 COARSE_RADII_DEG = [0.04]
 FINE_RADII_DEG = [0.010]
@@ -945,6 +950,127 @@ def _novo_diretorio_auditoria() -> Path:
     raise RuntimeError(f"Nao consegui criar diretorio unico de auditoria em {base_dir}")
 
 
+def _write_mount_position_record(record: dict) -> Path:
+    if AUDIT_DIR is None:
+        raise RuntimeError("Diretorio de auditoria ainda nao foi criado.")
+    path = AUDIT_DIR / "posicao_inicial_mount.json"
+    with path.open("w", encoding="utf-8") as fp:
+        json.dump(record, fp, indent=2)
+    return path
+
+
+def _position_error(
+    target_az_deg: float,
+    target_alt_deg: float,
+    current_az_deg: float,
+    current_alt_deg: float,
+) -> tuple[float, float]:
+    return (
+        float(calc_error(0, target_az_deg, current_az_deg)),
+        float(target_alt_deg - current_alt_deg),
+    )
+
+
+def _return_to_initial_position(
+    mount: bool,
+    initial_az_deg: float,
+    initial_alt_deg: float,
+) -> dict:
+    result = {
+        "attempted_epoch": time.time(),
+        "success": False,
+        "status": "not_started",
+        "attempts": 0,
+        "final_azimuth_deg": None,
+        "final_altitude_deg": None,
+        "final_error_azimuth_deg": None,
+        "final_error_altitude_deg": None,
+    }
+
+    print(
+        "\nRetornando o mount para a posicao absoluta inicial: "
+        f"Az={initial_az_deg:.6f} deg, Alt={initial_alt_deg:.6f} deg"
+    )
+
+    try:
+        if not stop_axes_safely():
+            raise RuntimeError("nao foi possivel confirmar a parada antes do retorno")
+
+        for attempt in range(1, MAX_AUTO_RETURN_ATTEMPTS + 1):
+            current_az, current_alt = read_altaz()
+            delta_az, delta_alt = _position_error(
+                initial_az_deg,
+                initial_alt_deg,
+                current_az,
+                current_alt,
+            )
+            result["attempts"] = attempt - 1
+
+            if max(abs(delta_az), abs(delta_alt)) <= RETURN_POSITION_TOLERANCE_DEG:
+                result["success"] = True
+                result["status"] = "restored"
+                break
+
+            if max(abs(delta_az), abs(delta_alt)) > MAX_AUTO_RETURN_DELTA_DEG:
+                result["status"] = "unsafe_delta_refused"
+                print(
+                    "ALERTA: retorno automatico recusado porque a distancia ate a "
+                    f"origem ficou grande demais (dAz={delta_az:+.6f} deg, "
+                    f"dAlt={delta_alt:+.6f} deg; limite="
+                    f"{MAX_AUTO_RETURN_DELTA_DEG:.3f} deg)."
+                )
+                break
+
+            print(
+                f"Tentativa de retorno {attempt}/{MAX_AUTO_RETURN_ATTEMPTS}: "
+                f"dAz={delta_az:+.6f} deg, dAlt={delta_alt:+.6f} deg"
+            )
+            result["attempts"] = attempt
+            move_axes_pid_2d(mount, delta_az, delta_alt)
+
+        final_az, final_alt = read_altaz()
+        final_error_az, final_error_alt = _position_error(
+            initial_az_deg,
+            initial_alt_deg,
+            final_az,
+            final_alt,
+        )
+        result.update(
+            {
+                "final_azimuth_deg": final_az,
+                "final_altitude_deg": final_alt,
+                "final_error_azimuth_deg": final_error_az,
+                "final_error_altitude_deg": final_error_alt,
+            }
+        )
+
+        if max(abs(final_error_az), abs(final_error_alt)) <= RETURN_POSITION_TOLERANCE_DEG:
+            result["success"] = True
+            result["status"] = "restored"
+            print(
+                "Posicao inicial restaurada: "
+                f"Az={final_az:.6f} deg, Alt={final_alt:.6f} deg."
+            )
+        elif result["status"] != "unsafe_delta_refused":
+            result["status"] = "tolerance_not_reached"
+            print(
+                "ALERTA: o mount parou, mas nao confirmou retorno dentro da tolerancia "
+                f"(erro Az={final_error_az:+.6f} deg, "
+                f"Alt={final_error_alt:+.6f} deg)."
+            )
+    except KeyboardInterrupt:
+        result["status"] = "return_interrupted_by_user"
+        print("\nRetorno a posicao inicial interrompido; parando os eixos.")
+    except Exception as exc:
+        result["status"] = "return_failed"
+        result["error"] = str(exc)
+        print(f"ALERTA: nao consegui retornar a posicao absoluta inicial: {exc}")
+    finally:
+        stop_axes_safely()
+
+    return result
+
+
 def main():
     global AUDIT_DIR, AUDIT_LOG
 
@@ -966,6 +1092,8 @@ def main():
     mount = True
     AUDIT_LOG = []
     AUDIT_DIR = _novo_diretorio_auditoria()
+    initial_position = None
+    position_record = None
 
     print(f"Modo de foco temporario: {focus_mode}")
     print(f"Regime de calibracao: {target_input}")
@@ -973,6 +1101,23 @@ def main():
     print(f"Auditoria visual do foco em: {AUDIT_DIR}")
 
     try:
+        initial_az, initial_alt = read_altaz()
+        initial_position = (initial_az, initial_alt)
+        position_record = {
+            "captured_epoch": time.time(),
+            "initial_azimuth_deg": initial_az,
+            "initial_altitude_deg": initial_alt,
+            "return_tolerance_deg": RETURN_POSITION_TOLERANCE_DEG,
+            "max_auto_return_delta_deg": MAX_AUTO_RETURN_DELTA_DEG,
+            "return": {"status": "pending"},
+        }
+        position_path = _write_mount_position_record(position_record)
+        print(
+            "Posicao absoluta inicial salva: "
+            f"Az={initial_az:.6f} deg, Alt={initial_alt:.6f} deg "
+            f"em {position_path}"
+        )
+
         connect_camera()
         set_gain(CAMERA_GAIN)
 
@@ -1021,6 +1166,8 @@ def main():
             return
 
         existing = _load_existing_matrix()
+        coarse_fit_records, _, _ = _prepare_fit_records(coarse_records, "coarse")
+        fine_fit_records, _, _ = _prepare_fit_records(fine_records, "fine")
         comparison = _compare_with_existing(
             existing,
             coarse_result,
@@ -1072,7 +1219,20 @@ def main():
     except Exception as exc:
         print(f"\nErro na calibracao dual V3: {exc}")
     finally:
-        stop_axes_safely()
+        if initial_position is None:
+            stop_axes_safely()
+        else:
+            return_result = _return_to_initial_position(
+                mount,
+                initial_position[0],
+                initial_position[1],
+            )
+            if position_record is not None:
+                position_record["return"] = return_result
+                try:
+                    _write_mount_position_record(position_record)
+                except Exception as exc:
+                    print(f"Aviso: nao consegui atualizar o registro da posicao: {exc}")
         if DISCONNECT_CAMERA_ON_EXIT:
             try:
                 disconnect_camera()
