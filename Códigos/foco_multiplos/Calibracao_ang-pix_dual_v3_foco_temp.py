@@ -66,11 +66,11 @@ QUALITY_LIMITS = {
     "fine": {"warn_rms_px": 5.0, "max_rms_px": 10.0},
 }
 
-OUTPUT_PREFIX = "calibracao_dual_v3_foco_temp"
-COARSE_A_PATH = "foco_temp_A_coarse.npy"
-COARSE_A_INV_PATH = "foco_temp_A_inv_coarse.npy"
-FINE_A_PATH = "foco_temp_A_fine.npy"
-FINE_A_INV_PATH = "foco_temp_A_inv_fine.npy"
+OUTPUT_PREFIX = "ids_calibracao_foco_temp" if backend_name() == "ids" else "calibracao_dual_v3_foco_temp"
+COARSE_A_PATH = "ids_foco_temp_A_coarse.npy" if backend_name() == "ids" else "foco_temp_A_coarse.npy"
+COARSE_A_INV_PATH = "ids_foco_temp_A_inv_coarse.npy" if backend_name() == "ids" else "foco_temp_A_inv_coarse.npy"
+FINE_A_PATH = "ids_foco_temp_A_fine.npy" if backend_name() == "ids" else "foco_temp_A_fine.npy"
+FINE_A_INV_PATH = "ids_foco_temp_A_inv_fine.npy" if backend_name() == "ids" else "foco_temp_A_inv_fine.npy"
 
 AUDIT_DIR: Path | None = None
 AUDIT_LOG = []
@@ -802,6 +802,7 @@ def _compare_with_existing(existing, coarse_result, fine_result, coarse_records,
 def _calibration_config_payload() -> dict:
     return {
         "exposure_seconds": EXPOSURE_SECONDS,
+        "camera_backend": backend_name(),
         "settle_s": SETTLE_S,
         "captures_per_center": CAPTURES_PER_CENTER,
         "captures_per_point": CAPTURES_PER_POINT,

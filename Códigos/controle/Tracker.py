@@ -588,7 +588,10 @@ def _normalize_focus_mode(mode: str) -> str:
 
 def _load_tracking_calibration_matrices(focus_mode: str):
     focus_mode = _normalize_focus_mode(focus_mode)
-    if focus_mode == "dual":
+    if backend_name() == "ids":
+        fine_candidates = matrix_candidates("ids_foco_temp_A_inv_fine.npy")
+        coarse_candidates = matrix_candidates("ids_foco_temp_A_inv_coarse.npy")
+    elif focus_mode == "dual":
         fine_candidates = matrix_candidates("foco_temp_A_inv_fine.npy")
         coarse_candidates = matrix_candidates("foco_temp_A_inv_coarse.npy")
     else:

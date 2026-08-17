@@ -75,3 +75,7 @@ incrementos de largura da U3-3680XCP-NIR. As posicoes da ROI tambem sao
 alinhadas aos passos de hardware (`OffsetX=8`, `OffsetY=2`). Antes do primeiro
 uso, gere as matrizes com a calibracao IDS e teste com velocidade/erro pequenos,
 mantendo `q` ou `Ctrl+C` prontos para interromper.
+
+Por seguranca, a calibracao IDS salva matrizes separadas com prefixo
+`ids_foco_temp_`. O tracker IDS se recusa a iniciar se essas matrizes ainda nao
+existirem, em vez de usar acidentalmente as matrizes antigas da ASI.

@@ -448,18 +448,24 @@ def centro_massa(frame: np.ndarray, threshold_percent: float | None = None):
 
 
 def _load_calibration_matrices() -> dict[str, tuple[np.ndarray, str]] | None:
-    matrix_sets = {
-        "fine": matrix_candidates(
-            "foco_temp_A_inv_fine.npy",
-            "A_inv_fine.npy",
-            "calibracao_A_inv.npy",
-        ),
-        "coarse": matrix_candidates(
-            "foco_temp_A_inv_coarse.npy",
-            "A_inv_coarse.npy",
-            "calibracao_A_inv.npy",
-        ),
-    }
+    if backend_name() == "ids":
+        matrix_sets = {
+            "fine": matrix_candidates("ids_foco_temp_A_inv_fine.npy"),
+            "coarse": matrix_candidates("ids_foco_temp_A_inv_coarse.npy"),
+        }
+    else:
+        matrix_sets = {
+            "fine": matrix_candidates(
+                "foco_temp_A_inv_fine.npy",
+                "A_inv_fine.npy",
+                "calibracao_A_inv.npy",
+            ),
+            "coarse": matrix_candidates(
+                "foco_temp_A_inv_coarse.npy",
+                "A_inv_coarse.npy",
+                "calibracao_A_inv.npy",
+            ),
+        }
 
     loaded = {}
     try:
