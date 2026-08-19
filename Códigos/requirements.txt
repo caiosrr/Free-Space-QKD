@@ -1,6 +1,7 @@
 numpy
 opencv-python
 requests
+alpyca>=3.1.2,<4
 pyvisa
 pyvisa-py
 pyusb

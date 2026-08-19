@@ -19,6 +19,6 @@ if __name__ == "__main__":
     target = (
         CODIGOS_DIR
         / "foco_multiplos"
-        / "Calibracao_ang-pix_dual_v3_foco_temp.py"
+        / "calibracao_foco.py"
     )
     runpy.run_path(str(target), run_name="__main__")

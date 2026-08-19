@@ -1,6 +1,10 @@
-"""Executa o tracker continuo usando a IDS U3-3680XCP-NIR."""
+"""Inicia o tracker usando a camera IDS U3-3680XCP-NIR.
 
-import runpy
+Este arquivo faz somente duas coisas:
+1. aplica exposicao, ganho e caminhos exclusivos do Link UFF;
+2. chama o tracker comum em ``controle/Tracker.py``.
+"""
+
 import sys
 from pathlib import Path
 
@@ -13,8 +17,11 @@ if str(CODIGOS_DIR) not in sys.path:
 
 import config_camera_ids as camera_config
 
+# Seleciona a IDS e os resultados do Link UFF antes de importar o tracker.
 camera_config.apply_environment()
+
+from controle.Tracker import main
 
 
 if __name__ == "__main__":
-    runpy.run_path(str(CODIGOS_DIR / "controle" / "Tracker.py"), run_name="__main__")
+    main()

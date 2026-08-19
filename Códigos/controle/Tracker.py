@@ -1,10 +1,31 @@
+"""Tracker continuo do feixe, organizado em um unico programa.
+
+Resumo do fluxo
+---------------
+1. Conecta o mount e a camera selecionada (IDS ou ASI/ASCOM).
+2. Carrega as matrizes produzidas pela calibracao.
+3. Encontra o foco salvo e recorta uma ROI ao redor dele.
+4. Mede ``dx`` e ``dy`` entre o foco e o alvo.
+5. Converte pixels em erro angular e calcula a velocidade dos dois eixos.
+6. Freia se perder o sinal, detectar salto ou observar divergencia.
+7. Ao sair com Q, Esc ou Ctrl+C, envia velocidade zero aos dois eixos.
+
+O codigo esta dividido em blocos numerados. Exposicao e ganho ficam nas fontes
+unicas ``config_camera_asi.py`` (programas normais) e
+``Link UFF/config_camera_ids.py`` (IDS).
+"""
+
+import csv
 import itertools
+import json
 import os
 import sys
 import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 import cv2
@@ -18,6 +39,30 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from artifact_paths import display_path, matrix_candidates
+from config_camera_asi import ALPACA_ADDRESS, DEVICE_NUMBER
+from config_camera_asi import EXPOSURE_SECONDS as ASI_EXPOSURE_SECONDS
+from config_camera_asi import GAIN as ASI_GAIN
+from config_tracker import (
+    BORDER_CONFIRM_FRAMES,
+    CSV_FLUSH_SECONDS,
+    CSV_LOG_HZ,
+    HOLD_ENTER_RADIUS_PX,
+    HOLD_EXIT_CONFIRM_FRAMES,
+    HOLD_EXIT_RADIUS_PX,
+    MAX_OFFSET_ALT_DEG,
+    MAX_OFFSET_AZ_DEG,
+    MAX_SESSION_HOURS,
+    MAX_TRACKING_RATE_DEG_S,
+    POSITION_WATCHDOG_HZ,
+    RETURN_ATTEMPTS,
+    RETURN_MAX_RATE_DEG_S,
+    RETURN_TO_START_ON_LIMIT,
+    RETURN_TOLERANCE_DEG,
+    SIGNAL_LOSS_LIMIT_SECONDS,
+    VARIANCE_WINDOW_SECONDS,
+    WATCHDOG_READ_FAILURES,
+    roi_size_for_backend,
+)
 from controle.alvo_alinhamento import (
     AlvoAlinhamento,
     carregar_alvo_salvo,
@@ -25,36 +70,58 @@ from controle.alvo_alinhamento import (
     roi_incluindo_alvo,
 )
 from controle.mount_control import ensure_connected, ensure_not_tracking, ensure_unparked
-from controle.mount_control import VEL_MAX_LIMITE, VEL_MIN_LIMITE, move_axis, stop_axes_safely
+from controle.mount_control import (
+    VEL_MAX_LIMITE,
+    VEL_MIN_LIMITE,
+    calc_error,
+    move_axes_pid_2d,
+    move_axis,
+    read_altaz,
+    stop_axes_safely,
+)
 from controle.camera_backend import backend_name
 from foco_multiplos import Center_of_Mass_foco_temp as foco_temp
 
-# ==== Configuracoes Alpaca da camera ====
-BASE_URL = "http://127.0.0.1:11111/api/v1/camera/0"
+
+# =============================================================================
+# BLOCO 1 - CONFIGURACAO
+# =============================================================================
+# Edite este bloco para ajustar o controle. Ganho e exposicao da camera ficam
+# nos arquivos de configuracao citados acima. A direcao dos movimentos NAO deve
+# ser corrigida trocando sinais aqui: ela vem das matrizes da calibracao.
+
+# Endereco usado somente pela camera ASI/ASCOM. A IDS ignora estes valores.
+BASE_URL = f"http://{ALPACA_ADDRESS}/api/v1/camera/{DEVICE_NUMBER}"
 CLIENT_ID = 1
 IMAGE_READY_POLL_S = 0.001
 IMAGE_READY_SPIN_POLLS = 3
 _transaction_ids = itertools.count(1)
 session = requests.Session()
 
-# ===== Parametros do tracker continuo =====
-WINDOW_SIZE = 192 if backend_name() == "ids" else 200
+# Imagem e frequencia de operacao.
+WINDOW_SIZE = roi_size_for_backend(backend_name())
 TARGET_H = 1080
 DISPLAY_HZ = 6.0
-TOLERANCIA_PX = 2.0
-CONTROL_DEADBAND_PX = 0.35
-RECENTER_SETTLE_S = 1.0
+
+# Tolerancia visual e zona morta do controle, ambas em pixels.
+TOLERANCIA_PX = HOLD_ENTER_RADIUS_PX
 EXPOSURE_SECONDS = (
     float(os.environ.get("QKD_IDS_EXPOSURE_US", "7276")) * 1e-6
     if backend_name() == "ids"
-    else 32e-6
+    else ASI_EXPOSURE_SECONDS
 )
+ROTATE_IMAGE_180 = os.environ.get("QKD_ROTATE_IMAGE_180", "1") != "0"
+IDS_MATRIX_PREFIX = "ids_foco_temp" if ROTATE_IMAGE_180 else "ids_raw_foco_temp"
 CONTROL_HZ = float(os.environ.get("QKD_IDS_FPS", "20")) if backend_name() == "ids" else 45.0
 TRACKER_OUTPUT_DIR = Path(
     os.environ.get("QKD_TRACKER_OUTPUT_DIR", ROOT_DIR / "resultados" / "debug")
 )
 SIGNAL_TIMEOUT_S = 0.45
-VEL_MAX_TESTE = min(1.6, VEL_MAX_LIMITE)
+
+# Limite de seguranca da velocidade enviada ao mount, em graus por segundo.
+VEL_MAX_TESTE = min(MAX_TRACKING_RATE_DEG_S, VEL_MAX_LIMITE)
+
+# Usa a matriz fina perto do alvo e a grossa quando o erro e maior.
 FINE_MATRIX_ENTER_RADIUS_PX = 8.0
 FINE_MATRIX_EXIT_RADIUS_PX = 14.0
 
@@ -97,6 +164,12 @@ ENABLE_MANUAL_JUMP_BRAKE = True
 MANUAL_JUMP_PX = 18.0
 MANUAL_JUMP_HOLD_S = 0.25
 
+
+# =============================================================================
+# BLOCO 2 - CAMERA, ALVO E ROI
+# =============================================================================
+# Este bloco esconde as diferencas entre IDS e ASI/ASCOM. Ele abre a camera,
+# localiza o alvo salvo e recorta uma ROI de WINDOW_SIZE ao redor desse alvo.
 
 def call(method: str, command: str, timeout: float = 5.0, **extra_args):
     params = {
@@ -175,8 +248,6 @@ def _roi_params_for_target(
     target_x = float(np.clip(target_x, 0, sensor_w - 1))
     target_y = float(np.clip(target_y, 0, sensor_h - 1))
     start_x, start_y, local_x, local_y = roi_for(target_x, target_y)
-    if mode == "direct_rotlocal":
-        return start_x, start_y, float((roi_w - 1) - local_x), float((roi_h - 1) - local_y)
     return start_x, start_y, local_x, local_y
 
 
@@ -210,7 +281,7 @@ def set_camera_roi(w: int, h: int, target_x: float | None = None, target_y: floa
             h,
             target_x,
             target_y,
-            mode="rot180",
+            mode="rot180" if ROTATE_IMAGE_180 else "direct",
         )
         print(
             f"Cortando o sensor na fonte: ROI {w}x{h} px em "
@@ -242,10 +313,11 @@ def set_camera_roi_validated(
     target_y = float(np.clip(target_y, 0, display_h - 1))
 
     if backend_name() == "ids":
-        candidates = [
-            ("rot180", "IDS rotacionada 180 graus"),
-            ("direct", "IDS em coordenada direta"),
-        ]
+        candidates = (
+            [("rot180", "IDS rotacionada 180 graus")]
+            if ROTATE_IMAGE_180
+            else [("direct", "IDS sem rotacao")]
+        )
     else:
         candidates = [
             ("rot180_ascom_axes", "frame rotacionado 180 com eixos ASCOM"),
@@ -292,7 +364,7 @@ def set_camera_roi_validated(
             best = (dist, start_x, start_y, target_x_local, target_y_local, mode, frame_test)
 
     if best is None:
-        print("Aviso: nenhuma ROI de teste encontrou o laser; usando ROI corrigida pela rotacao.")
+        print("Aviso: nenhuma ROI de teste encontrou o laser; usando a ROI calculada para o alvo.")
         fallback = set_camera_roi(w, h, target_x, target_y)
         if _normalize_focus_mode(focus_mode) == "dual":
             foco_temp.initialize_focus_lock(
@@ -391,6 +463,8 @@ def connect_camera() -> None:
         return
     print("Conectando à câmera...")
     call("PUT", "connected", data={"Connected": True})
+    call("PUT", "gain", data={"Gain": int(ASI_GAIN)})
+    print(f"Camera ASI configurada: ganho={ASI_GAIN}, exposicao={EXPOSURE_SECONDS * 1e6:.1f} us")
 
 
 def disconnect_camera() -> None:
@@ -423,17 +497,22 @@ def wait_until_image_ready(
 
 
 def fetch_image_array() -> np.ndarray:
-    payload = call("GET", "imagearray")
-    return np.asarray(payload)
+    from controle.camera_asi_fast import fetch_image_array as fetch_image_array_fast
+
+    return fetch_image_array_fast()
 
 
 def capture_frame(exposure_seconds: float) -> np.ndarray:
     if backend_name() == "ids":
         frame = _ids_camera().capture(exposure_seconds).astype(np.float32)
     else:
+        from controle.camera_asi_fast import record_capture_time
+
+        capture_started = time.perf_counter()
         start_exposure(exposure_seconds, light=True)
         wait_until_image_ready()
         frame = fetch_image_array().astype(np.float32)
+        record_capture_time(time.perf_counter() - capture_started)
 
     pedestal = np.median(frame) + (0.5 * np.std(frame))
     max_val = frame.max()
@@ -442,8 +521,14 @@ def capture_frame(exposure_seconds: float) -> np.ndarray:
 
     norm = np.clip((frame - pedestal) / (max_val - pedestal + 1e-6), 0, 1)
     norm = (norm * 255).astype(np.uint8)
-    return np.rot90(norm, 2)
+    return np.rot90(norm, 2) if ROTATE_IMAGE_180 else norm
 
+
+# =============================================================================
+# BLOCO 3 - MEDICAO DO FOCO
+# =============================================================================
+# Retorna o centro do foco em pixels. No modo dual, reutiliza a assinatura
+# salva pelo centro de massa para evitar trocar para uma luz concorrente.
 
 def calcular_cm_corrigido(frame_window: np.ndarray, threshold_percent: float = 0.5):
     if frame_window.ndim == 3:
@@ -481,6 +566,12 @@ def medir_laser(frame_window: np.ndarray, focus_mode: str):
 
     return calcular_cm_corrigido(frame_window)
 
+
+# =============================================================================
+# BLOCO 4 - CONTROLADOR E ESTADO COMPARTILHADO
+# =============================================================================
+# O PD reage rapidamente ao erro. O trim corrige apenas um vies pequeno e
+# persistente perto do centro. SharedState liga a captura ao controle do mount.
 
 class MeasurementPDTrim:
     """PD rapido com trim lento para erro persistente perto do centro."""
@@ -594,21 +685,372 @@ class SharedState:
     has_signal: bool = False
     measurement_seq: int = 0
     measurement_ts: float = 0.0
-    dx_px: float = 0.0
-    dy_px: float = 0.0
     dx_filt_px: float = 0.0
     dy_filt_px: float = 0.0
     err_az_deg: float = 0.0
     err_alt_deg: float = 0.0
     cmd_az_deg_s: float = 0.0
     cmd_alt_deg_s: float = 0.0
-    measurement_age_s: float = 0.0
-    runaway_events: int = 0
     brake_active: bool = False
     active_matrix_name: str = "coarse"
     trim_mode_active: bool = False
-    trim_az_deg_s: float = 0.0
-    trim_alt_deg_s: float = 0.0
+    hold_active: bool = False
+    measurement_hz: float = 0.0
+    control_loop_hz: float = 0.0
+    spot_touches_border: bool = False
+    mount_az_deg: float | None = None
+    mount_alt_deg: float | None = None
+    offset_az_deg: float = 0.0
+    offset_alt_deg: float = 0.0
+    safety_stop_reason: str | None = None
+    watchdog_error: str | None = None
+
+
+class TrackerCsvLogger:
+    """Grava telemetria compacta e calcula variancia numa janela movel."""
+
+    FIELDNAMES = [
+        "data_hora",
+        "tempo_decorrido_s",
+        "estado",
+        "sinal_encontrado",
+        "x_cm_px",
+        "y_cm_px",
+        "alvo_x_px",
+        "alvo_y_px",
+        "erro_x_px",
+        "erro_y_px",
+        "distancia_px",
+        "erro_x_filtrado_px",
+        "erro_y_filtrado_px",
+        "variancia_x_px2",
+        "variancia_y_px2",
+        "desvio_padrao_2d_px",
+        "erro_az_deg",
+        "erro_alt_deg",
+        "velocidade_az_deg_s",
+        "velocidade_alt_deg_s",
+        "azimute_absoluto_deg",
+        "altitude_absoluta_deg",
+        "deslocamento_az_desde_inicio_deg",
+        "deslocamento_alt_desde_inicio_deg",
+        "loop_medicao_hz",
+        "loop_controle_hz",
+        "matriz_ativa",
+        "zona_parada_ativa",
+        "correcao_lenta_ativa",
+        "freio_ativo",
+        "ilha_tocando_borda",
+        "evento_seguranca",
+    ]
+
+    def __init__(
+        self,
+        output_dir: Path,
+        session_started_monotonic: float,
+        initial_az_deg: float,
+        initial_alt_deg: float,
+        max_session_hours: float,
+    ):
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self.session_dir = Path(output_dir) / "sessoes" / f"tracker_{timestamp}"
+        self.session_dir.mkdir(parents=True, exist_ok=False)
+        self.csv_path = self.session_dir / "telemetria.csv"
+        self.summary_path = self.session_dir / "resumo.json"
+        self._fp = self.csv_path.open("w", newline="", encoding="utf-8")
+        self._writer = csv.DictWriter(self._fp, fieldnames=self.FIELDNAMES)
+        self._writer.writeheader()
+        self._session_started = session_started_monotonic
+        self._last_write_t = 0.0
+        self._last_flush_t = session_started_monotonic
+        self._samples = deque()
+        self._summary = {
+            "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "initial_azimuth_deg": initial_az_deg,
+            "initial_altitude_deg": initial_alt_deg,
+            "max_session_hours": max_session_hours,
+            "max_offset_az_deg": MAX_OFFSET_AZ_DEG,
+            "max_offset_alt_deg": MAX_OFFSET_ALT_DEG,
+            "roi_size_px": WINDOW_SIZE,
+            "hold_enter_radius_px": HOLD_ENTER_RADIUS_PX,
+            "hold_exit_radius_px": HOLD_EXIT_RADIUS_PX,
+            "csv_path": display_path(self.csv_path),
+        }
+
+    def write(
+        self,
+        now: float,
+        *,
+        state_values: dict,
+        status: str,
+        x_cm: float | None,
+        y_cm: float | None,
+        target_x: float,
+        target_y: float,
+        dx: float,
+        dy: float,
+        event: str = "",
+    ) -> None:
+        has_signal = bool(state_values["has_signal"])
+        if has_signal:
+            self._samples.append((now, float(dx), float(dy)))
+        cutoff = now - VARIANCE_WINDOW_SECONDS
+        while self._samples and self._samples[0][0] < cutoff:
+            self._samples.popleft()
+
+        force = bool(event)
+        if not force and self._last_write_t > 0.0:
+            if (now - self._last_write_t) < (1.0 / CSV_LOG_HZ):
+                return
+
+        if self._samples:
+            sample_array = np.asarray([(v[1], v[2]) for v in self._samples], dtype=float)
+            variance_x = float(np.var(sample_array[:, 0]))
+            variance_y = float(np.var(sample_array[:, 1]))
+            std_2d = float(np.sqrt(variance_x + variance_y))
+        else:
+            variance_x = variance_y = std_2d = 0.0
+
+        def number(value, digits=6):
+            return "" if value is None else round(float(value), digits)
+
+        row = {
+            "data_hora": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+            "tempo_decorrido_s": round(now - self._session_started, 3),
+            "estado": status,
+            "sinal_encontrado": int(has_signal),
+            "x_cm_px": number(x_cm, 3),
+            "y_cm_px": number(y_cm, 3),
+            "alvo_x_px": number(target_x, 3),
+            "alvo_y_px": number(target_y, 3),
+            "erro_x_px": number(dx, 3),
+            "erro_y_px": number(dy, 3),
+            "distancia_px": number(np.hypot(dx, dy), 3),
+            "erro_x_filtrado_px": number(state_values["dx_filt_px"], 3),
+            "erro_y_filtrado_px": number(state_values["dy_filt_px"], 3),
+            "variancia_x_px2": round(variance_x, 4),
+            "variancia_y_px2": round(variance_y, 4),
+            "desvio_padrao_2d_px": round(std_2d, 4),
+            "erro_az_deg": number(state_values["err_az_deg"]),
+            "erro_alt_deg": number(state_values["err_alt_deg"]),
+            "velocidade_az_deg_s": number(state_values["cmd_az_deg_s"]),
+            "velocidade_alt_deg_s": number(state_values["cmd_alt_deg_s"]),
+            "azimute_absoluto_deg": number(state_values["mount_az_deg"]),
+            "altitude_absoluta_deg": number(state_values["mount_alt_deg"]),
+            "deslocamento_az_desde_inicio_deg": number(state_values["offset_az_deg"]),
+            "deslocamento_alt_desde_inicio_deg": number(state_values["offset_alt_deg"]),
+            "loop_medicao_hz": number(state_values["measurement_hz"], 2),
+            "loop_controle_hz": number(state_values["control_loop_hz"], 2),
+            "matriz_ativa": state_values["active_matrix_name"],
+            "zona_parada_ativa": int(bool(state_values["hold_active"])),
+            "correcao_lenta_ativa": int(bool(state_values["trim_mode_active"])),
+            "freio_ativo": int(bool(state_values["brake_active"])),
+            "ilha_tocando_borda": int(bool(state_values["spot_touches_border"])),
+            "evento_seguranca": event,
+        }
+        self._writer.writerow(row)
+        self._last_write_t = now
+        if force or (now - self._last_flush_t) >= CSV_FLUSH_SECONDS:
+            self._fp.flush()
+            self._last_flush_t = now
+
+    def save_event_frame(self, frame: np.ndarray | None, event: str) -> Path | None:
+        if frame is None:
+            return None
+        safe_event = "".join(c if c.isalnum() else "_" for c in event).strip("_")
+        path = self.session_dir / f"evento_{safe_event or 'seguranca'}.png"
+        cv2.imwrite(str(path), frame)
+        return path
+
+    def close(self, *, reason: str, return_result: dict | None = None) -> None:
+        self._summary.update(
+            {
+                "finished_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "finish_reason": reason,
+                "return_to_start": return_result,
+            }
+        )
+        self.summary_path.write_text(
+            json.dumps(self._summary, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        if not self._fp.closed:
+            self._fp.flush()
+            self._fp.close()
+
+
+def _state_snapshot(state: SharedState) -> dict:
+    with state.lock:
+        return {
+            "stop": state.stop,
+            "has_signal": state.has_signal,
+            "dx_filt_px": state.dx_filt_px,
+            "dy_filt_px": state.dy_filt_px,
+            "err_az_deg": state.err_az_deg,
+            "err_alt_deg": state.err_alt_deg,
+            "cmd_az_deg_s": state.cmd_az_deg_s,
+            "cmd_alt_deg_s": state.cmd_alt_deg_s,
+            "brake_active": state.brake_active,
+            "active_matrix_name": state.active_matrix_name,
+            "trim_mode_active": state.trim_mode_active,
+            "hold_active": state.hold_active,
+            "measurement_hz": state.measurement_hz,
+            "control_loop_hz": state.control_loop_hz,
+            "spot_touches_border": state.spot_touches_border,
+            "mount_az_deg": state.mount_az_deg,
+            "mount_alt_deg": state.mount_alt_deg,
+            "offset_az_deg": state.offset_az_deg,
+            "offset_alt_deg": state.offset_alt_deg,
+            "safety_stop_reason": state.safety_stop_reason,
+            "watchdog_error": state.watchdog_error,
+        }
+
+
+def _request_safety_stop(state: SharedState, reason: str) -> bool:
+    with state.lock:
+        if state.safety_stop_reason is not None:
+            return False
+        state.safety_stop_reason = str(reason)
+        state.stop = True
+    stop_axes_safely()
+    return True
+
+
+def _mount_offsets_from_start(
+    initial_az_deg: float,
+    initial_alt_deg: float,
+    current_az_deg: float,
+    current_alt_deg: float,
+) -> tuple[float, float]:
+    """Retorna deslocamentos assinados, incluindo a passagem Az 359/0 graus."""
+    offset_az = -float(calc_error(0, initial_az_deg, current_az_deg))
+    offset_alt = float(current_alt_deg - initial_alt_deg)
+    return offset_az, offset_alt
+
+
+def _position_watchdog(
+    state: SharedState,
+    initial_az_deg: float,
+    initial_alt_deg: float,
+    session_started: float,
+    max_session_seconds: float,
+) -> None:
+    interval = 1.0 / POSITION_WATCHDOG_HZ
+    consecutive_failures = 0
+
+    while True:
+        loop_started = time.perf_counter()
+        with state.lock:
+            if state.stop:
+                return
+
+        if (loop_started - session_started) >= max_session_seconds:
+            _request_safety_stop(state, "tempo_maximo_da_sessao")
+            return
+
+        try:
+            az_deg, alt_deg = read_altaz()
+            offset_az, offset_alt = _mount_offsets_from_start(
+                initial_az_deg,
+                initial_alt_deg,
+                az_deg,
+                alt_deg,
+            )
+            consecutive_failures = 0
+            with state.lock:
+                state.mount_az_deg = az_deg
+                state.mount_alt_deg = alt_deg
+                state.offset_az_deg = offset_az
+                state.offset_alt_deg = offset_alt
+                state.watchdog_error = None
+
+            if abs(offset_az) >= MAX_OFFSET_AZ_DEG:
+                _request_safety_stop(
+                    state,
+                    f"limite_absoluto_az_{offset_az:+.4f}_deg",
+                )
+                return
+            if abs(offset_alt) >= MAX_OFFSET_ALT_DEG:
+                _request_safety_stop(
+                    state,
+                    f"limite_absoluto_alt_{offset_alt:+.4f}_deg",
+                )
+                return
+        except Exception as exc:
+            consecutive_failures += 1
+            with state.lock:
+                state.watchdog_error = str(exc)
+            if consecutive_failures >= WATCHDOG_READ_FAILURES:
+                _request_safety_stop(state, "watchdog_mount_sem_resposta")
+                return
+
+        elapsed = time.perf_counter() - loop_started
+        if elapsed < interval:
+            time.sleep(interval - elapsed)
+
+
+def _return_to_initial_position(initial_az_deg: float, initial_alt_deg: float) -> dict:
+    result = {
+        "attempted": True,
+        "success": False,
+        "attempts": 0,
+        "final_azimuth_deg": None,
+        "final_altitude_deg": None,
+        "error": None,
+    }
+    try:
+        stop_axes_safely()
+        for attempt in range(1, RETURN_ATTEMPTS + 1):
+            current_az, current_alt = read_altaz()
+            delta_az = float(calc_error(0, initial_az_deg, current_az))
+            delta_alt = float(initial_alt_deg - current_alt)
+            result["attempts"] = attempt
+            if max(abs(delta_az), abs(delta_alt)) <= RETURN_TOLERANCE_DEG:
+                result["success"] = True
+                break
+
+            # Uma leitura muito alem da trava configurada pode ser invalida.
+            # Nesse caso e mais seguro nao iniciar um retorno longo automatico.
+            if (
+                abs(delta_az) > (MAX_OFFSET_AZ_DEG + 0.5)
+                or abs(delta_alt) > (MAX_OFFSET_ALT_DEG + 0.5)
+            ):
+                raise RuntimeError(
+                    "distancia de retorno excedeu o limite mais a margem de 0.5 deg"
+                )
+
+            print(
+                f"Retorno seguro {attempt}/{RETURN_ATTEMPTS}: "
+                f"dAz={delta_az:+.5f} deg, dAlt={delta_alt:+.5f} deg"
+            )
+            move_axes_pid_2d(
+                True,
+                delta_az,
+                delta_alt,
+                max_velocity_deg_s=RETURN_MAX_RATE_DEG_S,
+            )
+
+        final_az, final_alt = read_altaz()
+        final_error_az = float(calc_error(0, initial_az_deg, final_az))
+        final_error_alt = float(initial_alt_deg - final_alt)
+        result.update(
+            {
+                "final_azimuth_deg": final_az,
+                "final_altitude_deg": final_alt,
+                "final_error_azimuth_deg": final_error_az,
+                "final_error_altitude_deg": final_error_alt,
+            }
+        )
+        result["success"] = (
+            max(abs(final_error_az), abs(final_error_alt)) <= RETURN_TOLERANCE_DEG
+        )
+    except KeyboardInterrupt:
+        result["error"] = "retorno interrompido pelo usuario"
+    except Exception as exc:
+        result["error"] = str(exc)
+    finally:
+        stop_axes_safely()
+    return result
 
 
 def _apply_min_velocity(cmd):
@@ -619,6 +1061,25 @@ def _apply_min_velocity(cmd):
     return float(cmd)
 
 
+def _update_hold_state(
+    hold_active: bool,
+    exit_count: int,
+    radius_px: float,
+) -> tuple[bool, int]:
+    """Aplica a histerese 4/6 px sem oscilar entre parar e corrigir."""
+    if hold_active:
+        if radius_px >= HOLD_EXIT_RADIUS_PX:
+            exit_count += 1
+            if exit_count >= HOLD_EXIT_CONFIRM_FRAMES:
+                return False, 0
+        else:
+            exit_count = 0
+        return True, exit_count
+    if radius_px <= HOLD_ENTER_RADIUS_PX:
+        return True, 0
+    return False, 0
+
+
 def _slew_limit(current, target, max_delta):
     delta = target - current
     if abs(delta) <= max_delta:
@@ -627,10 +1088,19 @@ def _slew_limit(current, target, max_delta):
 
 
 def _pixel_error_to_mount_error(dx_px, dy_px, A_inv):
+    """Converte o deslocamento da imagem no erro angular que deve ser corrigido."""
+
+    # O sinal negativo pede ao mount um movimento que anule o erro observado.
     vec_px = np.array([-dx_px, -dy_px], dtype=float)
     err_vec = A_inv @ vec_px
     return float(err_vec[0]), float(err_vec[1])
 
+
+# =============================================================================
+# BLOCO 5 - MATRIZES DA CALIBRACAO
+# =============================================================================
+# Carrega somente matrizes compatveis com a camera/modo atual. Para a IDS,
+# recusa matrizes antigas da ASI para evitar uma correcao com eixos errados.
 
 def _normalize_focus_mode(mode: str) -> str:
     normalized = str(mode).strip().lower()
@@ -642,8 +1112,8 @@ def _normalize_focus_mode(mode: str) -> str:
 def _load_tracking_calibration_matrices(focus_mode: str):
     focus_mode = _normalize_focus_mode(focus_mode)
     if backend_name() == "ids":
-        fine_candidates = matrix_candidates("ids_foco_temp_A_inv_fine.npy")
-        coarse_candidates = matrix_candidates("ids_foco_temp_A_inv_coarse.npy")
+        fine_candidates = matrix_candidates(f"{IDS_MATRIX_PREFIX}_A_inv_fine.npy")
+        coarse_candidates = matrix_candidates(f"{IDS_MATRIX_PREFIX}_A_inv_coarse.npy")
     elif focus_mode == "dual":
         fine_candidates = matrix_candidates("foco_temp_A_inv_fine.npy")
         coarse_candidates = matrix_candidates("foco_temp_A_inv_coarse.npy")
@@ -679,66 +1149,15 @@ def _load_tracking_calibration_matrices(focus_mode: str):
         "coarse": coarse_matrix,
         "fine_path": display_path(fine_path),
         "coarse_path": display_path(coarse_path),
-        "focus_mode": focus_mode,
     }
 
 
-def _draw_text_with_outline(
-    image,
-    text,
-    origin,
-    font_scale,
-    color,
-    thickness=2,
-    outline_color=(0, 0, 0),
-):
-    outline_thickness = thickness + 3
-    cv2.putText(
-        image,
-        text,
-        origin,
-        cv2.FONT_HERSHEY_SIMPLEX,
-        font_scale,
-        outline_color,
-        outline_thickness,
-        cv2.LINE_AA,
-    )
-    cv2.putText(
-        image,
-        text,
-        origin,
-        cv2.FONT_HERSHEY_SIMPLEX,
-        font_scale,
-        color,
-        thickness,
-        cv2.LINE_AA,
-    )
-
-
-def _draw_badge(image, text, top_right, fg_color, bg_color, font_scale=0.9, thickness=2):
-    (text_w, text_h), baseline = cv2.getTextSize(
-        text,
-        cv2.FONT_HERSHEY_SIMPLEX,
-        font_scale,
-        thickness,
-    )
-    pad_x = 16
-    pad_y = 12
-    x2, y1 = top_right
-    x1 = x2 - text_w - (2 * pad_x)
-    y2 = y1 + text_h + baseline + (2 * pad_y)
-    cv2.rectangle(image, (x1, y1), (x2, y2), bg_color, -1)
-    cv2.rectangle(image, (x1, y1), (x2, y2), fg_color, 2)
-    _draw_text_with_outline(
-        image,
-        text,
-        (x1 + pad_x, y2 - baseline - pad_y),
-        font_scale,
-        fg_color,
-        thickness=thickness,
-        outline_color=(0, 0, 0),
-    )
-
+# =============================================================================
+# BLOCO 6 - LOOP DE CONTROLE DO MOUNT
+# =============================================================================
+# Roda em uma thread separada. A cada medida: escolhe a matriz, converte o erro,
+# calcula a velocidade, limita aceleracao e envia os dois eixos. Se o sinal
+# sumir ou o erro crescer repetidamente, comanda velocidade zero.
 
 def control_loop_continuo(
     state: SharedState,
@@ -799,8 +1218,9 @@ def control_loop_continuo(
     active_matrix_name = "coarse"
     active_matrix = A_inv_coarse
     trim_mode_active = False
-    trim_az = 0.0
-    trim_alt = 0.0
+    hold_active = False
+    hold_exit_count = 0
+    control_loop_hz = 0.0
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         try:
@@ -808,6 +1228,13 @@ def control_loop_continuo(
                 loop_t0 = time.perf_counter()
                 dt_loop = max(loop_t0 - last_loop_t, 1e-4)
                 last_loop_t = loop_t0
+                if dt_loop >= 1e-3:
+                    instant_control_hz = 1.0 / dt_loop
+                    control_loop_hz = (
+                        instant_control_hz
+                        if control_loop_hz <= 0.0
+                        else (0.15 * instant_control_hz) + (0.85 * control_loop_hz)
+                    )
 
                 with state.lock:
                     stop = state.stop
@@ -835,11 +1262,21 @@ def control_loop_continuo(
                     prev_dy_filt_px = None
                     runaway_count = 0
                     trim_mode_active = False
-                    trim_az = 0.0
-                    trim_alt = 0.0
+                    hold_active = False
+                    hold_exit_count = 0
                 elif seq != last_seq:
                     last_seq = seq
                     radius_px = float(np.hypot(dx_filt, dy_filt))
+                    previous_hold_active = hold_active
+                    hold_active, hold_exit_count = _update_hold_state(
+                        hold_active,
+                        hold_exit_count,
+                        radius_px,
+                    )
+                    if hold_active != previous_hold_active:
+                        ctrl_az.reset()
+                        ctrl_alt.reset()
+
                     manual_jump = False
                     if (
                         ENABLE_MANUAL_JUMP_BRAKE
@@ -870,8 +1307,8 @@ def control_loop_continuo(
                         ctrl_az.reset()
                         ctrl_alt.reset()
                         trim_mode_active = False
-                        trim_az = 0.0
-                        trim_alt = 0.0
+                        hold_active = False
+                        hold_exit_count = 0
                         prev_radius_px = radius_px
                         runaway_count = 0
                         brake_until = loop_t0 + MANUAL_JUMP_HOLD_S
@@ -881,8 +1318,6 @@ def control_loop_continuo(
                                 "Zerando o controle por um instante antes de recentralizar."
                             )
                             last_runaway_log_t = loop_t0
-                        with state.lock:
-                            state.runaway_events += 1
                     else:
                         previous_matrix_name = active_matrix_name
 
@@ -897,13 +1332,12 @@ def control_loop_continuo(
                             ctrl_az.reset()
                             ctrl_alt.reset()
                             trim_mode_active = False
-                            trim_az = 0.0
-                            trim_alt = 0.0
 
-                        if (
-                            active_matrix_name == "fine"
-                            and radius_px <= TRIM_ENTER_RADIUS_PX
-                        ):
+                        if hold_active:
+                            trim_mode_active = False
+                            ctrl_az.clear_trim()
+                            ctrl_alt.clear_trim()
+                        elif active_matrix_name == "fine" and radius_px <= TRIM_ENTER_RADIUS_PX:
                             trim_mode_active = True
                         elif (
                             active_matrix_name != "fine"
@@ -914,22 +1348,16 @@ def control_loop_continuo(
                                 ctrl_alt.clear_trim()
                             trim_mode_active = False
 
-                        if (
-                            abs(dx_filt) <= CONTROL_DEADBAND_PX
-                            and abs(dy_filt) <= CONTROL_DEADBAND_PX
-                        ):
+                        if hold_active:
                             err_az = 0.0
                             err_alt = 0.0
-                            ctrl_az.clear_trim()
-                            ctrl_alt.clear_trim()
-                            trim_az = 0.0
-                            trim_alt = 0.0
+                            target_cmd_az = 0.0
+                            target_cmd_alt = 0.0
                         else:
                             err_az, err_alt = _pixel_error_to_mount_error(dx_filt, dy_filt, active_matrix)
-
-                        trim_allowed = trim_mode_active and (loop_t0 >= brake_until)
-                        target_cmd_az, trim_az = ctrl_az.update(err_az, measurement_ts, trim_allowed)
-                        target_cmd_alt, trim_alt = ctrl_alt.update(err_alt, measurement_ts, trim_allowed)
+                            trim_allowed = trim_mode_active and (loop_t0 >= brake_until)
+                            target_cmd_az, _ = ctrl_az.update(err_az, measurement_ts, trim_allowed)
+                            target_cmd_alt, _ = ctrl_alt.update(err_alt, measurement_ts, trim_allowed)
 
                         if ENABLE_RUNAWAY_BRAKE:
                             cmd_norm = float(np.hypot(cmd_az, cmd_alt))
@@ -960,12 +1388,10 @@ def control_loop_continuo(
                                 ctrl_az.reset()
                                 ctrl_alt.reset()
                                 trim_mode_active = False
-                                trim_az = 0.0
-                                trim_alt = 0.0
+                                hold_active = False
+                                hold_exit_count = 0
                                 brake_until = loop_t0 + RUNAWAY_HOLD_S
                                 runaway_count = 0
-                                with state.lock:
-                                    state.runaway_events += 1
 
                 if loop_t0 < brake_until:
                     target_cmd_az = 0.0
@@ -1018,12 +1444,11 @@ def control_loop_continuo(
                     state.err_alt_deg = err_alt
                     state.cmd_az_deg_s = cmd_az
                     state.cmd_alt_deg_s = cmd_alt
-                    state.measurement_age_s = measurement_age
                     state.brake_active = loop_t0 < brake_until
                     state.active_matrix_name = active_matrix_name
                     state.trim_mode_active = trim_mode_active
-                    state.trim_az_deg_s = trim_az
-                    state.trim_alt_deg_s = trim_alt
+                    state.hold_active = hold_active
+                    state.control_loop_hz = control_loop_hz
 
                 elapsed = time.perf_counter() - loop_t0
                 if elapsed < dt_target:
@@ -1033,36 +1458,84 @@ def control_loop_continuo(
             stop_axes_safely()
 
 
-def main():
-    ensure_connected()
-    ensure_unparked()
-    ensure_not_tracking()
-    connect_camera()
+# =============================================================================
+# BLOCO 7 - EXECUCAO, TELA E ENCERRAMENTO
+# =============================================================================
+# Coordena os blocos anteriores. O finally e proposital: ele tenta parar o
+# mount mesmo quando ocorre erro, Ctrl+C ou fechamento da janela.
 
+def main():
+    logger = None
+    return_result = None
+    finish_reason = "encerramento_normal"
+    last_frame = None
+    initial_position = None
     try:
-        focus_input = input("Modo do laser (1=foco unico, 2=dupla reflexao) [1]: ").strip() or "1"
+        ensure_connected()
+        ensure_unparked()
+        ensure_not_tracking()
+        connect_camera()
+
+        saved_target_for_mode = carregar_alvo_salvo()
+        default_focus_input = (
+            "2"
+            if saved_target_for_mode is not None
+            and _normalize_focus_mode(saved_target_for_mode.focus_mode or "single") == "dual"
+            else "1"
+        )
+        focus_input = (
+            input(
+                "Modo do laser (1=foco unico, 2=dupla reflexao/ilha travada) "
+                f"[{default_focus_input}]: "
+            ).strip()
+            or default_focus_input
+        )
         focus_mode = _normalize_focus_mode(focus_input)
         foco_temp.set_focus_mode(focus_mode)
+        session_hours_input = input(
+            f"Tempo maximo da sessao em horas [{MAX_SESSION_HOURS:g}]: "
+        ).strip()
+        session_hours = (
+            float(session_hours_input.replace(",", "."))
+            if session_hours_input
+            else MAX_SESSION_HOURS
+        )
+        if session_hours <= 0.0:
+            raise ValueError("O tempo maximo da sessao precisa ser positivo.")
+
         matrices = _load_tracking_calibration_matrices(focus_mode)
         sensor_w, sensor_h = get_camera_size()
         alvo = escolher_referencia_tracker(sensor_w, sensor_h, focus_mode)
 
         state = SharedState()
         usar_mount = True
-
-        ctrl_thread = threading.Thread(
-            target=control_loop_continuo,
-            args=(state, matrices["fine"], matrices["coarse"], usar_mount),
-            daemon=True,
+        initial_az_deg, initial_alt_deg = read_altaz()
+        initial_position = (initial_az_deg, initial_alt_deg)
+        session_started = time.perf_counter()
+        max_session_seconds = session_hours * 3600.0
+        with state.lock:
+            state.mount_az_deg = initial_az_deg
+            state.mount_alt_deg = initial_alt_deg
+        print(
+            "Posicao absoluta inicial da sessao: "
+            f"Az={initial_az_deg:.6f} deg, Alt={initial_alt_deg:.6f} deg"
         )
-        ctrl_thread.start()
+
+        logger = TrackerCsvLogger(
+            TRACKER_OUTPUT_DIR,
+            session_started,
+            initial_az_deg,
+            initial_alt_deg,
+            session_hours,
+        )
 
         win_name = "Tracker 4QD Continuo - V2"
         cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
         cv2.setWindowProperty(win_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
         print("\nTracker continuo V2 iniciado.")
-        print("ROI nativa da camera, PD rapido + trim lento e freio basico de runaway.")
+        print("ROI nativa da camera, zona de repouso e watchdog absoluto.")
+        print(f"Imagem IDS rotacionada 180 graus: {'sim' if ROTATE_IMAGE_180 else 'nao'}")
         print(f"Modo do laser: {focus_mode} | usando mount real.")
         print(
             f"Matrizes carregadas | fine: {matrices['fine_path']} | "
@@ -1071,9 +1544,14 @@ def main():
         print(f"Alvo do tracker: {alvo.source} | x={alvo.x_px:.2f}px y={alvo.y_px:.2f}px")
         if alvo.path is not None:
             print(f"Arquivo do alvo: {alvo.path}")
+        print(
+            f"Sessao: {session_hours:g} h | ROI={WINDOW_SIZE}x{WINDOW_SIZE} px | "
+            f"limites Az/Alt=+/-{MAX_OFFSET_AZ_DEG:g}/+/-{MAX_OFFSET_ALT_DEG:g} deg"
+        )
+        print(f"Telemetria CSV: {display_path(logger.csv_path)}")
         print("Pressione q para encerrar.\n")
 
-        roi_start_x, roi_start_y, target_x_local, target_y_local = set_camera_roi_validated(
+        _, _, target_x_local, target_y_local = set_camera_roi_validated(
             WINDOW_SIZE,
             WINDOW_SIZE,
             alvo.x_px,
@@ -1082,73 +1560,84 @@ def main():
             alvo.focus_signature,
         )
 
-        t_prev = time.perf_counter()
-        tempos_loop = []
-        fps_loop = 0.0
-        fps_ui = 0.0
-        last_capture_ms = 0.0
-        last_cm_ms = 0.0
-        last_ui_ms = 0.0
-        recenter_timer_start = None
-        recenter_center_hold_start = None
-        recenter_attempt_idx = 0
-        last_recenter_elapsed = None
+        ctrl_thread = threading.Thread(
+            target=control_loop_continuo,
+            args=(state, matrices["fine"], matrices["coarse"], usar_mount),
+            daemon=True,
+        )
+        watchdog_thread = threading.Thread(
+            target=_position_watchdog,
+            args=(
+                state,
+                initial_az_deg,
+                initial_alt_deg,
+                session_started,
+                max_session_seconds,
+            ),
+            daemon=True,
+        )
+        ctrl_thread.start()
+        watchdog_thread.start()
+
         scale_upscale = TARGET_H / WINDOW_SIZE
         target_w = int(WINDOW_SIZE * scale_upscale)
         cx_L = int(target_x_local * scale_upscale)
         cy_L = int(target_y_local * scale_upscale)
         display_interval_s = 1.0 / DISPLAY_HZ
         last_display_t = 0.0
-        display_frames = 0
-        display_window_start = time.perf_counter()
+        last_measurement_t = 0.0
+        measurement_hz = 0.0
+        border_frames = 0
+        signal_lost_since = None
 
         while True:
-            t_inicio_loop = time.perf_counter()
-            t_capture0 = time.perf_counter()
             frame_window = capture_frame(EXPOSURE_SECONDS)
-            t_after_capture = time.perf_counter()
-            last_capture_ms = (t_after_capture - t_capture0) * 1000.0
-
-            t_now = t_after_capture
-            dt = max(t_now - t_prev, 1e-6)
-            fps_cam = 1.0 / dt
-            t_prev = t_now
-
-            t_cm0 = time.perf_counter()
+            last_frame = frame_window
+            t_now = time.perf_counter()
+            if last_measurement_t > 0.0:
+                measurement_dt = max(t_now - last_measurement_t, 1e-4)
+                instant_measurement_hz = 1.0 / measurement_dt
+                measurement_hz = (
+                    instant_measurement_hz
+                    if measurement_hz <= 0.0
+                    else (0.15 * instant_measurement_hz) + (0.85 * measurement_hz)
+                )
+            last_measurement_t = t_now
             cm = medir_laser(frame_window, focus_mode)
-            last_cm_ms = (time.perf_counter() - t_cm0) * 1000.0
+            focus_debug = foco_temp.get_focus_debug() if focus_mode == "dual" else {}
+            selected_debug = focus_debug.get("selected") or {}
+            spot_touches_border = bool(selected_debug.get("toca_borda", False))
+
+            if spot_touches_border:
+                border_frames += 1
+            else:
+                border_frames = 0
 
             if cm is None:
+                if signal_lost_since is None:
+                    signal_lost_since = t_now
                 dx = 0.0
                 dy = 0.0
                 x_cm_local = target_x_local
                 y_cm_local = target_y_local
                 cor_laser = (0, 0, 255)
-
-                with state.lock:
-                    state.has_signal = False
-                    state.measurement_seq += 1
-                    state.measurement_ts = t_now
-                    meas_age = state.measurement_age_s
-                    brake_active = state.brake_active
-                    active_matrix_name = state.active_matrix_name
-                    trim_mode_active = state.trim_mode_active
-                    trim_az_deg_s = state.trim_az_deg_s
-                    trim_alt_deg_s = state.trim_alt_deg_s
-                    err_az_deg = state.err_az_deg
-                    err_alt_deg = state.err_alt_deg
-                    cmd_az_deg_s = state.cmd_az_deg_s
-                    cmd_alt_deg_s = state.cmd_alt_deg_s
-
-                if recenter_timer_start is not None:
-                    print("\n⏱️ Recenter cancelado: sinal perdido antes de voltar ao centro.")
-                    recenter_timer_start = None
-                    recenter_center_hold_start = None
             else:
                 x_cm_local, y_cm_local = cm
                 dx = float(x_cm_local - target_x_local)
                 dy = float(y_cm_local - target_y_local)
+                if not spot_touches_border:
+                    signal_lost_since = None
+                cor_laser = (0, 165, 255) if spot_touches_border else (0, 255, 255)
 
+            measurement_valid = cm is not None and not spot_touches_border
+            if not measurement_valid:
+                with state.lock:
+                    state.has_signal = False
+                    state.spot_touches_border = spot_touches_border
+                    state.measurement_seq += 1
+                    state.measurement_ts = t_now
+                    state.measurement_hz = measurement_hz
+            else:
                 with state.lock:
                     if state.measurement_seq == 0 or not state.has_signal:
                         dx_filt = dx
@@ -1157,82 +1646,77 @@ def main():
                         dx_filt = (MEASUREMENT_ALPHA * dx) + ((1.0 - MEASUREMENT_ALPHA) * state.dx_filt_px)
                         dy_filt = (MEASUREMENT_ALPHA * dy) + ((1.0 - MEASUREMENT_ALPHA) * state.dy_filt_px)
 
-                    state.dx_px = dx
-                    state.dy_px = dy
                     state.dx_filt_px = float(dx_filt)
                     state.dy_filt_px = float(dy_filt)
                     state.has_signal = True
+                    state.spot_touches_border = False
                     state.measurement_seq += 1
                     state.measurement_ts = t_now
-                    meas_age = state.measurement_age_s
-                    brake_active = state.brake_active
-                    active_matrix_name = state.active_matrix_name
-                    trim_mode_active = state.trim_mode_active
-                    trim_az_deg_s = state.trim_az_deg_s
-                    trim_alt_deg_s = state.trim_alt_deg_s
-                    err_az_deg = state.err_az_deg
-                    err_alt_deg = state.err_alt_deg
-                    cmd_az_deg_s = state.cmd_az_deg_s
-                    cmd_alt_deg_s = state.cmd_alt_deg_s
+                    state.measurement_hz = measurement_hz
 
-                cor_laser = (0, 255, 255)
+            if border_frames >= BORDER_CONFIRM_FRAMES:
+                _request_safety_stop(state, "ilha_tocou_a_borda_da_roi")
+            if (
+                cm is None
+                and signal_lost_since is not None
+                and (t_now - signal_lost_since) >= SIGNAL_LOSS_LIMIT_SECONDS
+            ):
+                _request_safety_stop(state, "sinal_perdido_por_tempo_excessivo")
 
-                is_centered_now = (abs(dx) < TOLERANCIA_PX) and (abs(dy) < TOLERANCIA_PX)
-                if not is_centered_now:
-                    if recenter_timer_start is None:
-                        recenter_attempt_idx += 1
-                        recenter_timer_start = t_now
-                        print(
-                            f"\n⏱️ Recenter {recenter_attempt_idx} iniciado: "
-                            f"dx={dx:+.1f}px dy={dy:+.1f}px"
-                        )
-                    recenter_center_hold_start = None
-                elif recenter_timer_start is not None:
-                    if recenter_center_hold_start is None:
-                        recenter_center_hold_start = t_now
-                    elif (t_now - recenter_center_hold_start) >= RECENTER_SETTLE_S:
-                        recenter_elapsed = t_now - recenter_timer_start
-                        last_recenter_elapsed = recenter_elapsed
-                        print(
-                            f"\n⏱️ Recenter {recenter_attempt_idx} concluido em "
-                            f"{recenter_elapsed:.3f}s "
-                            f"(estavel por {RECENTER_SETTLE_S:.1f}s, "
-                            f"dx={dx:+.1f}px dy={dy:+.1f}px)"
-                        )
-                        recenter_timer_start = None
-                        recenter_center_hold_start = None
+            state_values = _state_snapshot(state)
+            brake_active = state_values["brake_active"]
+            active_matrix_name = state_values["active_matrix_name"]
+            trim_mode_active = state_values["trim_mode_active"]
+            hold_active = state_values["hold_active"]
+            err_az_deg = state_values["err_az_deg"]
+            err_alt_deg = state_values["err_alt_deg"]
+            cmd_az_deg_s = state_values["cmd_az_deg_s"]
+            cmd_alt_deg_s = state_values["cmd_alt_deg_s"]
+            measurement_hz_display = state_values["measurement_hz"]
+            control_loop_hz_display = state_values["control_loop_hz"]
 
             dist_px = float(np.hypot(dx, dy))
-            signal_ok = cm is not None
-            if not signal_ok:
-                status_text = "NO SIGNAL"
-                status_fg = (255, 255, 255)
-                status_bg = (0, 0, 180)
+            if state_values["safety_stop_reason"]:
+                status_text = "PARADA DE SEGURANCA"
+                status_color = (0, 0, 255)
+            elif spot_touches_border:
+                status_text = "ILHA NA BORDA"
+                status_color = (0, 0, 255)
+            elif cm is None:
+                status_text = "SEM SINAL"
+                status_color = (0, 0, 255)
             elif brake_active:
-                status_text = "BRAKE"
-                status_fg = (255, 255, 255)
-                status_bg = (0, 0, 200)
-            elif dist_px <= TOLERANCIA_PX:
-                status_text = "LOCKED"
-                status_fg = (20, 20, 20)
-                status_bg = (0, 255, 140)
+                status_text = "FREIO DE SEGURANCA"
+                status_color = (0, 0, 255)
+            elif hold_active:
+                status_text = "CENTRALIZADO - REPOUSO"
+                status_color = (0, 255, 0)
             else:
-                status_text = "TRACKING"
-                status_fg = (20, 20, 20)
-                status_bg = (0, 255, 255)
+                status_text = "RASTREANDO"
+                status_color = (0, 255, 255)
 
-            tempos_loop.append(time.perf_counter() - t_inicio_loop)
-            if len(tempos_loop) >= 10:
-                media_dt = sum(tempos_loop) / len(tempos_loop)
-                fps_loop = 1.0 / media_dt if media_dt > 0 else 0.0
-                tempos_loop.clear()
-
-            refresh_display = (
-                last_display_t == 0.0
-                or (t_now - last_display_t) >= display_interval_s
+            logger.write(
+                t_now,
+                state_values=state_values,
+                status=status_text,
+                x_cm=None if cm is None else x_cm_local,
+                y_cm=None if cm is None else y_cm_local,
+                target_x=target_x_local,
+                target_y=target_y_local,
+                dx=dx,
+                dy=dy,
+                event=state_values["safety_stop_reason"] or "",
             )
-            if refresh_display:
-                t_ui0 = time.perf_counter()
+
+            if state_values["safety_stop_reason"]:
+                finish_reason = state_values["safety_stop_reason"]
+                event_frame = logger.save_event_frame(last_frame, finish_reason)
+                if event_frame is not None:
+                    print(f"Frame do evento salvo em: {display_path(event_frame)}")
+                print(f"\nPARADA DE SEGURANCA: {finish_reason}")
+                break
+
+            if last_display_t == 0.0 or (t_now - last_display_t) >= display_interval_s:
                 frame_display = cv2.cvtColor(frame_window, cv2.COLOR_GRAY2BGR)
                 frame_display_large = cv2.resize(
                     frame_display,
@@ -1247,107 +1731,153 @@ def main():
                 cv2.line(frame_display_large, (0, cy_L), (target_w, cy_L), (0, 0, 255), 2)
                 cv2.circle(frame_display_large, (x_cm_L, y_cm_L), 8, cor_laser, -1)
 
-                _draw_text_with_outline(
+                cv2.putText(
                     frame_display_large,
-                    f"Dist={dist_px:.1f}px  dx={dx:+.1f}  dy={dy:+.1f}",
+                    f"Erro na imagem: {dist_px:.1f} px | X={dx:+.1f} px | Y={dy:+.1f} px",
                     (40, 60),
-                    1.1,
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.78,
                     (0, 255, 0),
-                    thickness=2,
+                    2,
+                    cv2.LINE_AA,
                 )
-                _draw_text_with_outline(
+                focus_label = "ilha travada" if focus_mode == "dual" else "foco unico"
+                matrix_label = "fina" if active_matrix_name == "fine" else "ampla"
+                hold_label = "ATIVA" if hold_active else "inativa"
+                cv2.putText(
                     frame_display_large,
                     (
-                        f"Cam={fps_cam:.1f}Hz  Loop={fps_loop:.1f}Hz  "
-                        f"UI={fps_ui:.1f}Hz  Age={meas_age*1000:.0f}ms  "
-                        f"Focus={focus_mode}  Map={active_matrix_name}  "
-                        f"Trim={'ON' if trim_mode_active else 'OFF'}"
+                        f"Alvo: {focus_label} | Calibracao: {matrix_label} | "
+                        f"Zona parada: {hold_label} ({HOLD_ENTER_RADIUS_PX:.0f}/{HOLD_EXIT_RADIUS_PX:.0f} px)"
                     ),
                     (40, 110),
-                    1.0,
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.78,
                     (0, 255, 255),
-                    thickness=2,
+                    2,
+                    cv2.LINE_AA,
                 )
-                _draw_text_with_outline(
+                elapsed_hours = (t_now - session_started) / 3600.0
+                cv2.putText(
                     frame_display_large,
                     (
-                        f"Err=({err_az_deg:+.4f}, {err_alt_deg:+.4f})deg  "
-                        f"Cmd=({cmd_az_deg_s:+.3f}, {cmd_alt_deg_s:+.3f})deg/s  "
-                        f"Bias=({trim_az_deg_s:+.3f}, {trim_alt_deg_s:+.3f})deg/s"
+                        f"Sessao: {elapsed_hours:.2f}/{session_hours:.2f} h | "
+                        f"Posicao desde inicio: Az={state_values['offset_az_deg']:+.3f} deg | "
+                        f"Alt={state_values['offset_alt_deg']:+.3f} deg"
+                    ),
+                    (40, 310),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.74,
+                    (200, 200, 200),
+                    2,
+                    cv2.LINE_AA,
+                )
+                cv2.putText(
+                    frame_display_large,
+                    (
+                        f"Erro do mount: Az={err_az_deg:+.5f} deg | "
+                        f"Alt={err_alt_deg:+.5f} deg"
                     ),
                     (40, 160),
-                    0.95,
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.82,
                     (255, 255, 255),
-                    thickness=2,
+                    2,
+                    cv2.LINE_AA,
                 )
-                _draw_text_with_outline(
+                cv2.putText(
                     frame_display_large,
                     (
-                        f"Timing: cap={last_capture_ms:.1f}ms  "
-                        f"CM={last_cm_ms:.1f}ms  UI={last_ui_ms:.1f}ms"
+                        f"Velocidade enviada: Az={cmd_az_deg_s:+.4f} deg/s | "
+                        f"Alt={cmd_alt_deg_s:+.4f} deg/s"
                     ),
-                    (40, 205),
-                    0.9,
-                    (200, 255, 200),
-                    thickness=2,
-                )
-                if recenter_timer_start is not None:
-                    recenter_text = f"Recentering {t_now - recenter_timer_start:.2f}s"
-                elif last_recenter_elapsed is not None:
-                    recenter_text = f"Last recenter {last_recenter_elapsed:.2f}s"
-                else:
-                    recenter_text = f"Tolerance {TOLERANCIA_PX:.1f}px"
-                _draw_text_with_outline(
-                    frame_display_large,
-                    recenter_text,
-                    (40, TARGET_H - 35),
-                    1.0,
+                    (40, 210),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.82,
                     (255, 255, 255),
-                    thickness=2,
+                    2,
+                    cv2.LINE_AA,
                 )
-
-                _draw_badge(
+                cv2.putText(
+                    frame_display_large,
+                    (
+                        f"Loops: medicao={measurement_hz_display:.1f} Hz | "
+                        f"controle={control_loop_hz_display:.1f} Hz | tela={DISPLAY_HZ:.1f} Hz"
+                    ),
+                    (40, 260),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.82,
+                    (255, 200, 0),
+                    2,
+                    cv2.LINE_AA,
+                )
+                status_x = max(40, target_w - max(360, 22 * len(status_text)))
+                cv2.putText(
                     frame_display_large,
                     status_text,
-                    (target_w - 30, 30),
-                    status_fg,
-                    status_bg,
-                    font_scale=0.95,
-                    thickness=2,
+                    (status_x, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1.0,
+                    status_color,
+                    3,
+                    cv2.LINE_AA,
                 )
 
                 cv2.imshow(win_name, frame_display_large)
-                last_ui_ms = (time.perf_counter() - t_ui0) * 1000.0
                 last_display_t = t_now
-                display_frames += 1
-                display_elapsed = t_now - display_window_start
-                if display_elapsed >= 1.0:
-                    fps_ui = display_frames / display_elapsed
-                    display_frames = 0
-                    display_window_start = t_now
 
             key = cv2.waitKeyEx(1)
             if key in (ord("q"), ord("Q"), 27):
+                finish_reason = "encerrado_pelo_teclado"
                 break
             if cv2.getWindowProperty(win_name, cv2.WND_PROP_VISIBLE) < 1:
+                finish_reason = "janela_fechada"
                 break
 
     except KeyboardInterrupt:
+        finish_reason = "interrompido_por_ctrl_c"
         print("\nInterrompido pelo usuario.")
     except Exception as exc:
+        finish_reason = f"erro_{type(exc).__name__}"
         print(f"\nErro no tracker continuo V2: {exc}")
     finally:
+        safety_reason = None
         if "state" in locals():
             with state.lock:
                 state.stop = True
+                safety_reason = state.safety_stop_reason
             if "ctrl_thread" in locals() and ctrl_thread.is_alive():
                 ctrl_thread.join(timeout=2.0)
+            if "watchdog_thread" in locals() and watchdog_thread.is_alive():
+                watchdog_thread.join(timeout=2.0)
 
         try:
             if "usar_mount" in locals():
                 stop_axes_safely()
         except Exception:
             pass
+
+        if (
+            safety_reason
+            and initial_position is not None
+            and RETURN_TO_START_ON_LIMIT
+        ):
+            print(
+                "Retornando a posicao absoluta inicial antes de encerrar "
+                f"(motivo: {safety_reason})."
+            )
+            return_result = _return_to_initial_position(*initial_position)
+            if return_result.get("success"):
+                print("Posicao absoluta inicial restaurada.")
+            else:
+                print(f"ALERTA: retorno inicial nao confirmado: {return_result}")
+
+        if logger is not None:
+            try:
+                logger.close(reason=finish_reason, return_result=return_result)
+                print(f"Telemetria salva em: {display_path(logger.csv_path)}")
+            except Exception as exc:
+                print(f"ALERTA: nao consegui finalizar o CSV: {exc}")
 
         reset_camera_roi()
         disconnect_camera()

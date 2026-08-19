@@ -1,4 +1,5 @@
 import json
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,7 +9,12 @@ import numpy as np
 from artifact_paths import display_path, json_candidates, json_output_path
 
 
-TARGET_FILENAME = "alvo_alinhamento_camera.json"
+ROTATE_IMAGE_180 = os.environ.get("QKD_ROTATE_IMAGE_180", "1") != "0"
+TARGET_FILENAME = (
+    "alvo_alinhamento_camera.json"
+    if ROTATE_IMAGE_180
+    else "alvo_alinhamento_camera_sem_rotacao.json"
+)
 
 
 @dataclass
@@ -65,6 +71,7 @@ def salvar_alvo(
         "std_x_px": std_x_px,
         "std_y_px": std_y_px,
         "focus_signature": focus_signature,
+        "rotate_image_180": ROTATE_IMAGE_180,
     }
     path = json_output_path(TARGET_FILENAME)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

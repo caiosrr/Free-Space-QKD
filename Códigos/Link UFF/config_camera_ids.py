@@ -7,14 +7,19 @@ from pathlib import Path
 # ===== AJUSTE ESTES VALORES PARA A IMAGEM DO EXPERIMENTO =====
 
 # A API da IDS usa microssegundos. 7276 us = 7.276 ms.
-EXPOSURE_US = 7276.0
+EXPOSURE_US = 236.0
 
 # Limite de aquisicao configurado na camera.
-FRAME_RATE_FPS = 20.0
+FRAME_RATE_FPS = 30.76
+
 
 # Ganhos vistos no IDS peak Cockpit.
 ANALOG_GAIN = 1.0
 DIGITAL_GAIN = 1.0
+
+# False usa as coordenadas nativas da IDS, sem girar a imagem.
+# Se quiser restaurar o comportamento antigo, troque apenas para True.
+ROTATE_IMAGE_180 = False
 
 
 # ===== NORMALMENTE NAO E NECESSARIO ALTERAR =====
@@ -43,6 +48,7 @@ def apply_environment() -> None:
     os.environ["QKD_IDS_EXPOSURE_US"] = str(EXPOSURE_US)
     os.environ["QKD_IDS_ANALOG_GAIN"] = str(ANALOG_GAIN)
     os.environ["QKD_IDS_DIGITAL_GAIN"] = str(DIGITAL_GAIN)
+    os.environ["QKD_ROTATE_IMAGE_180"] = "1" if ROTATE_IMAGE_180 else "0"
     os.environ["QKD_IDS_DEVICE"] = str(DEVICE_INDEX)
     os.environ["QKD_IDS_TIMEOUT_MS"] = str(CAPTURE_TIMEOUT_MS)
     os.environ["QKD_CAMERA_OUTPUT_DIR"] = str(RESULTS_DIR)

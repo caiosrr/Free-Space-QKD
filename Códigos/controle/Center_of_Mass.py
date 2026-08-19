@@ -12,6 +12,9 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from artifact_paths import display_path, matrix_candidates
+from config_camera_asi import ALPACA_ADDRESS, DEVICE_NUMBER
+from controle.camera_asi_fast import fetch_image_array as fetch_image_array_fast
+from controle.camera_asi_fast import record_capture_time
 from controle.alvo_alinhamento import escolher_posicao_inicial_ou_centro
 # Mantém as importações originais de conexão
 from controle.mount_control import (
@@ -24,11 +27,11 @@ from controle.mount_control import (
 from controle.mount_control import move_axes_pid_2d
 
 # ==== Configurações Alpaca ====
-BASE_URL = "http://127.0.0.1:11111/api/v1/camera/0"
+BASE_URL = f"http://{ALPACA_ADDRESS}/api/v1/camera/{DEVICE_NUMBER}"
 CLIENT_ID = 1
 _transaction_ids = itertools.count(1)
 session = requests.Session()
-IMAGE_READY_POLL_S = 0.005
+IMAGE_READY_POLL_S = 0.001
 
 lim_px = 2.0  # tolerância padrão em pixels
 
@@ -65,7 +68,6 @@ def set_gain(gain: int) -> None:
     call("PUT", "gain", data={"Gain": gain})
 
 def start_exposure(duration_seconds: float, light: bool = True) -> None:
-    print(f"Iniciando exposição: {duration_seconds:.6f}s | luz={light}")
     call("PUT", "startexposure", data={"Duration": duration_seconds, "Light": light})
 
 def wait_until_image_ready(poll_interval: float = IMAGE_READY_POLL_S, timeout: float = 5.0) -> None:
@@ -79,15 +81,15 @@ def wait_until_image_ready(poll_interval: float = IMAGE_READY_POLL_S, timeout: f
 
 
 def fetch_image_array() -> np.ndarray:
-    payload = call("GET", "imagearray")
-    array = np.asarray(payload)
-    return array
+    return fetch_image_array_fast()
 
 
 def capture_frame(exposure_seconds: float, light: bool = True) -> np.ndarray:
+    capture_started = time.perf_counter()
     start_exposure(exposure_seconds, light=light)
     wait_until_image_ready()
     frame = fetch_image_array()
+    record_capture_time(time.perf_counter() - capture_started)
     frame = frame.astype(np.float32)
     
     min_val = float(frame.min())

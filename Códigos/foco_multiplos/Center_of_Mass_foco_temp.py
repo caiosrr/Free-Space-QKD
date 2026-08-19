@@ -27,6 +27,8 @@ from controle.camera_backend import (
 )
 from controle.alvo_alinhamento import escolher_posicao_inicial_ou_centro, salvar_alvo
 from artifact_paths import display_path, matrix_candidates
+from config_camera_asi import EXPOSURE_SECONDS as ASI_EXPOSURE_SECONDS
+from config_camera_asi import GAIN as ASI_GAIN
 from controle.mount_control import (
     ensure_connected,
     ensure_not_tracking,
@@ -46,15 +48,22 @@ LOCK_FOCUS_IDENTITY = True
 LOCK_MIN_SIMILARITY = 0.35
 LOCK_STRONG_SIMILARITY = 0.65
 lim_px = 2.0
-CAMERA_GAIN = float(os.environ.get("QKD_IDS_ANALOG_GAIN", "1")) if backend_name() == "ids" else 5
+CAMERA_GAIN = (
+    float(os.environ.get("QKD_IDS_ANALOG_GAIN", "1"))
+    if backend_name() == "ids"
+    else ASI_GAIN
+)
 EXPOSURE_SECONDS = (
     float(os.environ.get("QKD_IDS_EXPOSURE_US", "7276")) * 1e-6
     if backend_name() == "ids"
-    else 100e-3
+    else ASI_EXPOSURE_SECONDS
 )
+ROTATE_IMAGE_180 = os.environ.get("QKD_ROTATE_IMAGE_180", "1") != "0"
+IDS_MATRIX_PREFIX = "ids_foco_temp" if ROTATE_IMAGE_180 else "ids_raw_foco_temp"
 CAPTURE_HTTP_ATTEMPTS = 3
 CAPTURE_RETRY_SLEEP_S = 0.75
-CAPTURE_COOLDOWN_SLEEP_S = 0.0 if backend_name() == "ids" else 0.05
+# ImageReady e a transferencia completa ja serializam as exposicoes.
+CAPTURE_COOLDOWN_SLEEP_S = 0.0
 FINE_MATRIX_ENTER_RADIUS_PX = 8.0
 CENTERING_STEP_GAIN = 0.65
 MAX_CORRECTION_NORM_DEG = 0.015
@@ -71,6 +80,8 @@ FOCUS_LOCK = {
     "secondary": None,
     "last_x": None,
     "last_y": None,
+    "freeze_reference": False,
+    "max_jump_px": None,
 }
 
 
@@ -99,6 +110,8 @@ def reset_focus_lock() -> None:
     FOCUS_LOCK["secondary"] = None
     FOCUS_LOCK["last_x"] = None
     FOCUS_LOCK["last_y"] = None
+    FOCUS_LOCK["freeze_reference"] = False
+    FOCUS_LOCK["max_jump_px"] = None
 
 
 def get_focus_signature() -> dict | None:
@@ -109,6 +122,8 @@ def get_focus_signature() -> dict | None:
         "version": 1,
         "primary": copy.deepcopy(FOCUS_LOCK["primary"]),
         "secondary": copy.deepcopy(FOCUS_LOCK["secondary"]),
+        "freeze_reference": bool(FOCUS_LOCK["freeze_reference"]),
+        "max_jump_px": FOCUS_LOCK["max_jump_px"],
     }
 
 
@@ -116,6 +131,8 @@ def initialize_focus_lock(
     signature: dict | None,
     expected_x: float | None = None,
     expected_y: float | None = None,
+    freeze_reference: bool | None = None,
+    max_jump_px: float | None = None,
 ) -> bool:
     """Inicializa o lock dual com assinatura persistida e posicao esperada."""
     reset_focus_lock()
@@ -131,6 +148,9 @@ def initialize_focus_lock(
                 "raw_total": float(reference["raw_total"]),
                 "area": float(reference["area"]),
             }
+            for key in ("bbox_w", "bbox_h", "compactness"):
+                if key in reference:
+                    normalized[key] = float(reference[key])
         except (KeyError, TypeError, ValueError):
             return None
         if not all(np.isfinite(value) and value > 0 for value in normalized.values()):
@@ -145,6 +165,16 @@ def initialize_focus_lock(
     FOCUS_LOCK["active"] = True
     FOCUS_LOCK["primary"] = primary
     FOCUS_LOCK["secondary"] = secondary
+    FOCUS_LOCK["freeze_reference"] = bool(
+        signature.get("freeze_reference", False)
+        if freeze_reference is None
+        else freeze_reference
+    )
+    saved_max_jump = signature.get("max_jump_px")
+    chosen_max_jump = saved_max_jump if max_jump_px is None else max_jump_px
+    FOCUS_LOCK["max_jump_px"] = (
+        None if chosen_max_jump is None else float(chosen_max_jump)
+    )
     if expected_x is not None and expected_y is not None:
         expected_x = float(expected_x)
         expected_y = float(expected_y)
@@ -177,8 +207,10 @@ def capture_frame(exposure_seconds: float, light: bool = True) -> np.ndarray:
                 norm = np.clip((frame - pedestal) / (max_val - pedestal + 1e-6), 0, 1)
                 norm = (norm * 255).astype(np.uint8)
 
-            norm = np.rot90(norm, 2)
-            LAST_RAW_FRAME = np.rot90(frame, 2)
+            if ROTATE_IMAGE_180:
+                norm = np.rot90(norm, 2)
+                frame = np.rot90(frame, 2)
+            LAST_RAW_FRAME = frame
             LAST_CAPTURE_STATS = {
                 "raw_min": min_val,
                 "raw_max": max_val,
@@ -248,22 +280,31 @@ def _similarity(candidate: dict, reference: dict | None) -> float:
     if reference is None:
         return 0.0
 
-    scores = []
-    for key in ("raw_peak", "raw_total", "area"):
+    feature_weights = {
+        "raw_peak": 0.25,
+        "raw_total": 0.20,
+        "area": 0.15,
+        "bbox_w": 0.12,
+        "bbox_h": 0.12,
+        "compactness": 0.16,
+    }
+    weighted_score = 0.0
+    total_weight = 0.0
+    for key, weight in feature_weights.items():
+        if key not in candidate or key not in reference:
+            continue
         cand = max(float(candidate[key]), 1e-6)
         ref = max(float(reference[key]), 1e-6)
         ratio = min(cand / ref, ref / cand)
-        scores.append(float(np.clip(ratio, 0.0, 1.0)))
+        weighted_score += weight * float(np.clip(ratio, 0.0, 1.0))
+        total_weight += weight
 
-    return float((0.5 * scores[0]) + (0.35 * scores[1]) + (0.15 * scores[2]))
+    return float(weighted_score / total_weight) if total_weight > 0 else 0.0
 
 
 def _lock_reference_from(candidate: dict) -> dict:
-    return {
-        "raw_peak": float(candidate["raw_peak"]),
-        "raw_total": float(candidate["raw_total"]),
-        "area": float(candidate["area"]),
-    }
+    keys = ("raw_peak", "raw_total", "area", "bbox_w", "bbox_h", "compactness")
+    return {key: float(candidate[key]) for key in keys if key in candidate}
 
 
 def _focus_lock_snapshot() -> dict:
@@ -273,6 +314,8 @@ def _focus_lock_snapshot() -> dict:
         "secondary": copy.deepcopy(FOCUS_LOCK["secondary"]),
         "last_x": FOCUS_LOCK["last_x"],
         "last_y": FOCUS_LOCK["last_y"],
+        "freeze_reference": bool(FOCUS_LOCK["freeze_reference"]),
+        "max_jump_px": FOCUS_LOCK["max_jump_px"],
     }
 
 
@@ -283,6 +326,9 @@ def _candidate_debug(candidate: dict, primary: dict | None, secondary: dict | No
         "area": int(candidate["area"]),
         "raw_peak": float(candidate["raw_peak"]),
         "raw_total": float(candidate["raw_total"]),
+        "bbox_w": int(candidate.get("bbox_w", 0)),
+        "bbox_h": int(candidate.get("bbox_h", 0)),
+        "compactness": float(candidate.get("compactness", 0.0)),
         "toca_borda": bool(candidate["toca_borda"]),
         "similarity_primary": float(_similarity(candidate, primary)) if primary is not None else None,
         "similarity_secondary": float(_similarity(candidate, secondary)) if secondary is not None else None,
@@ -300,7 +346,7 @@ def _update_focus_lock(candidate: dict, candidates: list[dict]) -> None:
         FOCUS_LOCK["secondary"] = (
             _lock_reference_from(ordered[1]) if len(ordered) >= 2 else None
         )
-    elif not candidate["toca_borda"]:
+    elif not candidate["toca_borda"] and not FOCUS_LOCK["freeze_reference"]:
         primary = FOCUS_LOCK["primary"]
         if primary is not None:
             # Atualiza devagar para aceitar variacoes reais sem esquecer a identidade inicial.
@@ -339,6 +385,9 @@ def _select_focus_candidate(candidates: list[dict]) -> dict | None:
                     candidate["y_cm"] - FOCUS_LOCK["last_y"],
                 )
             )
+            max_jump_px = FOCUS_LOCK["max_jump_px"]
+            if max_jump_px is not None and dist > float(max_jump_px):
+                continue
             dist_score = 1.0 / (1.0 + (dist / 300.0))
         else:
             dist_score = 1.0
@@ -394,6 +443,21 @@ def _find_focus_candidates(frame_gray: np.ndarray, threshold_percent: float) -> 
         if area < MIN_LOCAL_PIXELS:
             continue
 
+        local_ys, local_xs = np.where(selected_mask)
+        bbox_w = int(local_xs.max() - local_xs.min() + 1)
+        bbox_h = int(local_ys.max() - local_ys.min() + 1)
+        contours, _ = cv2.findContours(
+            selected_mask.astype(np.uint8),
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE,
+        )
+        perimeter = max((cv2.arcLength(contour, True) for contour in contours), default=0.0)
+        compactness = (
+            float(np.clip((4.0 * np.pi * area) / (perimeter * perimeter), 0.0, 1.0))
+            if perimeter > 0
+            else 0.0
+        )
+
         ys, xs = np.where(selected_mask)
         peak_index = int(np.argmax(frame_gray[selected_mask]))
         peak_y = int(ys[peak_index])
@@ -438,10 +502,160 @@ def _find_focus_candidates(frame_gray: np.ndarray, threshold_percent: float) -> 
                 "area": area,
                 "raw_peak": raw_peak,
                 "raw_total": raw_total,
+                "bbox_w": bbox_w,
+                "bbox_h": bbox_h,
+                "compactness": compactness,
             }
         )
 
     return candidates
+
+
+def _lock_manual_candidate(candidate: dict, max_jump_px: float) -> dict:
+    reset_focus_lock()
+    FOCUS_LOCK["active"] = True
+    FOCUS_LOCK["primary"] = _lock_reference_from(candidate)
+    FOCUS_LOCK["secondary"] = None
+    FOCUS_LOCK["last_x"] = float(candidate["x_cm"])
+    FOCUS_LOCK["last_y"] = float(candidate["y_cm"])
+    FOCUS_LOCK["freeze_reference"] = True
+    FOCUS_LOCK["max_jump_px"] = float(max_jump_px)
+    return get_focus_signature()
+
+
+def escolher_ilha_manualmente(
+    frame: np.ndarray,
+    threshold_percent: float | None = None,
+    max_jump_px: float = 95.0,
+) -> dict:
+    """Mostra as ilhas detectadas e trava a que o usuario clicar."""
+    frame_gray = _as_gray_float(frame)
+    threshold = DUAL_THRESHOLD_PERCENT if threshold_percent is None else threshold_percent
+    candidates = _find_focus_candidates(frame_gray, threshold)
+    if not candidates:
+        raise RuntimeError("Nenhuma ilha luminosa foi encontrada para selecao manual.")
+
+    h, w = frame_gray.shape
+    scale = min(1.0, 1400.0 / max(w, 1), 900.0 / max(h, 1))
+    display_w = max(1, int(round(w * scale)))
+    display_h = max(1, int(round(h * scale)))
+    normalized = cv2.normalize(frame_gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    base = cv2.cvtColor(normalized, cv2.COLOR_GRAY2BGR)
+    if scale != 1.0:
+        base = cv2.resize(base, (display_w, display_h), interpolation=cv2.INTER_AREA)
+
+    window_name = "Escolha manual da ilha - clique e pressione Enter"
+    selected = {"index": None}
+
+    def render() -> np.ndarray:
+        canvas = base.copy()
+        for idx, candidate in enumerate(candidates):
+            px = int(round(float(candidate["x_cm"]) * scale))
+            py = int(round(float(candidate["y_cm"]) * scale))
+            is_selected = idx == selected["index"]
+            color = (0, 255, 0) if is_selected else (0, 255, 255)
+            radius = 12 if is_selected else 7
+            cv2.circle(canvas, (px, py), radius, color, 2)
+            if is_selected:
+                cv2.putText(
+                    canvas,
+                    f"ilha {idx + 1}",
+                    (px + 12, max(24, py - 12)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    color,
+                    2,
+                    cv2.LINE_AA,
+                )
+        cv2.putText(
+            canvas,
+            "Clique na ilha desejada | Enter confirma | Esc cancela",
+            (20, 35),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        return canvas
+
+    def on_mouse(event, x, y, _flags, _param) -> None:
+        if event != cv2.EVENT_LBUTTONDOWN:
+            return
+        full_x = float(x) / scale
+        full_y = float(y) / scale
+        selected["index"] = min(
+            range(len(candidates)),
+            key=lambda idx: (
+                (float(candidates[idx]["x_cm"]) - full_x) ** 2
+                + (float(candidates[idx]["y_cm"]) - full_y) ** 2
+            ),
+        )
+
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.setMouseCallback(window_name, on_mouse)
+    print(
+        f"Selecao manual: {len(candidates)} ilha(s) marcada(s). "
+        "Clique na desejada e pressione Enter."
+    )
+    try:
+        while True:
+            cv2.imshow(window_name, render())
+            key = cv2.waitKey(30) & 0xFF
+            if key in (13, 10) and selected["index"] is not None:
+                break
+            if key == 27:
+                raise KeyboardInterrupt("Selecao manual cancelada.")
+            if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
+                raise KeyboardInterrupt("Janela de selecao manual fechada.")
+    finally:
+        cv2.destroyWindow(window_name)
+
+    candidate = candidates[int(selected["index"])]
+    signature = _lock_manual_candidate(candidate, max_jump_px=max_jump_px)
+    return {
+        "x_px": float(candidate["x_cm"]),
+        "y_px": float(candidate["y_cm"]),
+        "signature": signature,
+        "candidate": _candidate_debug(candidate, FOCUS_LOCK["primary"], None),
+        "candidate_count": len(candidates),
+        "candidates": [
+            _candidate_debug(item, FOCUS_LOCK["primary"], None)
+            for item in candidates
+        ],
+    }
+
+
+def centro_massa_em_roi(
+    frame: np.ndarray,
+    start_x: int,
+    start_y: int,
+    width: int,
+    height: int,
+    threshold_percent: float | None = None,
+):
+    """Calcula o CM em uma ROI fixa preservando o sinal bruto correspondente."""
+    global LAST_RAW_FRAME
+
+    x0 = int(start_x)
+    y0 = int(start_y)
+    x1 = x0 + int(width)
+    y1 = y0 + int(height)
+    frame_roi = frame[y0:y1, x0:x1]
+    if frame_roi.shape[:2] != (int(height), int(width)):
+        raise RuntimeError(
+            f"ROI fora do frame: inicio=({x0},{y0}), tamanho={width}x{height}, "
+            f"frame={frame.shape[1]}x{frame.shape[0]}."
+        )
+
+    raw_full = LAST_RAW_FRAME
+    if isinstance(raw_full, np.ndarray) and raw_full.shape[:2] == frame.shape[:2]:
+        LAST_RAW_FRAME = raw_full[y0:y1, x0:x1]
+    try:
+        cm = centro_massa(frame_roi, threshold_percent=threshold_percent)
+        return frame_roi, cm
+    finally:
+        LAST_RAW_FRAME = raw_full
 
 
 def _centro_foco_principal(frame_gray: np.ndarray, threshold_percent: float):
@@ -519,8 +733,8 @@ def centro_massa(frame: np.ndarray, threshold_percent: float | None = None):
 def _load_calibration_matrices() -> dict[str, tuple[np.ndarray, str]] | None:
     if backend_name() == "ids":
         matrix_sets = {
-            "fine": matrix_candidates("ids_foco_temp_A_inv_fine.npy"),
-            "coarse": matrix_candidates("ids_foco_temp_A_inv_coarse.npy"),
+            "fine": matrix_candidates(f"{IDS_MATRIX_PREFIX}_A_inv_fine.npy"),
+            "coarse": matrix_candidates(f"{IDS_MATRIX_PREFIX}_A_inv_coarse.npy"),
         }
     else:
         matrix_sets = {
@@ -663,6 +877,10 @@ def main() -> None:
     set_focus_mode(mode)
     connect_camera()
     try:
+        print(
+            f"Camera {backend_name()}: ganho={CAMERA_GAIN}, "
+            f"exposicao={EXPOSURE_SECONDS * 1e6:.1f} us"
+        )
         set_gain(CAMERA_GAIN)
         frame = capture_frame(EXPOSURE_SECONDS, light=True)
         cm = centro_massa(frame)

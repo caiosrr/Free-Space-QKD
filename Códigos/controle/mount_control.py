@@ -223,8 +223,21 @@ def _status_clear():
     _status_slot_active = False
 
 
-def move_axes_pid_2d(mount: bool, delta_az: float, delta_alt: float):
+def move_axes_pid_2d(
+    mount: bool,
+    delta_az: float,
+    delta_alt: float,
+    max_velocity_deg_s: float | None = None,
+):
     """Movimento contínuo simultâneo nos dois eixos usando PID e Threads."""
+
+    velocity_limit = VEL_MAX_LIMITE
+    if max_velocity_deg_s is not None:
+        velocity_limit = min(VEL_MAX_LIMITE, abs(float(max_velocity_deg_s)))
+        if velocity_limit < VEL_MIN_LIMITE:
+            raise ValueError(
+                "max_velocity_deg_s precisa ser maior ou igual a VEL_MIN_LIMITE"
+            )
 
     az0, alt0 = read_altaz()
     alvo_az = (az0 + delta_az) % 360
@@ -239,8 +252,8 @@ def move_axes_pid_2d(mount: bool, delta_az: float, delta_alt: float):
         alvo_alt = -90.0
 
     # Instancia dois PIDs independentes
-    pid_az = PID(kp=1.3967, ki=0.0001, kd=0.1015, setpoint=alvo_az, output_limits=(-VEL_MAX_LIMITE, VEL_MAX_LIMITE), integral_limit=5)
-    pid_alt = PID(kp=1.3967, ki=0.0001, kd=0.1015, setpoint=alvo_alt, output_limits=(-VEL_MAX_LIMITE, VEL_MAX_LIMITE), integral_limit=5)
+    pid_az = PID(kp=1.3967, ki=0.0001, kd=0.1015, setpoint=alvo_az, output_limits=(-velocity_limit, velocity_limit), integral_limit=5)
+    pid_alt = PID(kp=1.3967, ki=0.0001, kd=0.1015, setpoint=alvo_alt, output_limits=(-velocity_limit, velocity_limit), integral_limit=5)
 
     print("\nMovimento PID 2D Iniciado:")
     print(f"  Alvo Azimute  = {alvo_az:.4f}° (Δ {delta_az:+.4f}°)")

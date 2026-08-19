@@ -7,6 +7,7 @@ selecionam IDS antes de importar os programas existentes.
 from __future__ import annotations
 
 import os
+import time
 
 import numpy as np
 
@@ -61,7 +62,11 @@ def capture_raw_frame(exposure_seconds: float, light: bool = True) -> np.ndarray
         start_exposure,
         wait_until_image_ready,
     )
+    from controle.camera_asi_fast import record_capture_time
 
+    capture_started = time.perf_counter()
     start_exposure(float(exposure_seconds), light=light)
     wait_until_image_ready()
-    return fetch_image_array()
+    frame = fetch_image_array()
+    record_capture_time(time.perf_counter() - capture_started)
+    return frame

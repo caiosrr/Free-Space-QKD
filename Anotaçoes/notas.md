@@ -157,6 +157,110 @@ Conclusao: o gargalo principal e captura/transferencia da camera via Alpaca, nao
 
 Foi testado reduzir `WINDOW_SIZE` de `200` para `160`, o que melhorou a taxa, mas a preferencia atual e manter `200 px` por dar mais margem quando o laser se move. Se necessario em testes futuros, reduzir o ROI pode ser uma opcao.
 
+## Futuro: aquisicao direta da ASI pelo SDK da ZWO
+
+Data da anotacao: 2026-08-18.
+
+O caminho ASCOM/Alpaca ja usa as principais otimizacoes disponiveis sem trocar
+de backend:
+
+* sessao HTTP persistente;
+* transferencia binaria `ImageBytes`, com JSON apenas como fallback;
+* ROI configurada diretamente na camera;
+* tela e controle em frequencias separadas.
+
+Mesmo assim, cada frame ASCOM continua seguindo aproximadamente:
+
+`StartExposure -> consultas ImageReady -> download ImageBytes -> proximo frame`
+
+Isso exige varias requisicoes HTTP e nao oferece o mesmo fluxo continuo de um
+SDK nativo. A exposicao curta nao e necessariamente o maior custo; driver,
+leitura do sensor, consultas e transferencia podem dominar o intervalo.
+
+### Proposta
+
+Criar no futuro um backend `zwo_sdk`, semelhante ao backend direto da IDS:
+
+`camera ASI -> SDK ZWO/USB -> frames continuos -> tracker`
+
+O mount continuaria usando ASCOM/Alpaca. Somente a captura da camera deixaria o
+ASCOM Remote Server. O tracker, centro de massa, matrizes, watchdog e CSV devem
+continuar compartilhados entre os backends.
+
+Manter o backend atual `alpaca` como fallback. A selecao ideal deve ficar em uma
+configuracao simples, por exemplo:
+
+`CAMERA_BACKEND = "alpaca"` ou `CAMERA_BACKEND = "zwo_sdk"`
+
+Nao remover o caminho ASCOM enquanto o SDK nao passar por testes longos.
+
+### Por que priorizar o SDK
+
+* Permite aquisicao continua, sem iniciar uma exposicao HTTP para cada frame.
+* Pode reduzir latencia e variacao entre frames.
+* Mantem controle direto de ROI, ganho, exposicao e formato RAW.
+* E a opcao mais promissora para aumentar os Hz sem diminuir demais a ROI.
+
+DirectShow/WDM pode ser rapido, mas nao e a primeira escolha porque normalmente
+nao oferece RAW16. Como qualidade e prioridade, testar primeiro RAW8 e RAW16
+pelo SDK oficial da ZWO.
+
+### Antes de implementar
+
+1. Confirmar o modelo exato da ASI e instalar driver/SDK oficial compativel.
+2. Confirmar se existe wrapper Python confiavel ou integrar a DLL por `ctypes`.
+3. Fechar/desconectar a camera no ASCOM antes de abrir pelo SDK; dois programas
+   nao devem disputar o mesmo dispositivo USB.
+4. Registrar no modo ASCOM, para referencia:
+   * ROI usada;
+   * Hz de medicao;
+   * tempo medio e maximo de captura/transferencia;
+   * exposicao, ganho e profundidade de bits;
+   * variancia do CM e frames perdidos.
+
+### Ensaio comparativo no laboratorio
+
+Usar exatamente a mesma luz, exposicao, ganho e ROI nos dois backends e medir:
+
+* Hz medio, minimo e percentis de latencia;
+* jitter do intervalo entre frames;
+* frames incompletos/perdidos;
+* uso de CPU;
+* intensidade, forma e variancia do centro de massa;
+* resposta do tracker a perturbacoes iguais;
+* estabilidade durante pelo menos uma hora.
+
+Verificar com cuidado:
+
+* orientacao e eventual transposicao da imagem;
+* coordenadas `StartX/StartY` da ROI;
+* tipo do array (`uint8` ou `uint16`);
+* pedestal/normalizacao;
+* se a assinatura da ilha continua compativel;
+* se as matrizes precisam ser refeitas. Se orientacao, escala ou ROI mudarem,
+  refazer a calibracao antes de permitir movimento automatico.
+
+### Paralelizacao
+
+Uma fila produtor-consumidor tambem pode ser testada:
+
+* thread 1 captura continuamente;
+* thread 2 processa apenas o frame mais recente, descartando atraso acumulado;
+* thread 3 mantem o controle do mount;
+* watchdog e CSV continuam independentes.
+
+Nao permitir fila crescente de frames: para tracking importa a imagem mais
+recente, nao processar imagens antigas. Essa paralelizacao deve ser feita depois
+do backend SDK funcionar, pois o CM em ROI moderada custa poucos milissegundos e
+o ganho de pipeline no ASCOM tende a ser pequeno.
+
+### Estado atual para o proximo teste
+
+O tracker ASI passou a usar ROI `384 x 384`, mostra Hz reais e grava telemetria
+CSV. Antes de migrar para o SDK, usar esses dados como baseline. O teste local
+mediu aproximadamente `3.6 ms/frame` para o processamento do CM em ROI 384;
+portanto, a primeira investigacao deve continuar sendo captura/transferencia.
+
 ## Ideia importante para o futuro
 
 O autotune de dois telescopios deve ser tratado como um teste de rejeicao de perturbacao do experimento completo:

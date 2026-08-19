@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -25,13 +26,20 @@ from foco_multiplos.Center_of_Mass_foco_temp import (
     backend_name,
     capture_frame,
     centro_massa,
+    centro_massa_em_roi,
     connect_camera,
     disconnect_camera,
+    escolher_ilha_manualmente,
     get_focus_debug,
+    initialize_focus_lock,
     get_focus_mode,
     set_gain,
     set_focus_mode,
 )
+from controle.alvo_alinhamento import roi_incluindo_alvo, salvar_alvo
+from config_camera_asi import EXPOSURE_SECONDS as ASI_EXPOSURE_SECONDS
+from config_camera_asi import GAIN as ASI_GAIN
+from config_tracker import FINE_CALIBRATION_RADII_DEG, roi_size_for_backend
 from controle.mount_control import (
     TOLERANCIA_GRAUS,
     calc_error,
@@ -50,8 +58,18 @@ FOCO_DIR = Path(
     )
 )
 
-CAMERA_GAIN = 1 if backend_name() == "ids" else 5
-EXPOSURE_SECONDS = 7.276e-3 if backend_name() == "ids" else 100e-3
+CAMERA_GAIN = (
+    float(os.environ.get("QKD_IDS_ANALOG_GAIN", "1"))
+    if backend_name() == "ids"
+    else ASI_GAIN
+)
+EXPOSURE_SECONDS = (
+    float(os.environ.get("QKD_IDS_EXPOSURE_US", "7276")) * 1e-6
+    if backend_name() == "ids"
+    else ASI_EXPOSURE_SECONDS
+)
+ROTATE_IMAGE_180 = os.environ.get("QKD_ROTATE_IMAGE_180", "1") != "0"
+IDS_MATRIX_PREFIX = "ids_foco_temp" if ROTATE_IMAGE_180 else "ids_raw_foco_temp"
 SETTLE_S = 1.50
 CAPTURES_PER_CENTER = 2
 CAPTURES_PER_POINT = 2
@@ -59,7 +77,8 @@ MAX_SAMPLE_ATTEMPTS = 3
 POST_FIT_REMEASURE_PASSES = 2
 CENTER_DRIFT_WEIGHT = 0.50
 DISCONNECT_CAMERA_ON_EXIT = True
-FINE_FIT_USE_SMALLEST_RADIUS = True
+# A calibracao manual usa varios raios; o ajuste robusto deve combinar todos.
+FINE_FIT_USE_SMALLEST_RADIUS = False
 DRIFT_LIMITS_PX = {
     "coarse": {"accept": 10.0, "warn": 15.0, "reject": 20.0},
     "fine": {"accept": 6.0, "warn": 10.0, "reject": 10.0},
@@ -83,15 +102,30 @@ QUALITY_LIMITS = {
     "coarse": {"warn_rms_px": 10.0, "max_rms_px": 18.0},
     "fine": {"warn_rms_px": 5.0, "max_rms_px": 10.0},
 }
+CALIBRATION_PROFILE = "laboratorio"
+MIN_FIT_RECORDS = 8
+JITTER_LIMITS_PX = {
+    "coarse": {"accept": None, "warn": None, "reject": None},
+    "fine": {"accept": None, "warn": None, "reject": None},
+}
 
-OUTPUT_PREFIX = "ids_calibracao_foco_temp" if backend_name() == "ids" else "calibracao_dual_v3_foco_temp"
-COARSE_A_PATH = "ids_foco_temp_A_coarse.npy" if backend_name() == "ids" else "foco_temp_A_coarse.npy"
-COARSE_A_INV_PATH = "ids_foco_temp_A_inv_coarse.npy" if backend_name() == "ids" else "foco_temp_A_inv_coarse.npy"
-FINE_A_PATH = "ids_foco_temp_A_fine.npy" if backend_name() == "ids" else "foco_temp_A_fine.npy"
-FINE_A_INV_PATH = "ids_foco_temp_A_inv_fine.npy" if backend_name() == "ids" else "foco_temp_A_inv_fine.npy"
+OUTPUT_PREFIX = (
+    "ids_calibracao_foco_temp"
+    if backend_name() == "ids" and ROTATE_IMAGE_180
+    else "ids_raw_calibracao_foco_temp"
+    if backend_name() == "ids"
+    else "calibracao_dual_v3_foco_temp"
+)
+COARSE_A_PATH = f"{IDS_MATRIX_PREFIX}_A_coarse.npy" if backend_name() == "ids" else "foco_temp_A_coarse.npy"
+COARSE_A_INV_PATH = f"{IDS_MATRIX_PREFIX}_A_inv_coarse.npy" if backend_name() == "ids" else "foco_temp_A_inv_coarse.npy"
+FINE_A_PATH = f"{IDS_MATRIX_PREFIX}_A_fine.npy" if backend_name() == "ids" else "foco_temp_A_fine.npy"
+FINE_A_INV_PATH = f"{IDS_MATRIX_PREFIX}_A_inv_fine.npy" if backend_name() == "ids" else "foco_temp_A_inv_fine.npy"
 
 AUDIT_DIR: Path | None = None
 AUDIT_LOG = []
+CALIBRATION_ROI: dict | None = None
+CALIBRATION_MEASUREMENT_MODE = "sensor_completo"
+MANUAL_TARGET: dict | None = None
 
 DIRECTIONS = [
     ("az+", +1.0, 0.0),
@@ -113,6 +147,7 @@ class MedicaoCM:
     std_y_px: float
     samples: int
     toca_borda: bool
+    timestamp_s: float
 
 
 @dataclass
@@ -138,6 +173,165 @@ class RegistroDual:
     corrected_y_px: float
     center_drift_px: float
     jitter_px: float
+    drift_interpolation_alpha: float
+
+
+def _configure_calibration_profile(long_link: bool) -> None:
+    """Seleciona limites sem enfraquecer silenciosamente o perfil de laboratorio."""
+    global CALIBRATION_PROFILE
+    global CAPTURES_PER_CENTER, CAPTURES_PER_POINT, MAX_SAMPLE_ATTEMPTS
+    global DRIFT_LIMITS_PX, RESIDUAL_RETRY_LIMITS_PX, JITTER_LIMITS_PX
+    global MIN_FIT_RECORDS, FINE_RADII_DEG
+
+    if not long_link:
+        CALIBRATION_PROFILE = "laboratorio"
+        CAPTURES_PER_CENTER = 2
+        CAPTURES_PER_POINT = 2
+        MAX_SAMPLE_ATTEMPTS = 3
+        MIN_FIT_RECORDS = 8
+        FINE_RADII_DEG = [0.010]
+        DRIFT_LIMITS_PX = {
+            "coarse": {"accept": 10.0, "warn": 15.0, "reject": 20.0},
+            "fine": {"accept": 6.0, "warn": 10.0, "reject": 10.0},
+        }
+        RESIDUAL_RETRY_LIMITS_PX = {"coarse": 15.0, "fine": 7.0}
+        JITTER_LIMITS_PX = {
+            "coarse": {"accept": None, "warn": None, "reject": None},
+            "fine": {"accept": None, "warn": None, "reject": None},
+        }
+        return
+
+    # Link atmosferico de varios quilometros: a mediana de cinco frames reduz
+    # seeing e fontes espurias. O drift permitido cresce, mas jitter extremo
+    # continua provocando repeticao/rejeicao em vez de ser aceito cegamente.
+    CALIBRATION_PROFILE = "link_longo_7km"
+    CAPTURES_PER_CENTER = 5
+    CAPTURES_PER_POINT = 5
+    MAX_SAMPLE_ATTEMPTS = 4
+    MIN_FIT_RECORDS = 6
+    FINE_RADII_DEG = [0.015]
+    DRIFT_LIMITS_PX = {
+        "coarse": {"accept": 60.0, "warn": 90.0, "reject": 140.0},
+        "fine": {"accept": 45.0, "warn": 70.0, "reject": 110.0},
+    }
+    JITTER_LIMITS_PX = {
+        "coarse": {"accept": 80.0, "warn": 120.0, "reject": 200.0},
+        "fine": {"accept": 60.0, "warn": 100.0, "reject": 160.0},
+    }
+    RESIDUAL_RETRY_LIMITS_PX = {"coarse": 25.0, "fine": 15.0}
+
+
+def _prepare_manual_tracker_roi(focus_mode: str) -> dict:
+    """Seleciona uma ilha no sensor completo e prepara a ROI local do tracker."""
+    global CALIBRATION_ROI, CALIBRATION_MEASUREMENT_MODE, MANUAL_TARGET
+    global CALIBRATION_PROFILE, FINE_RADII_DEG
+    global CAPTURES_PER_CENTER, CAPTURES_PER_POINT, MAX_SAMPLE_ATTEMPTS
+    global MIN_FIT_RECORDS, DRIFT_LIMITS_PX, JITTER_LIMITS_PX
+    global RESIDUAL_RETRY_LIMITS_PX
+
+    roi_size = roi_size_for_backend(backend_name())
+    max_jump_px = float((roi_size / 2) - 10)
+    full_frame = capture_frame(EXPOSURE_SECONDS, light=True)
+    selection = escolher_ilha_manualmente(
+        full_frame,
+        max_jump_px=max_jump_px,
+    )
+    if AUDIT_DIR is not None:
+        _save_audit_frame(
+            full_frame,
+            AUDIT_DIR / "ilha_manual_selecionada_frame_completo.png",
+            selection["x_px"],
+            selection["y_px"],
+            {"candidates": selection.get("candidates", [])},
+        )
+
+    sensor_h, sensor_w = full_frame.shape[:2]
+    start_x, start_y, local_x, local_y = roi_incluindo_alvo(
+        sensor_w,
+        sensor_h,
+        roi_size,
+        roi_size,
+        selection["x_px"],
+        selection["y_px"],
+    )
+    signature = selection["signature"]
+    if not initialize_focus_lock(
+        signature,
+        local_x,
+        local_y,
+        freeze_reference=True,
+        max_jump_px=max_jump_px,
+    ):
+        raise RuntimeError("Nao consegui inicializar o lock da ilha escolhida.")
+
+    target_path = salvar_alvo(
+        selection["x_px"],
+        selection["y_px"],
+        source="manual_calibration_tracker_roi",
+        frame_shape=full_frame.shape,
+        samples=1,
+        std_x_px=0.0,
+        std_y_px=0.0,
+        focus_mode=focus_mode,
+        focus_signature=signature,
+    )
+
+    CALIBRATION_ROI = {
+        "start_x": int(start_x),
+        "start_y": int(start_y),
+        "width": int(roi_size),
+        "height": int(roi_size),
+        "target_x_local": float(local_x),
+        "target_y_local": float(local_y),
+        "target_x_full": float(selection["x_px"]),
+        "target_y_full": float(selection["y_px"]),
+        "max_jump_px": max_jump_px,
+        "saved_target_path": display_path(target_path),
+    }
+    MANUAL_TARGET = selection
+    CALIBRATION_MEASUREMENT_MODE = "ilha_manual_roi_tracker"
+    CALIBRATION_PROFILE = f"{CALIBRATION_PROFILE}_roi_manual"
+
+    # Mede varias escalas dentro da mesma ROI. O ajuste robusto combina os
+    # deslocamentos e reduz o peso de um raio contaminado por jitter ou drift.
+    FINE_RADII_DEG = list(FINE_CALIBRATION_RADII_DEG)
+    CAPTURES_PER_CENTER = max(CAPTURES_PER_CENTER, 5)
+    CAPTURES_PER_POINT = max(CAPTURES_PER_POINT, 5)
+    MAX_SAMPLE_ATTEMPTS = max(MAX_SAMPLE_ATTEMPTS, 4)
+    # Com 24 trajetorias planejadas, exigir ao menos metade evita aprovar uma
+    # matriz baseada em poucas direcoes depois de descartes por borda/jitter.
+    MIN_FIT_RECORDS = max(MIN_FIT_RECORDS, 12)
+    DRIFT_LIMITS_PX["fine"] = {"accept": 25.0, "warn": 40.0, "reject": 65.0}
+    JITTER_LIMITS_PX["fine"] = {"accept": 25.0, "warn": 40.0, "reject": 70.0}
+    RESIDUAL_RETRY_LIMITS_PX["fine"] = 10.0
+
+    print(
+        "Ilha manual travada: "
+        f"full=({selection['x_px']:.2f}, {selection['y_px']:.2f}) px | "
+        f"ROI={roi_size}x{roi_size} em ({start_x}, {start_y}) | "
+        f"alvo local=({local_x:.2f}, {local_y:.2f}) px."
+    )
+    print(f"Alvo e assinatura congelada salvos em: {display_path(target_path)}")
+
+    preflight = _capture_cm_estavel(
+        EXPOSURE_SECONDS,
+        CAPTURES_PER_CENTER,
+        audit_tag="roi_preflight_sem_movimento",
+    )
+    if preflight is None:
+        raise RuntimeError("A ilha escolhida foi perdida no teste da ROI, antes de mover o mount.")
+    preflight_jitter = float(np.hypot(preflight.std_x_px, preflight.std_y_px))
+    if preflight_jitter > float(JITTER_LIMITS_PX["fine"]["warn"]):
+        raise RuntimeError(
+            "A ilha escolhida nao ficou estavel na ROI sem movimento: "
+            f"jitter={preflight_jitter:.2f}px. Escolha uma ilha mais isolada."
+        )
+    print(
+        "Preflight da ROI aprovado: "
+        f"CM=({preflight.x_px:.2f}, {preflight.y_px:.2f}) px, "
+        f"jitter={preflight_jitter:.2f}px."
+    )
+    return CALIBRATION_ROI
 
 
 def _safe_tag(text: str) -> str:
@@ -208,18 +402,29 @@ def _audit_capture(tag: str, repeat_idx: int, frame: np.ndarray, cm, debug: dict
 def _capture_cm_estavel(exposure: float, repeats: int, audit_tag: str) -> MedicaoCM | None:
     xs = []
     ys = []
+    timestamps = []
     toca_borda = False
 
     for repeat_idx in range(repeats):
         try:
-            frame = capture_frame(exposure, light=True)
+            full_frame = capture_frame(exposure, light=True)
         except Exception as exc:
             print(
                 f"  -> captura falhou em {audit_tag} "
                 f"({repeat_idx + 1}/{repeats}): {exc}"
             )
             return None
-        cm = centro_massa(frame)
+        if CALIBRATION_ROI is None:
+            frame = full_frame
+            cm = centro_massa(frame)
+        else:
+            frame, cm = centro_massa_em_roi(
+                full_frame,
+                CALIBRATION_ROI["start_x"],
+                CALIBRATION_ROI["start_y"],
+                CALIBRATION_ROI["width"],
+                CALIBRATION_ROI["height"],
+            )
         debug = get_focus_debug()
         _audit_capture(audit_tag, repeat_idx, frame, cm, debug)
         if cm is None:
@@ -227,17 +432,25 @@ def _capture_cm_estavel(exposure: float, repeats: int, audit_tag: str) -> Medica
         x_cm, y_cm, _, cm_toca_borda = cm
         xs.append(float(x_cm))
         ys.append(float(y_cm))
+        timestamps.append(time.perf_counter())
         toca_borda = toca_borda or bool(cm_toca_borda)
 
     xs_arr = np.array(xs, dtype=float)
     ys_arr = np.array(ys, dtype=float)
+    if repeats >= 5:
+        spread_x = 1.4826 * float(np.median(np.abs(xs_arr - np.median(xs_arr))))
+        spread_y = 1.4826 * float(np.median(np.abs(ys_arr - np.median(ys_arr))))
+    else:
+        spread_x = float(np.std(xs_arr))
+        spread_y = float(np.std(ys_arr))
     return MedicaoCM(
         x_px=float(np.median(xs_arr)),
         y_px=float(np.median(ys_arr)),
-        std_x_px=float(np.std(xs_arr)),
-        std_y_px=float(np.std(ys_arr)),
+        std_x_px=spread_x,
+        std_y_px=spread_y,
         samples=repeats,
         toca_borda=toca_borda,
+        timestamp_s=float(np.median(np.asarray(timestamps, dtype=float))),
     )
 
 
@@ -320,8 +533,19 @@ def _collect_bracketed_sample_once(
             center_after.y_px - center_before.y_px,
         )
     )
-    x_ref = 0.5 * (center_before.x_px + center_after.x_px)
-    y_ref = 0.5 * (center_before.y_px + center_after.y_px)
+    bracket_duration = center_after.timestamp_s - center_before.timestamp_s
+    if bracket_duration > 1e-9:
+        drift_alpha = float(
+            np.clip(
+                (target_cm.timestamp_s - center_before.timestamp_s) / bracket_duration,
+                0.0,
+                1.0,
+            )
+        )
+    else:
+        drift_alpha = 0.5
+    x_ref = (1.0 - drift_alpha) * center_before.x_px + drift_alpha * center_after.x_px
+    y_ref = (1.0 - drift_alpha) * center_before.y_px + drift_alpha * center_after.y_px
     corrected_x = target_cm.x_px - x_ref
     corrected_y = target_cm.y_px - y_ref
 
@@ -354,6 +578,7 @@ def _collect_bracketed_sample_once(
         corrected_y_px=float(corrected_y),
         center_drift_px=center_drift_px,
         jitter_px=float(jitter_px),
+        drift_interpolation_alpha=drift_alpha,
     )
 
 
@@ -368,11 +593,13 @@ def _collect_bracketed_sample(
     audit_label: str | None = None,
 ) -> RegistroDual | None:
     limits = DRIFT_LIMITS_PX[regime]
+    jitter_limits = JITTER_LIMITS_PX[regime]
     best_record = None
+    best_score = float("inf")
 
     for attempt_idx in range(MAX_SAMPLE_ATTEMPTS):
         if attempt_idx > 0:
-            print(f"  -> repetindo {label}: drift alto na tentativa anterior.")
+            print(f"  -> repetindo {label}: drift/jitter alto na tentativa anterior.")
         registro = _collect_bracketed_sample_once(
             regime=regime,
             label=label,
@@ -386,10 +613,29 @@ def _collect_bracketed_sample(
         )
         if registro is None:
             continue
-        if best_record is None or registro.center_drift_px < best_record.center_drift_px:
+        score = registro.center_drift_px / max(float(limits["accept"]), 1e-6)
+        if jitter_limits["accept"] is not None:
+            score += registro.jitter_px / max(float(jitter_limits["accept"]), 1e-6)
+        if best_record is None or score < best_score:
             best_record = registro
-        if registro.center_drift_px <= limits["accept"]:
+            best_score = score
+
+        drift_ok = registro.center_drift_px <= limits["accept"]
+        jitter_ok = (
+            jitter_limits["accept"] is None
+            or registro.jitter_px <= jitter_limits["accept"]
+        )
+        if drift_ok and jitter_ok:
             return registro
+        print(
+            f"  -> medida instavel: drift={registro.center_drift_px:.2f}px "
+            f"(aceite {limits['accept']:.1f}), jitter={registro.jitter_px:.2f}px"
+            + (
+                f" (aceite {jitter_limits['accept']:.1f})."
+                if jitter_limits["accept"] is not None
+                else "."
+            )
+        )
 
     if best_record is None:
         return None
@@ -398,6 +644,14 @@ def _collect_bracketed_sample(
         print(
             f"  -> aviso: usando {label} com drift centro alto "
             f"({best_record.center_drift_px:.2f}px); peso reduzido no ajuste."
+        )
+    if (
+        jitter_limits["warn"] is not None
+        and best_record.jitter_px >= jitter_limits["warn"]
+    ):
+        print(
+            f"  -> aviso: usando {label} com jitter alto "
+            f"({best_record.jitter_px:.2f}px); peso reduzido no ajuste."
         )
     return best_record
 
@@ -491,7 +745,7 @@ def _residuals_for_records(A: np.ndarray, registros: list[RegistroDual]) -> list
 
 
 def _records_fit_ready(registros: list[RegistroDual]) -> bool:
-    if len(registros) < 8:
+    if len(registros) < MIN_FIT_RECORDS:
         return False
     offsets = np.array(
         [[r.target_az_deg, r.target_alt_deg] for r in registros],
@@ -508,18 +762,35 @@ def _records_fit_ready(registros: list[RegistroDual]) -> bool:
 
 def _filter_records_for_fit(registros: list[RegistroDual], regime: str) -> tuple[list[RegistroDual], list[dict]]:
     reject_limit = DRIFT_LIMITS_PX[regime].get("reject")
-    if reject_limit is None:
+    jitter_reject_limit = JITTER_LIMITS_PX[regime].get("reject")
+    if reject_limit is None and jitter_reject_limit is None:
         return registros, []
 
     kept = []
     rejected = []
     for registro in registros:
-        if registro.center_drift_px > reject_limit:
+        drift_rejected = (
+            reject_limit is not None and registro.center_drift_px > reject_limit
+        )
+        jitter_rejected = (
+            jitter_reject_limit is not None and registro.jitter_px > jitter_reject_limit
+        )
+        if drift_rejected or jitter_rejected:
             rejected.append(
                 {
                     "label": registro.label,
                     "center_drift_px": registro.center_drift_px,
                     "reject_limit_px": reject_limit,
+                    "jitter_px": registro.jitter_px,
+                    "jitter_reject_limit_px": jitter_reject_limit,
+                    "reason": ",".join(
+                        reason
+                        for reason, active in (
+                            ("drift", drift_rejected),
+                            ("jitter", jitter_rejected),
+                        )
+                        if active
+                    ),
                 }
             )
         else:
@@ -536,11 +807,14 @@ def _filter_records_for_fit(registros: list[RegistroDual], regime: str) -> tuple
         return registros, []
 
     print(
-        f"{regime}: descartando {len(rejected)} ponto(s) com drift acima de "
-        f"{reject_limit:.1f}px antes do fit."
+        f"{regime}: descartando {len(rejected)} ponto(s) acima "
+        "dos limites de estabilidade antes do fit."
     )
     for item in rejected:
-        print(f"  -> {item['label']}: drift={item['center_drift_px']:.2f}px")
+        print(
+            f"  -> {item['label']}: motivo={item['reason']}, "
+            f"drift={item['center_drift_px']:.2f}px, jitter={item['jitter_px']:.2f}px"
+        )
     return kept, rejected
 
 
@@ -596,8 +870,11 @@ def _evaluate_matrix(A: np.ndarray, registros: list[RegistroDual]):
 
 
 def _fit_robusto_sem_intercepto(registros: list[RegistroDual], regime: str):
-    if len(registros) < 8:
-        raise RuntimeError(f"Poucos pontos em {regime}: {len(registros)}.")
+    if len(registros) < MIN_FIT_RECORDS:
+        raise RuntimeError(
+            f"Poucos pontos em {regime}: {len(registros)} "
+            f"(minimo {MIN_FIT_RECORDS})."
+        )
 
     offsets = np.array(
         [[r.target_az_deg, r.target_alt_deg] for r in registros],
@@ -819,16 +1096,24 @@ def _compare_with_existing(existing, coarse_result, fine_result, coarse_records,
 
 def _calibration_config_payload() -> dict:
     return {
+        "calibration_profile": CALIBRATION_PROFILE,
+        "measurement_mode": CALIBRATION_MEASUREMENT_MODE,
+        "calibration_roi": CALIBRATION_ROI,
         "exposure_seconds": EXPOSURE_SECONDS,
+        "camera_gain": CAMERA_GAIN,
         "camera_backend": backend_name(),
+        "rotate_image_180": ROTATE_IMAGE_180,
+        "matrix_prefix": IDS_MATRIX_PREFIX if backend_name() == "ids" else "foco_temp",
         "settle_s": SETTLE_S,
         "captures_per_center": CAPTURES_PER_CENTER,
         "captures_per_point": CAPTURES_PER_POINT,
         "max_sample_attempts": MAX_SAMPLE_ATTEMPTS,
+        "min_fit_records": MIN_FIT_RECORDS,
         "post_fit_remeasure_passes": POST_FIT_REMEASURE_PASSES,
         "center_drift_weight": CENTER_DRIFT_WEIGHT,
         "fine_fit_use_smallest_radius": FINE_FIT_USE_SMALLEST_RADIUS,
         "drift_limits_px": DRIFT_LIMITS_PX,
+        "jitter_limits_px": JITTER_LIMITS_PX,
         "residual_retry_limits_px": RESIDUAL_RETRY_LIMITS_PX,
         "coarse_radii_deg": COARSE_RADII_DEG,
         "fine_radii_deg": FINE_RADII_DEG,
@@ -874,6 +1159,27 @@ def _save_regime_results(regime: str, result, records, output_dir=None) -> None:
     meta_output_path = json_output_path(f"{OUTPUT_PREFIX}_{regime}_meta.json", output_dir)
     with meta_output_path.open("w", encoding="utf-8") as fp:
         json.dump(payload, fp, indent=2)
+
+
+def _promote_roi_fine_to_tracker_coarse(result, output_dir=None) -> None:
+    """Evita que o tracker misture a fine nova com uma coarse antiga na mesma ROI."""
+    coarse_a_path, coarse_a_inv_path = _matrix_paths_for_regime("coarse", output_dir)
+    np.save(coarse_a_path, result["A"])
+    np.save(coarse_a_inv_path, result["A_inv"])
+    payload = {
+        "timestamp_epoch": time.time(),
+        "reason": "fine ROI promovida para coarse dentro da janela do tracker",
+        "config": _calibration_config_payload(),
+        "A": result["A"].tolist(),
+        "A_inv": result["A_inv"].tolist(),
+    }
+    path = json_output_path(f"{OUTPUT_PREFIX}_roi_tracker_meta.json", output_dir)
+    with path.open("w", encoding="utf-8") as fp:
+        json.dump(payload, fp, indent=2)
+    print(
+        "A mesma matriz ROI foi salva como fine e coarse para o tracker nao "
+        "misturar esta calibracao local com uma coarse antiga."
+    )
 
 
 def _save_dual_results(coarse_result, fine_result, coarse_records, fine_records, comparison, output_dir=None):
@@ -938,17 +1244,24 @@ def _print_summary(name: str, result):
 
 
 def _novo_diretorio_auditoria() -> Path:
-    base_dir = FOCO_DIR / "auditoria_foco_temp"
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    for suffix in range(100):
-        run_name = f"run_{timestamp}" if suffix == 0 else f"run_{timestamp}_{suffix:02d}"
-        audit_dir = base_dir / run_name
-        try:
-            audit_dir.mkdir(parents=True, exist_ok=False)
-            return audit_dir
-        except FileExistsError:
-            continue
-    raise RuntimeError(f"Nao consegui criar diretorio unico de auditoria em {base_dir}")
+    foco_dir = FOCO_DIR.resolve()
+    base_dir = (foco_dir / "auditoria_foco_temp").resolve()
+    if base_dir.parent != foco_dir or base_dir.name != "auditoria_foco_temp":
+        raise RuntimeError(f"Diretorio de auditoria inseguro: {base_dir}")
+
+    base_dir.mkdir(parents=True, exist_ok=True)
+    for old_entry in base_dir.iterdir():
+        if old_entry.is_symlink() or old_entry.is_file():
+            old_entry.unlink()
+        elif old_entry.is_dir():
+            shutil.rmtree(old_entry)
+        else:
+            raise RuntimeError(f"Entrada desconhecida na auditoria: {old_entry}")
+
+    timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+    audit_dir = base_dir / f"calibracao_{timestamp}"
+    audit_dir.mkdir(exist_ok=False)
+    return audit_dir
 
 
 def _write_mount_position_record(record: dict) -> Path:
@@ -1074,6 +1387,11 @@ def _return_to_initial_position(
 
 def main():
     global AUDIT_DIR, AUDIT_LOG
+    global CALIBRATION_ROI, CALIBRATION_MEASUREMENT_MODE, MANUAL_TARGET
+
+    CALIBRATION_ROI = None
+    CALIBRATION_MEASUREMENT_MODE = "sensor_completo"
+    MANUAL_TARGET = None
 
     ensure_connected()
     ensure_unparked()
@@ -1090,14 +1408,82 @@ def main():
     if target_input not in {"coarse", "fine", "ambos"}:
         raise ValueError("Escolha coarse, fine ou ambos.")
 
+    long_link_input = input(
+        "Calibracao no link longo UFF-CBPF (~7 km)? (s/N): "
+    ).strip().lower()
+    if long_link_input not in {"", "s", "sim", "n", "nao", "não"}:
+        raise ValueError("Responda s ou n para o perfil de link longo.")
+    _configure_calibration_profile(long_link_input in {"s", "sim"})
+
+    measurement_input = (
+        input(
+            "Medicao da calibracao (1=escolher ilha + ROI do tracker, "
+            "2=sensor completo) [1]: "
+        ).strip()
+        or "1"
+    )
+    if measurement_input not in {"1", "2"}:
+        raise ValueError("Escolha 1 para ROI manual ou 2 para sensor completo.")
+    use_manual_roi = measurement_input == "1"
+    if use_manual_roi and focus_mode != "dual":
+        print(
+            "A selecao manual de ilha usa o detector de componentes isolados; "
+            "o modo de foco foi alterado para dupla reflexao/ilhas."
+        )
+        focus_mode = set_focus_mode("dual")
+    if use_manual_roi and target_input != "fine":
+        print(
+            "O modo ROI do tracker calibra somente a matriz fine; "
+            f"a escolha '{target_input}' foi alterada para 'fine'."
+        )
+        target_input = "fine"
+
     mount = True
     AUDIT_LOG = []
     AUDIT_DIR = _novo_diretorio_auditoria()
+    calibration_started_epoch = time.time()
+    calibration_started = time.perf_counter()
+    get_asi_performance = None
+    print_asi_performance = None
+    if backend_name() == "alpaca":
+        from controle.camera_asi_fast import (
+            get_performance_stats,
+            print_performance_summary,
+            reset_performance_stats,
+        )
+
+        reset_performance_stats()
+        get_asi_performance = get_performance_stats
+        print_asi_performance = print_performance_summary
     initial_position = None
     position_record = None
 
     print(f"Modo de foco temporario: {focus_mode}")
     print(f"Regime de calibracao: {target_input}")
+    print(f"Medicao: {'ilha manual + ROI do tracker' if use_manual_roi else 'sensor completo'}")
+    if use_manual_roi:
+        print(f"Perfil base: {CALIBRATION_PROFILE}; parametros finais apos escolher a ilha.")
+    else:
+        print(
+            f"Perfil: {CALIBRATION_PROFILE} | "
+            f"frames por medicao={CAPTURES_PER_POINT} | "
+            f"tentativas={MAX_SAMPLE_ATTEMPTS} | "
+            f"raios fine={FINE_RADII_DEG} deg"
+        )
+    if CALIBRATION_PROFILE == "link_longo_7km":
+        print(
+            "Limites link longo (coarse/fine): "
+            f"drift aceitavel={DRIFT_LIMITS_PX['coarse']['accept']:.0f}/"
+            f"{DRIFT_LIMITS_PX['fine']['accept']:.0f}px, "
+            f"jitter aceitavel={JITTER_LIMITS_PX['coarse']['accept']:.0f}/"
+            f"{JITTER_LIMITS_PX['fine']['accept']:.0f}px."
+        )
+    print(
+        f"Camera {backend_name()}: ganho={CAMERA_GAIN}, "
+        f"exposicao={EXPOSURE_SECONDS * 1e6:.1f} us"
+    )
+    if backend_name() == "ids":
+        print(f"Imagem IDS rotacionada 180 graus: {'sim' if ROTATE_IMAGE_180 else 'nao'}")
     print("Usando montagem real. Esta versao temporaria nao pergunta por simulador.")
     print(f"Auditoria visual do foco em: {AUDIT_DIR}")
 
@@ -1121,6 +1507,14 @@ def main():
 
         connect_camera()
         set_gain(CAMERA_GAIN)
+
+        if use_manual_roi:
+            _prepare_manual_tracker_roi(focus_mode)
+            print(
+                f"Calibracao ROI pronta: perfil={CALIBRATION_PROFILE}, "
+                f"frames={CAPTURES_PER_POINT}, tentativas={MAX_SAMPLE_ATTEMPTS}, "
+                f"raios fine={FINE_RADII_DEG} deg."
+            )
 
         coarse_result = None
         coarse_records = None
@@ -1156,6 +1550,8 @@ def main():
 
         if target_input == "fine":
             _save_regime_results("fine", fine_result, fine_records)
+            if CALIBRATION_ROI is not None:
+                _promote_roi_fine_to_tracker_coarse(fine_result)
             print("\n=== Resumo Nova Calibracao FINE ===")
             _print_summary("FINE", fine_result)
             print(
@@ -1164,6 +1560,12 @@ def main():
                 f"{display_path(matrix_output_path(FINE_A_INV_PATH))}, "
                 f"{display_path(json_output_path(f'{OUTPUT_PREFIX}_fine_meta.json'))}"
             )
+            if CALIBRATION_ROI is not None:
+                print(
+                    "Tracker pronto para usar esta ROI: "
+                    f"{display_path(matrix_output_path(COARSE_A_PATH))}, "
+                    f"{display_path(matrix_output_path(COARSE_A_INV_PATH))}"
+                )
             return
 
         existing = _load_existing_matrix()
@@ -1241,6 +1643,29 @@ def main():
                 print(f"Aviso: nao consegui desconectar a camera pelo Alpaca: {exc}")
         else:
             print("Camera mantida conectada ao final da calibracao.")
+        if print_asi_performance is not None:
+            print_asi_performance()
+        total_seconds = time.perf_counter() - calibration_started
+        print(f"Tempo total da calibracao: {total_seconds:.1f} s.")
+        try:
+            execution_summary = {
+                "started_epoch": calibration_started_epoch,
+                "finished_epoch": time.time(),
+                "total_seconds": total_seconds,
+                "camera_backend": backend_name(),
+                "calibration_profile": CALIBRATION_PROFILE,
+                "measurement_mode": CALIBRATION_MEASUREMENT_MODE,
+                "calibration_roi": CALIBRATION_ROI,
+                "gain": CAMERA_GAIN,
+                "exposure_seconds": EXPOSURE_SECONDS,
+                "asi_performance": (
+                    get_asi_performance() if get_asi_performance is not None else None
+                ),
+            }
+            with (AUDIT_DIR / "resumo_execucao.json").open("w", encoding="utf-8") as fp:
+                json.dump(execution_summary, fp, indent=2)
+        except Exception as exc:
+            print(f"Aviso: nao consegui salvar o resumo de desempenho: {exc}")
 
 
 if __name__ == "__main__":

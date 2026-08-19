@@ -10,6 +10,7 @@ EXPOSURE_US = 7276.0       # 7.276 ms
 FRAME_RATE_FPS = 20.0
 ANALOG_GAIN = 1.0
 DIGITAL_GAIN = 1.0
+ROTATE_IMAGE_180 = False
 ```
 
 Depois de salvar o arquivo, teste novamente a aquisicao. Nao e necessario
@@ -82,7 +83,7 @@ python ".\Link UFF\Center_of_Mass_foco_temp_IDS.py"
 Calibracao angular-pixel:
 
 ```powershell
-python ".\Link UFF\Calibracao_ang_pix_foco_temp_IDS.py"
+python ".\Link UFF\calibracao_foco_ids.py"
 ```
 
 Tracker continuo (somente depois de calibrar com a IDS):
@@ -91,10 +92,24 @@ Tracker continuo (somente depois de calibrar com a IDS):
 python ".\Link UFF\Tracker_IDS.py"
 ```
 
+Para entender ou ajustar o tracker, abra `controle/Tracker.py`. Toda a logica
+esta nesse unico programa, dividida em blocos numerados: configuracao,
+camera/ROI, medicao do foco, controlador, matrizes, loop do mount e
+encerramento. Normalmente basta alterar o Bloco 1.
+
 Ambos usam por padrao `7276 us`, `20 fps`, ganho analogico `1`, ganho digital
 `1`, sensor completo e `Mono8`. A calibracao movimenta o mount e deve ser feita
 com o spot visivel, folga mecanica disponivel e possibilidade de interromper com
 `Ctrl+C`.
+
+Quando a calibracao perguntar se o teste ocorre no link longo UFF-CBPF, responda
+`s`. Esse perfil usa cinco frames por medicao e tolerancias proprias para drift
+atmosferico, mas ainda repete ou rejeita medidas com jitter extremo.
+
+Em cenas com varias luzes, escolha `1=escolher ilha + ROI do tracker`. Clique na
+ilha correta e pressione Enter. A IDS usa a mesma ROI `192 x 192` do tracker, a
+identidade escolhida fica congelada e somente a matriz fine local e medida. O
+tracker adota automaticamente o modo de ilha salvo ao ser iniciado depois.
 
 Os programas originais continuam usando a camera Alpaca/ASI. O backend IDS so e
 selecionado pelos executaveis desta pasta.
@@ -118,9 +133,13 @@ foco duplo medido estiver dentro da tolerancia de `2 px` do alvo escolhido. A
 imagem PNG continua sendo apenas uma auditoria visual; o tracker usa as
 coordenadas e a assinatura gravadas em `alvo_alinhamento_camera.json`.
 
-Por seguranca, a calibracao IDS salva matrizes separadas com prefixo
-`ids_foco_temp_`. O tracker IDS se recusa a iniciar se essas matrizes ainda nao
-existirem, em vez de usar acidentalmente as matrizes antigas da ASI.
+Por seguranca, a orientacao da imagem tambem separa os artefatos. Com
+`ROTATE_IMAGE_180 = False`, a calibracao salva matrizes com prefixo
+`ids_raw_foco_temp_` e o alvo em `alvo_alinhamento_camera_sem_rotacao.json`.
+As matrizes antigas `ids_foco_temp_`, geradas com rotacao de 180 graus, nao sao
+reutilizadas. Depois de mudar essa opcao, execute novamente o centro de massa e
+a calibracao antes do tracker. Para restaurar o comportamento antigo, troque a
+opcao para `True`.
 
 Ao receber `Ctrl+C` ou sair normalmente, centro de massa, calibracao e tracker
 tentam enviar velocidade zero ate duas vezes e de forma independente para cada eixo.
