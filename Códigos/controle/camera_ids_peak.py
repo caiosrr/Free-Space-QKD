@@ -7,7 +7,9 @@ USB e realocar buffers a cada frame.
 from __future__ import annotations
 
 import ctypes
+import math
 import os
+import time
 from typing import Any
 
 import numpy as np
@@ -19,6 +21,8 @@ DEFAULT_ANALOG_GAIN = float(os.environ.get("QKD_IDS_ANALOG_GAIN", "1"))
 DEFAULT_DIGITAL_GAIN = float(os.environ.get("QKD_IDS_DIGITAL_GAIN", "1"))
 DEFAULT_DEVICE_INDEX = int(os.environ.get("QKD_IDS_DEVICE", "0"))
 CAPTURE_TIMEOUT_MS = int(os.environ.get("QKD_IDS_TIMEOUT_MS", "5000"))
+BUFFER_COUNT = max(3, int(os.environ.get("QKD_IDS_BUFFER_COUNT", "8")))
+MIN_FRAME_WAIT_TIMEOUT_MS = 500
 
 
 class IDSPeakCamera:
@@ -31,6 +35,9 @@ class IDSPeakCamera:
         self.acquisition_started = False
         self.params_locked = False
         self.pixel_format = None
+        self.stream_recovery_count = 0
+        self.allocated_buffer_count = 0
+        self.current_roi = None
 
     def _node(self, name: str) -> Any:
         if self.nodemap is None:
@@ -176,7 +183,10 @@ class IDSPeakCamera:
 
             width = int(self._node("Width").Value())
             height = int(self._node("Height").Value())
+            offset_x = int(self._node("OffsetX").Value())
+            offset_y = int(self._node("OffsetY").Value())
             self._start_acquisition()
+            self.current_roi = (width, height, offset_x, offset_y)
 
             print(
                 f"Camera IDS conectada: {descriptor.DisplayName()} | {width}x{height} | "
@@ -199,19 +209,80 @@ class IDSPeakCamera:
         if self.data_stream is None:
             raise RuntimeError("DataStream IDS nao aberto.")
         payload_size = int(self._node("PayloadSize").Value())
-        for _ in range(self.data_stream.NumBuffersAnnouncedMinRequired()):
+        minimum_buffers = int(self.data_stream.NumBuffersAnnouncedMinRequired())
+        buffer_count = max(minimum_buffers, BUFFER_COUNT)
+        for _ in range(buffer_count):
             buffer = self.data_stream.AllocAndAnnounceBuffer(payload_size)
             self.data_stream.QueueBuffer(buffer)
+        self.allocated_buffer_count = buffer_count
+        self.data_stream.StartAcquisition()
         try:
             self._node("TLParamsLocked").SetValue(1)
             self.params_locked = True
         except Exception:
             pass
-        self.data_stream.StartAcquisition()
         start = self._node("AcquisitionStart")
         start.Execute()
         start.WaitUntilDone()
         self.acquisition_started = True
+
+    def _frame_wait_timeout_ms(self) -> int:
+        """Usa cerca de tres periodos de frame sem esperar 5 s por falha."""
+        fps = DEFAULT_FPS
+        try:
+            fps = float(self._node("AcquisitionFrameRate").Value())
+        except Exception:
+            pass
+        three_frames_ms = int(math.ceil(3000.0 / max(fps, 0.1)))
+        adaptive_timeout = max(MIN_FRAME_WAIT_TIMEOUT_MS, three_frames_ms)
+        return max(100, min(CAPTURE_TIMEOUT_MS, adaptive_timeout))
+
+    def _restart_stream_after_failure(self) -> None:
+        """Reconstrói buffers e reinicia a aquisição mantendo ROI/parâmetros."""
+        print("Camera IDS sem frames: reiniciando DataStream e buffers...")
+        self._stop_acquisition(revoke_buffers=True)
+        self._start_acquisition()
+        self.stream_recovery_count += 1
+        print(
+            "DataStream IDS recuperado "
+            f"(reinicio {self.stream_recovery_count}, "
+            f"buffers={self.allocated_buffer_count})."
+        )
+
+    def _current_roi(self) -> tuple[int, int, int, int]:
+        if self.current_roi is not None:
+            return tuple(self.current_roi)
+        return (
+            int(self._node("Width").Value()),
+            int(self._node("Height").Value()),
+            int(self._node("OffsetX").Value()),
+            int(self._node("OffsetY").Value()),
+        )
+
+    def _reconnect_device_preserving_roi(
+        self,
+        roi: tuple[int, int, int, int],
+    ) -> None:
+        """Reabre o dispositivo e restaura a ROI após falha persistente."""
+        print("DataStream ainda sem frames: reconectando o dispositivo IDS...")
+        self.disconnect()
+        time.sleep(0.25)
+        self.connect()
+        width, height, offset_x, offset_y = roi
+        sensor_width, sensor_height = self.get_sensor_size()
+        if (width, height, offset_x, offset_y) != (
+            sensor_width,
+            sensor_height,
+            0,
+            0,
+        ):
+            restored = self.set_roi(width, height, offset_x, offset_y)
+            if restored != roi:
+                raise RuntimeError(f"ROI IDS nao foi restaurada: {restored} != {roi}.")
+        print(
+            "Dispositivo IDS reconectado; ROI restaurada para "
+            f"{width}x{height} em ({offset_x}, {offset_y})."
+        )
 
     def _stop_acquisition(self, revoke_buffers: bool = True) -> None:
         if self.data_stream is None:
@@ -223,6 +294,11 @@ class IDSPeakCamera:
                 stop.WaitUntilDone()
             except Exception:
                 pass
+        if self.params_locked:
+            try:
+                self._node("TLParamsLocked").SetValue(0)
+            except Exception:
+                pass
         try:
             if self.data_stream.IsGrabbing():
                 self.data_stream.StopAcquisition(self.ids_peak.AcquisitionStopMode_Default)
@@ -232,11 +308,6 @@ class IDSPeakCamera:
             self.data_stream.Flush(self.ids_peak.DataStreamFlushMode_DiscardAll)
         except Exception:
             pass
-        if self.params_locked:
-            try:
-                self._node("TLParamsLocked").SetValue(0)
-            except Exception:
-                pass
         self.acquisition_started = False
         self.params_locked = False
         if revoke_buffers:
@@ -260,7 +331,8 @@ class IDSPeakCamera:
             actual_x = self._set_integer(self._node("OffsetX"), int(offset_x))
             actual_y = self._set_integer(self._node("OffsetY"), int(offset_y))
             self._start_acquisition()
-            return actual_w, actual_h, actual_x, actual_y
+            self.current_roi = (actual_w, actual_h, actual_x, actual_y)
+            return self.current_roi
         except Exception:
             # Tenta deixar a camera utilizavel mesmo se uma ROI for rejeitada.
             if not self.acquisition_started:
@@ -304,6 +376,15 @@ class IDSPeakCamera:
         address = int(buffer.BasePtr())
         return np.ctypeslib.as_array(raw_type.from_address(address)).reshape(height, width).copy()
 
+    def _capture_once(self, timeout_ms: int) -> np.ndarray:
+        buffer = self.data_stream.WaitForFinishedBuffer(self.ids_peak.Timeout(timeout_ms))
+        try:
+            if buffer.IsIncomplete():
+                raise RuntimeError("A camera IDS entregou um frame incompleto.")
+            return self._buffer_to_numpy(buffer)
+        finally:
+            self.data_stream.QueueBuffer(buffer)
+
     def capture(self, exposure_seconds: float) -> np.ndarray:
         if not self.acquisition_started or self.data_stream is None:
             raise RuntimeError("Camera IDS nao conectada.")
@@ -316,13 +397,38 @@ class IDSPeakCamera:
         except Exception:
             pass
 
-        buffer = self.data_stream.WaitForFinishedBuffer(self.ids_peak.Timeout(CAPTURE_TIMEOUT_MS))
+        timeout_ms = self._frame_wait_timeout_ms()
+        roi_before_failure = self._current_roi()
         try:
-            if buffer.IsIncomplete():
-                raise RuntimeError("A camera IDS entregou um frame incompleto.")
-            return self._buffer_to_numpy(buffer)
-        finally:
-            self.data_stream.QueueBuffer(buffer)
+            return self._capture_once(timeout_ms)
+        except Exception as first_error:
+            try:
+                self._restart_stream_after_failure()
+            except Exception as recovery_error:
+                raise RuntimeError(
+                    "Falha IDS e nao foi possivel reiniciar o DataStream: "
+                    f"captura={first_error}; recuperacao={recovery_error}"
+                ) from recovery_error
+            try:
+                return self._capture_once(timeout_ms)
+            except Exception as second_error:
+                try:
+                    self._reconnect_device_preserving_roi(roi_before_failure)
+                except Exception as reconnect_error:
+                    raise RuntimeError(
+                        "A IDS continuou sem frames e a reconexao falhou: "
+                        f"captura={first_error}; stream={second_error}; "
+                        f"reconexao={reconnect_error}"
+                    ) from reconnect_error
+                try:
+                    return self._capture_once(timeout_ms)
+                except Exception as third_error:
+                    raise RuntimeError(
+                        "A IDS continuou sem frames mesmo depois de reiniciar "
+                        "o stream e reconectar o dispositivo: "
+                        f"antes={first_error}; stream={second_error}; "
+                        f"depois={third_error}"
+                    ) from third_error
 
     def disconnect(self) -> None:
         if self.ids_peak is None and not self.library_initialized:

@@ -125,6 +125,67 @@ class TrackerSafetyTests(unittest.TestCase):
         self.assertEqual(len(movements), 1)
         self.assertEqual(movements[0][3], tracker.RETURN_MAX_RATE_DEG_S)
 
+    def test_observation_mode_never_sends_axis_velocity(self):
+        state = tracker.SharedState()
+
+        def stop_after_first_cycle(_seconds):
+            with state.lock:
+                state.stop = True
+
+        with (
+            patch.object(tracker, "move_axis") as move_axis,
+            patch.object(tracker, "stop_axes_safely", return_value=True),
+            patch.object(tracker.time, "sleep", side_effect=stop_after_first_cycle),
+        ):
+            tracker.control_loop_continuo(
+                state,
+                np.eye(2),
+                np.eye(2),
+                usar_mount=False,
+            )
+
+        move_axis.assert_not_called()
+
+    def test_ids_roi_rounding_recalculates_local_target(self):
+        local_x, local_y = tracker._target_local_in_actual_roi(
+            2592,
+            1944,
+            1175.57,
+            963.16,
+            (252, 256, 1096, 866),
+            "direct",
+        )
+        self.assertAlmostEqual(local_x, 79.57)
+        self.assertAlmostEqual(local_y, 97.16)
+
+    def test_runtime_target_selection_does_not_replace_calibration_target(self):
+        selection = {
+            "x_px": 320.0,
+            "y_px": 240.0,
+            "signature": {"version": 2, "primary": {"raw_peak": 1}},
+        }
+        with (
+            patch("builtins.input", return_value="1"),
+            patch.object(tracker, "reset_camera_roi"),
+            patch.object(tracker, "carregar_alvo_salvo") as load_saved,
+            patch.object(
+                tracker,
+                "capture_frame",
+                return_value=np.zeros((480, 640), dtype=np.uint8),
+            ),
+            patch.object(
+                tracker.foco_temp,
+                "escolher_ilha_manualmente",
+                return_value=selection,
+            ),
+            patch.object(tracker.foco_temp, "reset_focus_lock"),
+        ):
+            target = tracker.escolher_referencia_tracker(640, 480, "dual")
+
+        self.assertEqual(target.source, "manual_tracker_session")
+        self.assertEqual((target.x_px, target.y_px), (320.0, 240.0))
+        load_saved.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -86,11 +86,33 @@ Calibracao angular-pixel:
 python ".\Link UFF\calibracao_foco_ids.py"
 ```
 
+Calibracao alternativa por varredura continua (recomendada quando a luz muda
+de forma ou se desloca muito entre os pontos da calibracao tradicional):
+
+```powershell
+python ".\Link UFF\calibracao_varredura_continua_ids.py"
+```
+
+Ela faz quatro trajetorias lentas de `0.008 deg`, capturando durante o
+movimento: Az nos dois sentidos e Alt nos dois sentidos. A matriz so pode ser
+ativada se ida e volta concordarem e a resposta em pixels superar o ruido. Ao
+aprovar, o programa pergunta se deve ativa-la no tracker. Antes da ativacao,
+as matrizes vigentes sao copiadas para
+`Link UFF/resultados/calibracao/backups/`; a calibracao tradicional e seus
+arquivos continuam disponiveis.
+
 Tracker continuo (somente depois de calibrar com a IDS):
 
 ```powershell
 python ".\Link UFF\Tracker_IDS.py"
 ```
+
+O tracker pode usar uma luz diferente daquela empregada na calibracao. Na
+opcao padrao `1=selecionar a luz agora`, recorte a regiao e clique na ilha que
+sera acompanhada naquela sessao. Essa escolha e temporaria: ela nao altera as
+matrizes nem o alvo salvo pela calibracao. Isso permite calibrar numa fonte
+estavel, retornar o telescopio para a fonte intermitente e so entao iniciar o
+tracker.
 
 Para entender ou ajustar o tracker, abra `controle/Tracker.py`. Toda a logica
 esta nesse unico programa, dividida em blocos numerados: configuracao,
@@ -106,19 +128,28 @@ Quando a calibracao perguntar se o teste ocorre no link longo UFF-CBPF, responda
 `s`. Esse perfil usa cinco frames por medicao e tolerancias proprias para drift
 atmosferico, mas ainda repete ou rejeita medidas com jitter extremo.
 
-Em cenas com varias luzes, escolha `1=escolher ilha + ROI do tracker`. Clique na
-ilha correta e pressione Enter. A IDS usa a mesma ROI `192 x 192` do tracker, a
-identidade escolhida fica congelada e somente a matriz fine local e medida. O
-tracker adota automaticamente o modo de ilha salvo ao ser iniciado depois.
+Em cenas com varias luzes, escolha `1=escolher ilha + ROI do tracker`. Na
+primeira tela, arraste um retangulo ao redor da regiao onde esta a luz e
+pressione Enter. O limiar e recalculado somente dentro desse recorte. Na segunda
+tela, clique na ilha correta e pressione Enter. Use `-`/`+` para diminuir ou
+aumentar o threshold sem reiniciar e `R` para refazer o recorte. A IDS usa a
+mesma ROI `256 x 256` do tracker, a identidade escolhida fica congelada e
+somente a matriz fine local e medida. O tracker adota automaticamente o modo de
+ilha salvo ao ser iniciado depois.
 
 Os programas originais continuam usando a camera Alpaca/ASI. O backend IDS so e
 selecionado pelos executaveis desta pasta.
 
-O tracker IDS usa ROI nativa de `192 x 192` pixels. Esse tamanho respeita os
+O tracker IDS usa ROI nativa de `256 x 256` pixels. Esse tamanho respeita os
 incrementos de largura da U3-3680XCP-NIR. As posicoes da ROI tambem sao
 alinhadas aos passos de hardware (`OffsetX=8`, `OffsetY=2`). Antes do primeiro
 uso, gere as matrizes com a calibracao IDS e teste com velocidade/erro pequenos,
 mantendo `q` ou `Ctrl+C` prontos para interromper.
+
+O backend mantem oito buffers de aquisicao. Se a IDS parar de entregar frames,
+primeiro reinicia o DataStream e realoca os buffers; se isso nao bastar, reabre
+o dispositivo e restaura a ROI anterior. Uma falha persistente ainda encerra o
+programa para que o mount nao continue operando sem imagem.
 
 No modo de dupla reflexao, ao definir uma nova referencia pela posicao inicial,
 o centro de massa salva junto ao alvo uma assinatura do foco escolhido: pico,

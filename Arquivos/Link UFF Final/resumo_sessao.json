@@ -1,0 +1,15 @@
+{
+  "started_at": "2026-08-19T17:53:04-03:00",
+  "initial_azimuth_deg": 359.6675,
+  "initial_altitude_deg": -0.14888888888888888,
+  "max_session_hours": 2.0,
+  "max_offset_az_deg": 5.0,
+  "max_offset_alt_deg": 5.0,
+  "roi_size_px": 256,
+  "hold_enter_radius_px": 4.0,
+  "hold_exit_radius_px": 6.0,
+  "csv_path": "Link UFF\\resultados\\tracker\\sessoes\\tracker_2026-08-19_17-53-04\\telemetria.csv",
+  "finished_at": "2026-08-19T19:32:05-03:00",
+  "finish_reason": "encerrado_pelo_teclado",
+  "return_to_start": null
+}

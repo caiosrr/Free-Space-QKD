@@ -59,6 +59,7 @@ from config_tracker import (
     RETURN_TO_START_ON_LIMIT,
     RETURN_TOLERANCE_DEG,
     SIGNAL_LOSS_LIMIT_SECONDS,
+    TRACKER_MAX_SPOT_JUMP_PX,
     VARIANCE_WINDOW_SECONDS,
     WATCHDOG_READ_FAILURES,
     roi_size_for_backend,
@@ -120,6 +121,9 @@ SIGNAL_TIMEOUT_S = 0.45
 
 # Limite de seguranca da velocidade enviada ao mount, em graus por segundo.
 VEL_MAX_TESTE = min(MAX_TRACKING_RATE_DEG_S, VEL_MAX_LIMITE)
+SAFE_TEST_MAX_RATE_DEG_S = 0.003
+SAFE_TEST_MAX_OFFSET_DEG = 0.010
+SAFE_TEST_MAX_SECONDS = 60.0
 
 # Usa a matriz fina perto do alvo e a grossa quando o erro e maior.
 FINE_MATRIX_ENTER_RADIUS_PX = 8.0
@@ -251,17 +255,53 @@ def _roi_params_for_target(
     return start_x, start_y, local_x, local_y
 
 
-def _apply_camera_roi(w: int, h: int, start_x: int, start_y: int) -> None:
+def _target_local_in_actual_roi(
+    sensor_w: int,
+    sensor_h: int,
+    target_x: float,
+    target_y: float,
+    actual_roi: tuple[int, int, int, int],
+    mode: str,
+) -> tuple[float, float]:
+    """Recalcula o alvo quando o hardware arredonda tamanho/offset da ROI."""
+    actual_w, actual_h, actual_x, actual_y = actual_roi
+    if mode == "rot180_ascom_axes":
+        raw_x = (sensor_w - 1) - target_y
+        raw_y = (sensor_h - 1) - target_x
+        return (
+            float((actual_h - 1) - (raw_y - actual_y)),
+            float((actual_w - 1) - (raw_x - actual_x)),
+        )
+    if mode == "rot180":
+        raw_x = (sensor_w - 1) - target_x
+        raw_y = (sensor_h - 1) - target_y
+        return (
+            float((actual_w - 1) - (raw_x - actual_x)),
+            float((actual_h - 1) - (raw_y - actual_y)),
+        )
+    return float(target_x - actual_x), float(target_y - actual_y)
+
+
+def _apply_camera_roi(
+    w: int,
+    h: int,
+    start_x: int,
+    start_y: int,
+) -> tuple[int, int, int, int]:
     if backend_name() == "ids":
         actual = _ids_camera().set_roi(w, h, start_x, start_y)
         expected = (w, h, start_x, start_y)
         if actual != expected:
-            raise RuntimeError(f"ROI IDS ajustada de {expected} para {actual}.")
-        return
+            print(
+                f"Aviso: a IDS alinhou a ROI de {expected} para {actual}; "
+                "o alvo local sera recalculado automaticamente."
+            )
+        return actual
     call("PUT", "numx", data={"NumX": w})
     call("PUT", "numy", data={"NumY": h})
     call("PUT", "startx", data={"StartX": start_x})
     call("PUT", "starty", data={"StartY": start_y})
+    return w, h, start_x, start_y
 
 
 def set_camera_roi(w: int, h: int, target_x: float | None = None, target_y: float | None = None) -> tuple[int, int, float, float]:
@@ -287,8 +327,16 @@ def set_camera_roi(w: int, h: int, target_x: float | None = None, target_y: floa
             f"Cortando o sensor na fonte: ROI {w}x{h} px em "
             f"Start=({start_x}, {start_y}); alvo local=({target_x_local:.1f}, {target_y_local:.1f})"
         )
-        _apply_camera_roi(w, h, start_x, start_y)
-        return start_x, start_y, target_x_local, target_y_local
+        actual_roi = _apply_camera_roi(w, h, start_x, start_y)
+        target_x_local, target_y_local = _target_local_in_actual_roi(
+            max_x,
+            max_y,
+            target_x,
+            target_y,
+            actual_roi,
+            mode="rot180" if ROTATE_IMAGE_180 else "direct",
+        )
+        return actual_roi[2], actual_roi[3], target_x_local, target_y_local
     except Exception as exc:
         print(f"Erro ao setar ROI via hardware: {exc}")
         return 0, 0, w / 2, h / 2
@@ -344,12 +392,25 @@ def set_camera_roi_validated(
             f"Testando ROI ({description}): Start=({start_x}, {start_y}), "
             f"alvo local=({target_x_local:.1f}, {target_y_local:.1f})"
         )
-        _apply_camera_roi(w, h, start_x, start_y)
+        actual_roi = _apply_camera_roi(w, h, start_x, start_y)
+        actual_w, actual_h, start_x, start_y = actual_roi
+        target_x_local, target_y_local = _target_local_in_actual_roi(
+            max_x,
+            max_y,
+            target_x,
+            target_y,
+            actual_roi,
+            mode,
+        )
+        if not (0 <= target_x_local < actual_w and 0 <= target_y_local < actual_h):
+            print("  -> o ajuste do hardware deixou o alvo fora dessa ROI.")
+            continue
         if _normalize_focus_mode(focus_mode) == "dual":
             foco_temp.initialize_focus_lock(
                 focus_signature,
                 target_x_local,
                 target_y_local,
+                max_jump_px=TRACKER_MAX_SPOT_JUMP_PX,
             )
         frame_test = capture_frame(EXPOSURE_SECONDS)
         cm = medir_laser(frame_test, focus_mode)
@@ -371,16 +432,27 @@ def set_camera_roi_validated(
                 focus_signature,
                 fallback[2],
                 fallback[3],
+                max_jump_px=TRACKER_MAX_SPOT_JUMP_PX,
             )
         return fallback
 
     _, start_x, start_y, target_x_local, target_y_local, mode, frame_test = best
-    _apply_camera_roi(w, h, start_x, start_y)
+    actual_roi = _apply_camera_roi(w, h, start_x, start_y)
+    actual_w, actual_h, start_x, start_y = actual_roi
+    target_x_local, target_y_local = _target_local_in_actual_roi(
+        max_x,
+        max_y,
+        target_x,
+        target_y,
+        actual_roi,
+        mode,
+    )
     if _normalize_focus_mode(focus_mode) == "dual":
         foco_temp.initialize_focus_lock(
             focus_signature,
             target_x_local,
             target_y_local,
+            max_jump_px=TRACKER_MAX_SPOT_JUMP_PX,
         )
     debug_path = TRACKER_OUTPUT_DIR / "tracker_roi_teste.png"
     debug_path.parent.mkdir(parents=True, exist_ok=True)
@@ -413,6 +485,38 @@ def reset_camera_roi() -> None:
 def escolher_referencia_tracker(sensor_w: int, sensor_h: int, focus_mode: str) -> AlvoAlinhamento:
     reset_camera_roi()
     saved_target = carregar_alvo_salvo()
+
+    if _normalize_focus_mode(focus_mode) == "dual":
+        target_choice = (
+            input(
+                "Alvo desta sessao (1=selecionar a luz agora, "
+                "2=usar alvo salvo pela calibracao) [1]: "
+            ).strip()
+            or "1"
+        )
+        if target_choice not in {"1", "2"}:
+            raise ValueError("Escolha 1 para selecionar agora ou 2 para usar o alvo salvo.")
+        if target_choice == "1":
+            foco_temp.reset_focus_lock()
+            frame = capture_frame(EXPOSURE_SECONDS)
+            selection = foco_temp.escolher_ilha_manualmente(
+                frame,
+                max_jump_px=TRACKER_MAX_SPOT_JUMP_PX,
+            )
+            print(
+                "Alvo temporario desta sessao: "
+                f"({selection['x_px']:.2f}, {selection['y_px']:.2f}) px. "
+                "As matrizes e o alvo salvo da calibracao nao foram alterados."
+            )
+            return AlvoAlinhamento(
+                x_px=float(selection["x_px"]),
+                y_px=float(selection["y_px"]),
+                source="manual_tracker_session",
+                path=None,
+                focus_mode="dual",
+                focus_signature=selection["signature"],
+            )
+
     saved_signature = None
     if (
         _normalize_focus_mode(focus_mode) == "dual"
@@ -425,6 +529,7 @@ def escolher_referencia_tracker(sensor_w: int, sensor_h: int, focus_mode: str) -
             saved_signature,
             saved_target.x_px,
             saved_target.y_px,
+            max_jump_px=TRACKER_MAX_SPOT_JUMP_PX,
         ):
             print("Assinatura do foco salva carregada antes da busca no frame completo.")
     elif _normalize_focus_mode(focus_mode) == "dual":
@@ -1425,9 +1530,9 @@ def control_loop_continuo(
 
                 future_az = None
                 future_alt = None
-                if send_az:
+                if usar_mount and send_az:
                     future_az = executor.submit(move_axis, 0, cmd_az, usar_mount)
-                if send_alt:
+                if usar_mount and send_alt:
                     future_alt = executor.submit(move_axis, 1, cmd_alt, usar_mount)
 
                 if future_az is not None:
@@ -1465,11 +1570,17 @@ def control_loop_continuo(
 # mount mesmo quando ocorre erro, Ctrl+C ou fechamento da janela.
 
 def main():
+    global VEL_MAX_TESTE, MAX_OFFSET_AZ_DEG, MAX_OFFSET_ALT_DEG
+
     logger = None
     return_result = None
     finish_reason = "encerramento_normal"
     last_frame = None
     initial_position = None
+    usar_mount = False
+    safe_mount_test = False
+    observation_only = True
+    operation_label = "OBSERVACAO - MOUNT SEM MOVIMENTO"
     try:
         ensure_connected()
         ensure_unparked()
@@ -1492,23 +1603,48 @@ def main():
         )
         focus_mode = _normalize_focus_mode(focus_input)
         foco_temp.set_focus_mode(focus_mode)
+        operation_input = (
+            input(
+                "Operacao (1=observar sem mover, 2=teste limitado do mount, "
+                "3=tracking normal) [1]: "
+            ).strip()
+            or "1"
+        )
+        if operation_input not in {"1", "2", "3"}:
+            raise ValueError("Escolha 1, 2 ou 3 para o modo de operacao.")
+        usar_mount = operation_input in {"2", "3"}
+        safe_mount_test = operation_input == "2"
+        observation_only = operation_input == "1"
+        if safe_mount_test:
+            VEL_MAX_TESTE = min(SAFE_TEST_MAX_RATE_DEG_S, VEL_MAX_LIMITE)
+            MAX_OFFSET_AZ_DEG = SAFE_TEST_MAX_OFFSET_DEG
+            MAX_OFFSET_ALT_DEG = SAFE_TEST_MAX_OFFSET_DEG
+            default_session_hours = SAFE_TEST_MAX_SECONDS / 3600.0
+            operation_label = "TESTE LIMITADO DO MOUNT"
+        elif observation_only:
+            default_session_hours = 30.0 / 3600.0
+            operation_label = "OBSERVACAO - MOUNT SEM MOVIMENTO"
+        else:
+            default_session_hours = MAX_SESSION_HOURS
+            operation_label = "TRACKING NORMAL"
         session_hours_input = input(
-            f"Tempo maximo da sessao em horas [{MAX_SESSION_HOURS:g}]: "
+            f"Tempo maximo da sessao em horas [{default_session_hours:g}]: "
         ).strip()
         session_hours = (
             float(session_hours_input.replace(",", "."))
             if session_hours_input
-            else MAX_SESSION_HOURS
+            else default_session_hours
         )
         if session_hours <= 0.0:
             raise ValueError("O tempo maximo da sessao precisa ser positivo.")
+        if safe_mount_test:
+            session_hours = min(session_hours, SAFE_TEST_MAX_SECONDS / 3600.0)
 
         matrices = _load_tracking_calibration_matrices(focus_mode)
         sensor_w, sensor_h = get_camera_size()
         alvo = escolher_referencia_tracker(sensor_w, sensor_h, focus_mode)
 
         state = SharedState()
-        usar_mount = True
         initial_az_deg, initial_alt_deg = read_altaz()
         initial_position = (initial_az_deg, initial_alt_deg)
         session_started = time.perf_counter()
@@ -1534,9 +1670,24 @@ def main():
         cv2.setWindowProperty(win_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
         print("\nTracker continuo V2 iniciado.")
+        print(f"MODO: {operation_label}")
+        if observation_only:
+            print(
+                "GARANTIA: este modo calcula e registra correcoes, mas nao envia "
+                "velocidades de movimento ao mount (somente a parada em zero de seguranca)."
+            )
+        elif safe_mount_test:
+            print(
+                f"LIMITES DO TESTE: velocidade=+/-{VEL_MAX_TESTE:.4f} deg/s | "
+                f"deslocamento=+/-{SAFE_TEST_MAX_OFFSET_DEG:.3f} deg | "
+                f"tempo<={SAFE_TEST_MAX_SECONDS:.0f}s."
+            )
         print("ROI nativa da camera, zona de repouso e watchdog absoluto.")
         print(f"Imagem IDS rotacionada 180 graus: {'sim' if ROTATE_IMAGE_180 else 'nao'}")
-        print(f"Modo do laser: {focus_mode} | usando mount real.")
+        print(
+            f"Modo do laser: {focus_mode} | "
+            f"movimento do mount: {'habilitado' if usar_mount else 'bloqueado'}."
+        )
         print(
             f"Matrizes carregadas | fine: {matrices['fine_path']} | "
             f"coarse: {matrices['coarse_path']}"
@@ -1579,10 +1730,15 @@ def main():
         ctrl_thread.start()
         watchdog_thread.start()
 
-        scale_upscale = TARGET_H / WINDOW_SIZE
-        target_w = int(WINDOW_SIZE * scale_upscale)
-        cx_L = int(target_x_local * scale_upscale)
-        cy_L = int(target_y_local * scale_upscale)
+        actual_roi_w = WINDOW_SIZE
+        actual_roi_h = WINDOW_SIZE
+        if backend_name() == "ids" and _ids_camera().current_roi is not None:
+            actual_roi_w, actual_roi_h = _ids_camera().current_roi[:2]
+        scale_y = TARGET_H / actual_roi_h
+        target_w = max(1, int(round(actual_roi_w * scale_y)))
+        scale_x = target_w / actual_roi_w
+        cx_L = int(target_x_local * scale_x)
+        cy_L = int(target_y_local * scale_y)
         display_interval_s = 1.0 / DISPLAY_HZ
         last_display_t = 0.0
         last_measurement_t = 0.0
@@ -1691,6 +1847,12 @@ def main():
             elif hold_active:
                 status_text = "CENTRALIZADO - REPOUSO"
                 status_color = (0, 255, 0)
+            elif observation_only:
+                status_text = "OBSERVANDO - SEM MOVER"
+                status_color = (0, 255, 255)
+            elif safe_mount_test:
+                status_text = "TESTE LIMITADO"
+                status_color = (0, 255, 255)
             else:
                 status_text = "RASTREANDO"
                 status_color = (0, 255, 255)
@@ -1724,8 +1886,8 @@ def main():
                     interpolation=cv2.INTER_NEAREST,
                 )
 
-                x_cm_L = int(x_cm_local * scale_upscale)
-                y_cm_L = int(y_cm_local * scale_upscale)
+                x_cm_L = int(x_cm_local * scale_x)
+                y_cm_L = int(y_cm_local * scale_y)
 
                 cv2.line(frame_display_large, (cx_L, 0), (cx_L, TARGET_H), (255, 0, 0), 2)
                 cv2.line(frame_display_large, (0, cy_L), (target_w, cy_L), (0, 0, 255), 2)
@@ -1788,7 +1950,8 @@ def main():
                 cv2.putText(
                     frame_display_large,
                     (
-                        f"Velocidade enviada: Az={cmd_az_deg_s:+.4f} deg/s | "
+                        f"Velocidade {'calculada' if observation_only else 'enviada'}: "
+                        f"Az={cmd_az_deg_s:+.4f} deg/s | "
                         f"Alt={cmd_alt_deg_s:+.4f} deg/s"
                     ),
                     (40, 210),
@@ -1858,13 +2021,14 @@ def main():
             pass
 
         if (
-            safety_reason
+            (safety_reason or safe_mount_test)
             and initial_position is not None
+            and usar_mount
             and RETURN_TO_START_ON_LIMIT
         ):
             print(
                 "Retornando a posicao absoluta inicial antes de encerrar "
-                f"(motivo: {safety_reason})."
+                f"(motivo: {safety_reason or 'fim_do_teste_limitado'})."
             )
             return_result = _return_to_initial_position(*initial_position)
             if return_result.get("success"):

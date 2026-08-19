@@ -34,12 +34,17 @@ from foco_multiplos.Center_of_Mass_foco_temp import (
     initialize_focus_lock,
     get_focus_mode,
     set_gain,
+    set_focus_expected_position,
     set_focus_mode,
 )
 from controle.alvo_alinhamento import roi_incluindo_alvo, salvar_alvo
 from config_camera_asi import EXPOSURE_SECONDS as ASI_EXPOSURE_SECONDS
 from config_camera_asi import GAIN as ASI_GAIN
-from config_tracker import FINE_CALIBRATION_RADII_DEG, roi_size_for_backend
+from config_tracker import (
+    FINE_CALIBRATION_RADII_DEG,
+    TRACKER_MAX_SPOT_JUMP_PX,
+    roi_size_for_backend,
+)
 from controle.mount_control import (
     TOLERANCIA_GRAUS,
     calc_error,
@@ -77,6 +82,15 @@ MAX_SAMPLE_ATTEMPTS = 3
 POST_FIT_REMEASURE_PASSES = 2
 CENTER_DRIFT_WEIGHT = 0.50
 DISCONNECT_CAMERA_ON_EXIT = True
+# Uma luz modulada pode desaparecer em alguns frames. Cada medicao coleta a
+# quantidade pedida de frames validos, mas respeita estes limites para nunca
+# ficar esperando indefinidamente com o mount parado ou deslocado.
+VALID_FRAME_ATTEMPT_FACTOR = 5
+VALID_FRAME_MAX_WAIT_S = 3.0
+VALID_FRAME_MAX_ATTEMPTS = 240
+# Perto da posicao inicial, uma ancora curta impede que o lock caminhe para
+# outra luz enquanto o alvo verdadeiro esta na fase apagada.
+CENTER_REACQUIRE_RADIUS_PX = TRACKER_MAX_SPOT_JUMP_PX
 # A calibracao manual usa varios raios; o ajuste robusto deve combinar todos.
 FINE_FIT_USE_SMALLEST_RADIUS = False
 DRIFT_LIMITS_PX = {
@@ -230,7 +244,10 @@ def _prepare_manual_tracker_roi(focus_mode: str) -> dict:
     global RESIDUAL_RETRY_LIMITS_PX
 
     roi_size = roi_size_for_backend(backend_name())
-    max_jump_px = float((roi_size / 2) - 10)
+    # Usa a mesma continuidade espacial aprovada no tracker. A ancora anda
+    # gradualmente com a luz, mas nunca pode saltar para a parede quando o
+    # pulso verdadeiro desaparece.
+    max_jump_px = float(TRACKER_MAX_SPOT_JUMP_PX)
     full_frame = capture_frame(EXPOSURE_SECONDS, light=True)
     selection = escolher_ilha_manualmente(
         full_frame,
@@ -311,12 +328,21 @@ def _prepare_manual_tracker_roi(focus_mode: str) -> dict:
         f"ROI={roi_size}x{roi_size} em ({start_x}, {start_y}) | "
         f"alvo local=({local_x:.2f}, {local_y:.2f}) px."
     )
+    selection_roi = selection.get("selection_roi", {})
+    print(
+        "Busca manual: "
+        f"recorte={selection_roi.get('width', '?')}x{selection_roi.get('height', '?')} "
+        f"em ({selection_roi.get('start_x', '?')}, {selection_roi.get('start_y', '?')}) | "
+        f"threshold={100.0 * float(selection.get('selection_threshold_percent', 0.0)):.0f}%."
+    )
     print(f"Alvo e assinatura congelada salvos em: {display_path(target_path)}")
 
     preflight = _capture_cm_estavel(
         EXPOSURE_SECONDS,
         CAPTURES_PER_CENTER,
         audit_tag="roi_preflight_sem_movimento",
+        expected_position=(float(local_x), float(local_y)),
+        expected_max_jump_px=CENTER_REACQUIRE_RADIUS_PX,
     )
     if preflight is None:
         raise RuntimeError("A ilha escolhida foi perdida no teste da ROI, antes de mover o mount.")
@@ -399,21 +425,53 @@ def _audit_capture(tag: str, repeat_idx: int, frame: np.ndarray, cm, debug: dict
     )
 
 
-def _capture_cm_estavel(exposure: float, repeats: int, audit_tag: str) -> MedicaoCM | None:
+def _capture_cm_estavel(
+    exposure: float,
+    repeats: int,
+    audit_tag: str,
+    expected_position: tuple[float, float] | None = None,
+    expected_max_jump_px: float | None = None,
+) -> MedicaoCM | None:
     xs = []
     ys = []
     timestamps = []
     toca_borda = False
 
-    for repeat_idx in range(repeats):
+    attempts = 0
+    missed_frames = 0
+    max_attempts = max(
+        repeats,
+        repeats * VALID_FRAME_ATTEMPT_FACTOR,
+        VALID_FRAME_MAX_ATTEMPTS,
+    )
+    started = time.perf_counter()
+
+    # Ancora uma vez no inicio da medicao. Depois de cada frame valido, o lock
+    # passa a acompanhar a ultima posicao aceita, exatamente como no tracker.
+    # Reancorar no centro em todo frame permitiria voltar a escolher uma parede
+    # distante sempre que a lampada piscasse.
+    if expected_position is not None and not set_focus_expected_position(
+        expected_position[0],
+        expected_position[1],
+        max_jump_px=expected_max_jump_px,
+    ):
+        print(f"  -> nao consegui reposicionar a ancora do foco em {audit_tag}.")
+        return None
+
+    while len(xs) < repeats:
+        elapsed = time.perf_counter() - started
+        if attempts >= max_attempts or elapsed >= VALID_FRAME_MAX_WAIT_S:
+            break
+        attempts += 1
         try:
             full_frame = capture_frame(exposure, light=True)
         except Exception as exc:
             print(
                 f"  -> captura falhou em {audit_tag} "
-                f"({repeat_idx + 1}/{repeats}): {exc}"
+                f"(tentativa {attempts}/{max_attempts}): {exc}"
             )
-            return None
+            missed_frames += 1
+            continue
         if CALIBRATION_ROI is None:
             frame = full_frame
             cm = centro_massa(frame)
@@ -426,14 +484,37 @@ def _capture_cm_estavel(exposure: float, repeats: int, audit_tag: str) -> Medica
                 CALIBRATION_ROI["height"],
             )
         debug = get_focus_debug()
-        _audit_capture(audit_tag, repeat_idx, frame, cm, debug)
         if cm is None:
-            return None
+            missed_frames += 1
+            # Nao grave centenas de PNGs identicos enquanto a fonte estiver
+            # apagada; o primeiro e depois um a cada cinco preservam a causa.
+            if missed_frames == 1 or missed_frames % 5 == 0:
+                _audit_capture(audit_tag, attempts - 1, frame, cm, debug)
+            if missed_frames == 1 or missed_frames % 5 == 0:
+                print(
+                    f"  -> luz ausente/rejeitada em {audit_tag}; aguardando pulso "
+                    f"({len(xs)}/{repeats} frames validos)."
+                )
+            continue
+        _audit_capture(audit_tag, attempts - 1, frame, cm, debug)
         x_cm, y_cm, _, cm_toca_borda = cm
         xs.append(float(x_cm))
         ys.append(float(y_cm))
         timestamps.append(time.perf_counter())
         toca_borda = toca_borda or bool(cm_toca_borda)
+
+    if len(xs) < repeats:
+        print(
+            f"  -> sinal insuficiente em {audit_tag}: {len(xs)}/{repeats} "
+            f"frames validos em {attempts} tentativas ({time.perf_counter() - started:.2f}s)."
+        )
+        return None
+
+    if missed_frames:
+        print(
+            f"  -> medicao {audit_tag} concluida com luz intermitente: "
+            f"{repeats} validos, {missed_frames} ausentes/rejeitados."
+        )
 
     xs_arr = np.array(xs, dtype=float)
     ys_arr = np.array(ys, dtype=float)
@@ -474,11 +555,23 @@ def _collect_bracketed_sample_once(
 ) -> RegistroDual | None:
     audit_label = label if audit_label is None else audit_label
     tag_base = f"{regime}_{audit_label}_try{attempt_idx + 1:02d}"
+    center_expected = None
+    center_max_jump = None
+    target_max_jump = None
+    if CALIBRATION_ROI is not None:
+        center_expected = (
+            float(CALIBRATION_ROI["target_x_local"]),
+            float(CALIBRATION_ROI["target_y_local"]),
+        )
+        center_max_jump = CENTER_REACQUIRE_RADIUS_PX
+        target_max_jump = float(CALIBRATION_ROI["max_jump_px"])
 
     center_before = _capture_cm_estavel(
         exposure,
         CAPTURES_PER_CENTER,
         audit_tag=f"{tag_base}_center_before",
+        expected_position=center_expected,
+        expected_max_jump_px=center_max_jump,
     )
     if center_before is None:
         print(f"  -> centro antes falhou em {label}.")
@@ -495,6 +588,8 @@ def _collect_bracketed_sample_once(
             exposure,
             CAPTURES_PER_POINT,
             audit_tag=f"{tag_base}_target",
+            expected_position=center_expected,
+            expected_max_jump_px=target_max_jump,
         )
     except Exception as exc:
         print(f"  -> erro durante movimento/captura do ponto {label}: {exc}")
@@ -512,6 +607,8 @@ def _collect_bracketed_sample_once(
         exposure,
         CAPTURES_PER_CENTER,
         audit_tag=f"{tag_base}_center_after",
+        expected_position=center_expected,
+        expected_max_jump_px=center_max_jump,
     )
 
     if target_cm is None:

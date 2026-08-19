@@ -8,7 +8,12 @@ em ``Link UFF/config_camera_ids.py``.
 # ROI fixa ao redor da luz escolhida. Uma ROI maior facilita reencontrar um spot
 # largo sem processar o sensor inteiro. A IDS mantem seu tamanho otimizado.
 ASI_ROI_SIZE_PX = 384
-IDS_ROI_SIZE_PX = 192
+IDS_ROI_SIZE_PX = 256
+
+# Uma ilha nao pode saltar mais que isso entre dois frames do tracker. Como a
+# ancora acompanha a luz gradualmente, este limite nao reduz a area util da ROI;
+# ele apenas impede trocar de repente para uma parede ou outra luz distante.
+TRACKER_MAX_SPOT_JUMP_PX = 45.0
 
 # A calibracao manual mede escalas menores e maiores para conferir a linearidade.
 FINE_CALIBRATION_RADII_DEG = (0.004, 0.008, 0.016)

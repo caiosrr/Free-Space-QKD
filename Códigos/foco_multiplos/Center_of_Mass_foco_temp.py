@@ -40,13 +40,19 @@ from controle.mount_control import (
 
 FOCUS_MODE = "single"
 RAW_SIGNAL_MIN = 20.0 if backend_name() == "ids" else 200.0
-DUAL_THRESHOLD_PERCENT = 0.25
+DUAL_THRESHOLD_PERCENT = 0.45
 LOCAL_RADIUS_PX = 90
 MIN_LOCAL_PIXELS = 8
 MORPH_KERNEL_SIZE = 7
 LOCK_FOCUS_IDENTITY = True
 LOCK_MIN_SIMILARITY = 0.35
 LOCK_STRONG_SIMILARITY = 0.65
+# Se o centro continua perto do ultimo frame, a continuidade espacial vale
+# mais que mudancas de area, pico ou alongamento causadas pelo seeing.
+LOCK_NEAR_CONTINUITY_PX = 24.0
+# Calcula o threshold numa janela movel em torno da luz travada. Assim uma
+# fachada ou outra ilha fora da vizinhanca nao apaga uma luz mais fraca.
+LOCK_SEARCH_MARGIN_PX = 20.0
 lim_px = 2.0
 CAMERA_GAIN = (
     float(os.environ.get("QKD_IDS_ANALOG_GAIN", "1"))
@@ -82,6 +88,7 @@ FOCUS_LOCK = {
     "last_y": None,
     "freeze_reference": False,
     "max_jump_px": None,
+    "threshold_percent": None,
 }
 
 
@@ -112,6 +119,7 @@ def reset_focus_lock() -> None:
     FOCUS_LOCK["last_y"] = None
     FOCUS_LOCK["freeze_reference"] = False
     FOCUS_LOCK["max_jump_px"] = None
+    FOCUS_LOCK["threshold_percent"] = None
 
 
 def get_focus_signature() -> dict | None:
@@ -119,11 +127,12 @@ def get_focus_signature() -> dict | None:
     if not FOCUS_LOCK["active"] or FOCUS_LOCK["primary"] is None:
         return None
     return {
-        "version": 1,
+        "version": 2,
         "primary": copy.deepcopy(FOCUS_LOCK["primary"]),
         "secondary": copy.deepcopy(FOCUS_LOCK["secondary"]),
         "freeze_reference": bool(FOCUS_LOCK["freeze_reference"]),
         "max_jump_px": FOCUS_LOCK["max_jump_px"],
+        "threshold_percent": FOCUS_LOCK["threshold_percent"],
     }
 
 
@@ -133,6 +142,7 @@ def initialize_focus_lock(
     expected_y: float | None = None,
     freeze_reference: bool | None = None,
     max_jump_px: float | None = None,
+    threshold_percent: float | None = None,
 ) -> bool:
     """Inicializa o lock dual com assinatura persistida e posicao esperada."""
     reset_focus_lock()
@@ -175,12 +185,41 @@ def initialize_focus_lock(
     FOCUS_LOCK["max_jump_px"] = (
         None if chosen_max_jump is None else float(chosen_max_jump)
     )
+    saved_threshold = signature.get("threshold_percent")
+    chosen_threshold = saved_threshold if threshold_percent is None else threshold_percent
+    if chosen_threshold is not None:
+        chosen_threshold = float(chosen_threshold)
+        if not np.isfinite(chosen_threshold) or not 0.02 <= chosen_threshold <= 0.90:
+            chosen_threshold = None
+    FOCUS_LOCK["threshold_percent"] = chosen_threshold
     if expected_x is not None and expected_y is not None:
         expected_x = float(expected_x)
         expected_y = float(expected_y)
         if np.isfinite(expected_x) and np.isfinite(expected_y):
             FOCUS_LOCK["last_x"] = expected_x
             FOCUS_LOCK["last_y"] = expected_y
+    return True
+
+
+def set_focus_expected_position(
+    expected_x: float,
+    expected_y: float,
+    max_jump_px: float | None = None,
+) -> bool:
+    """Reposiciona a ancora espacial sem alterar a assinatura luminosa salva."""
+    if not FOCUS_LOCK["active"] or FOCUS_LOCK["primary"] is None:
+        return False
+    expected_x = float(expected_x)
+    expected_y = float(expected_y)
+    if not np.isfinite(expected_x) or not np.isfinite(expected_y):
+        return False
+    if max_jump_px is not None:
+        max_jump_px = float(max_jump_px)
+        if not np.isfinite(max_jump_px) or max_jump_px <= 0:
+            return False
+        FOCUS_LOCK["max_jump_px"] = max_jump_px
+    FOCUS_LOCK["last_x"] = expected_x
+    FOCUS_LOCK["last_y"] = expected_y
     return True
 
 
@@ -316,6 +355,7 @@ def _focus_lock_snapshot() -> dict:
         "last_y": FOCUS_LOCK["last_y"],
         "freeze_reference": bool(FOCUS_LOCK["freeze_reference"]),
         "max_jump_px": FOCUS_LOCK["max_jump_px"],
+        "threshold_percent": FOCUS_LOCK["threshold_percent"],
     }
 
 
@@ -353,8 +393,11 @@ def _update_focus_lock(candidate: dict, candidates: list[dict]) -> None:
             for key in ("raw_peak", "raw_total", "area"):
                 primary[key] = (0.85 * float(primary[key])) + (0.15 * float(candidate[key]))
 
-    FOCUS_LOCK["last_x"] = float(candidate["x_cm"])
-    FOCUS_LOCK["last_y"] = float(candidate["y_cm"])
+    # Uma ilha cortada pela borda nao pode deslocar a ancora. Isso evita que
+    # uma parede aceita por engano abra caminho para novas selecoes erradas.
+    if not candidate["toca_borda"]:
+        FOCUS_LOCK["last_x"] = float(candidate["x_cm"])
+        FOCUS_LOCK["last_y"] = float(candidate["y_cm"])
 
 
 def _select_focus_candidate(candidates: list[dict]) -> dict | None:
@@ -369,15 +412,13 @@ def _select_focus_candidate(candidates: list[dict]) -> dict | None:
 
     best = None
     best_score = -1.0
+    best_is_near = False
     for candidate in candidates:
         primary_score = _similarity(candidate, primary)
         secondary_score = _similarity(candidate, secondary)
 
-        if secondary is not None and secondary_score > primary_score + 0.12:
-            continue
-        if primary_score < LOCK_MIN_SIMILARITY:
-            continue
-
+        dist = None
+        near_continuity = False
         if FOCUS_LOCK["last_x"] is not None and FOCUS_LOCK["last_y"] is not None:
             dist = float(
                 np.hypot(
@@ -388,19 +429,37 @@ def _select_focus_candidate(candidates: list[dict]) -> dict | None:
             max_jump_px = FOCUS_LOCK["max_jump_px"]
             if max_jump_px is not None and dist > float(max_jump_px):
                 continue
-            dist_score = 1.0 / (1.0 + (dist / 300.0))
+            near_continuity = (
+                dist <= LOCK_NEAR_CONTINUITY_PX
+                and not candidate["toca_borda"]
+            )
+
+        if (
+            not near_continuity
+            and secondary is not None
+            and secondary_score > primary_score + 0.12
+        ):
+            continue
+        if not near_continuity and primary_score < LOCK_MIN_SIMILARITY:
+            continue
+
+        if dist is not None:
+            dist_score = 1.0 / (1.0 + (dist / 30.0))
         else:
             dist_score = 1.0
 
-        score = (0.8 * primary_score) + (0.2 * dist_score)
+        score = (0.65 * primary_score) + (0.35 * dist_score)
+        if near_continuity:
+            score += 0.50
         if score > best_score:
             best = candidate
             best_score = score
+            best_is_near = near_continuity
 
     if best is None:
         return None
 
-    if len(candidates) == 1 and secondary is not None:
+    if len(candidates) == 1 and secondary is not None and not best_is_near:
         primary_score = _similarity(best, primary)
         secondary_score = _similarity(best, secondary)
         if primary_score < LOCK_STRONG_SIMILARITY and secondary_score >= primary_score:
@@ -409,7 +468,28 @@ def _select_focus_candidate(candidates: list[dict]) -> dict | None:
     return best
 
 
-def _find_focus_candidates(frame_gray: np.ndarray, threshold_percent: float) -> list[dict]:
+def _clamp_search_roi(
+    search_roi: tuple[int, int, int, int] | None,
+    image_width: int,
+    image_height: int,
+) -> tuple[int, int, int, int]:
+    """Limita uma ROI ``(x, y, largura, altura)`` aos limites da imagem."""
+    if search_roi is None:
+        return 0, 0, int(image_width), int(image_height)
+
+    x, y, width, height = (int(round(value)) for value in search_roi)
+    x0 = int(np.clip(x, 0, max(image_width - 1, 0)))
+    y0 = int(np.clip(y, 0, max(image_height - 1, 0)))
+    x1 = int(np.clip(x + width, x0 + 1, image_width))
+    y1 = int(np.clip(y + height, y0 + 1, image_height))
+    return x0, y0, x1 - x0, y1 - y0
+
+
+def _find_focus_candidates(
+    frame_gray: np.ndarray,
+    threshold_percent: float,
+    search_roi: tuple[int, int, int, int] | None = None,
+) -> list[dict]:
     """
     Estrategia no modo dual:
     1. thresholda a imagem suavizada e separa ilhas de pixels conectados;
@@ -418,13 +498,24 @@ def _find_focus_candidates(frame_gray: np.ndarray, threshold_percent: float) -> 
     4. a escolha nao e pela maior area, mas pela intensidade integrada
        (raw_total) no primeiro lock e por similaridade/continuidade depois.
     """
-    max_val = float(frame_gray.max())
+    image_h, image_w = frame_gray.shape
+    roi_x, roi_y, roi_w, roi_h = _clamp_search_roi(
+        search_roi,
+        image_w,
+        image_h,
+    )
+    roi_x1 = roi_x + roi_w
+    roi_y1 = roi_y + roi_h
+    frame_search = frame_gray[roi_y:roi_y1, roi_x:roi_x1]
+
+    # O limiar passa a ser relativo somente ao recorte escolhido. Uma fachada
+    # brilhante fora dele deixa de esconder uma luz mais fraca.
+    max_val = float(frame_search.max())
     if max_val <= 0:
         return []
 
-    blurred = cv2.GaussianBlur(frame_gray, (5, 5), 0)
-    h, w = frame_gray.shape
-    raw_signal = _raw_signal_frame(frame_gray)
+    blurred = cv2.GaussianBlur(frame_search, (5, 5), 0)
+    raw_signal = _raw_signal_frame(frame_gray)[roi_y:roi_y1, roi_x:roi_x1]
     threshold = max_val * threshold_percent
     mask = (blurred >= threshold).astype(np.uint8)
     if MORPH_KERNEL_SIZE > 1:
@@ -436,7 +527,9 @@ def _find_focus_candidates(frame_gray: np.ndarray, threshold_percent: float) -> 
         return []
 
     candidates = []
-    yy, xx = np.indices(frame_gray.shape, dtype=np.float32)
+    yy, xx = np.indices(frame_search.shape, dtype=np.float32)
+    xx += float(roi_x)
+    yy += float(roi_y)
     for label in range(1, num_labels):
         selected_mask = labels == label
         area = int(np.count_nonzero(selected_mask))
@@ -459,14 +552,14 @@ def _find_focus_candidates(frame_gray: np.ndarray, threshold_percent: float) -> 
         )
 
         ys, xs = np.where(selected_mask)
-        peak_index = int(np.argmax(frame_gray[selected_mask]))
+        peak_index = int(np.argmax(frame_search[selected_mask]))
         peak_y = int(ys[peak_index])
         peak_x = int(xs[peak_index])
 
         y0 = max(0, peak_y - LOCAL_RADIUS_PX)
-        y1 = min(h, peak_y + LOCAL_RADIUS_PX + 1)
+        y1 = min(roi_h, peak_y + LOCAL_RADIUS_PX + 1)
         x0 = max(0, peak_x - LOCAL_RADIUS_PX)
-        x1 = min(w, peak_x + LOCAL_RADIUS_PX + 1)
+        x1 = min(roi_w, peak_x + LOCAL_RADIUS_PX + 1)
         local_window = np.zeros_like(selected_mask)
         local_window[y0:y1, x0:x1] = True
         selected_mask = selected_mask & local_window
@@ -484,8 +577,8 @@ def _find_focus_candidates(frame_gray: np.ndarray, threshold_percent: float) -> 
 
         x_cm = float((xx * weights).sum() / total)
         y_cm = float((yy * weights).sum() / total)
-        ix = int(np.clip(round(x_cm), 0, w - 1))
-        iy = int(np.clip(round(y_cm), 0, h - 1))
+        ix = int(np.clip(round(x_cm), 0, image_w - 1))
+        iy = int(np.clip(round(y_cm), 0, image_h - 1))
         toca_borda = bool(
             np.any(selected_mask[0, :])
             or np.any(selected_mask[-1, :])
@@ -511,7 +604,238 @@ def _find_focus_candidates(frame_gray: np.ndarray, threshold_percent: float) -> 
     return candidates
 
 
-def _lock_manual_candidate(candidate: dict, max_jump_px: float) -> dict:
+def _selecionar_regiao_de_busca(frame_gray: np.ndarray) -> tuple[int, int, int, int]:
+    """Permite desenhar o retangulo usado somente para procurar candidatos."""
+    image_h, image_w = frame_gray.shape
+    scale = min(1.0, 1400.0 / max(image_w, 1), 820.0 / max(image_h, 1))
+    display_w = max(1, int(round(image_w * scale)))
+    display_h = max(1, int(round(image_h * scale)))
+    normalized = cv2.normalize(frame_gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    base = cv2.cvtColor(normalized, cv2.COLOR_GRAY2BGR)
+    if scale != 1.0:
+        base = cv2.resize(base, (display_w, display_h), interpolation=cv2.INTER_AREA)
+
+    window_name = "Etapa 1 - recorte a regiao da luz"
+    state = {
+        "dragging": False,
+        "start": None,
+        "current": None,
+        "rectangle": None,
+    }
+
+    def on_mouse(event, x, y, _flags, _param) -> None:
+        point = (int(np.clip(x, 0, display_w - 1)), int(np.clip(y, 0, display_h - 1)))
+        if event == cv2.EVENT_LBUTTONDOWN:
+            state["dragging"] = True
+            state["start"] = point
+            state["current"] = point
+            state["rectangle"] = None
+        elif event == cv2.EVENT_MOUSEMOVE and state["dragging"]:
+            state["current"] = point
+        elif event == cv2.EVENT_LBUTTONUP and state["dragging"]:
+            state["dragging"] = False
+            state["current"] = point
+            start_x, start_y = state["start"]
+            end_x, end_y = point
+            if abs(end_x - start_x) >= 12 and abs(end_y - start_y) >= 12:
+                state["rectangle"] = (
+                    min(start_x, end_x),
+                    min(start_y, end_y),
+                    max(start_x, end_x),
+                    max(start_y, end_y),
+                )
+
+    def render() -> np.ndarray:
+        canvas = base.copy()
+        rectangle = state["rectangle"]
+        if state["dragging"] and state["start"] is not None:
+            start_x, start_y = state["start"]
+            end_x, end_y = state["current"]
+            rectangle = (
+                min(start_x, end_x),
+                min(start_y, end_y),
+                max(start_x, end_x),
+                max(start_y, end_y),
+            )
+        if rectangle is not None:
+            x0, y0, x1, y1 = rectangle
+            cv2.rectangle(canvas, (x0, y0), (x1, y1), (0, 255, 0), 2)
+        cv2.putText(
+            canvas,
+            "Arraste ao redor da luz | Enter confirma | A usa tudo | Esc cancela",
+            (20, 35),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.72,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        return canvas
+
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, display_w, display_h)
+    cv2.setMouseCallback(window_name, on_mouse)
+    print(
+        "Selecao da regiao: arraste um retangulo ao redor da luz e pressione Enter. "
+        "A usa o sensor inteiro."
+    )
+    try:
+        while True:
+            cv2.imshow(window_name, render())
+            key = cv2.waitKey(30) & 0xFF
+            if key in (13, 10) and state["rectangle"] is not None:
+                x0, y0, x1, y1 = state["rectangle"]
+                roi = (
+                    int(np.floor(x0 / scale)),
+                    int(np.floor(y0 / scale)),
+                    int(np.ceil((x1 - x0 + 1) / scale)),
+                    int(np.ceil((y1 - y0 + 1) / scale)),
+                )
+                return _clamp_search_roi(roi, image_w, image_h)
+            if key in (ord("a"), ord("A")):
+                return 0, 0, image_w, image_h
+            if key == 27:
+                raise KeyboardInterrupt("Selecao manual cancelada.")
+            if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
+                raise KeyboardInterrupt("Janela de recorte fechada.")
+    finally:
+        cv2.destroyWindow(window_name)
+
+
+def _escolher_candidato_no_recorte(
+    frame_gray: np.ndarray,
+    search_roi: tuple[int, int, int, int],
+    threshold_percent: float,
+) -> tuple[dict, list[dict], float] | None:
+    """Escolhe uma ilha; ``None`` solicita que o usuario refaca o recorte."""
+    roi_x, roi_y, roi_w, roi_h = search_roi
+    crop = frame_gray[roi_y:roi_y + roi_h, roi_x:roi_x + roi_w]
+    display_scale = min(4.0, 1400.0 / max(roi_w, 1), 780.0 / max(roi_h, 1))
+    display_w = max(1, int(round(roi_w * display_scale)))
+    display_h = max(1, int(round(roi_h * display_scale)))
+    normalized = cv2.normalize(crop, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    base = cv2.cvtColor(normalized, cv2.COLOR_GRAY2BGR)
+    if display_scale != 1.0:
+        interpolation = cv2.INTER_NEAREST if display_scale > 1.0 else cv2.INTER_AREA
+        base = cv2.resize(base, (display_w, display_h), interpolation=interpolation)
+
+    window_name = "Etapa 2 - escolha a ilha dentro do recorte"
+    state = {
+        "threshold": float(np.clip(threshold_percent, 0.02, 0.90)),
+        "candidates": [],
+        "selected_index": None,
+    }
+
+    def recalculate() -> None:
+        state["candidates"] = _find_focus_candidates(
+            frame_gray,
+            state["threshold"],
+            search_roi=search_roi,
+        )
+        state["selected_index"] = None
+        print(
+            f"Recorte: threshold={100.0 * state['threshold']:.0f}% | "
+            f"{len(state['candidates'])} ilha(s)."
+        )
+
+    def render() -> np.ndarray:
+        canvas = base.copy()
+        for idx, candidate in enumerate(state["candidates"]):
+            px = int(round((float(candidate["x_cm"]) - roi_x) * display_scale))
+            py = int(round((float(candidate["y_cm"]) - roi_y) * display_scale))
+            is_selected = idx == state["selected_index"]
+            color = (0, 255, 0) if is_selected else (0, 255, 255)
+            radius = 12 if is_selected else 7
+            cv2.circle(canvas, (px, py), radius, color, 2)
+            if is_selected:
+                cv2.putText(
+                    canvas,
+                    f"ilha {idx + 1}",
+                    (px + 12, max(74, py - 12)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.65,
+                    color,
+                    2,
+                    cv2.LINE_AA,
+                )
+        cv2.putText(
+            canvas,
+            "Clique na ilha | Enter confirma | -/+ muda threshold | R recorta",
+            (15, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.62,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            canvas,
+            f"Threshold: {100.0 * state['threshold']:.0f}% | Ilhas: {len(state['candidates'])}",
+            (15, 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.62,
+            (0, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        if not state["candidates"]:
+            cv2.putText(
+                canvas,
+                "Nenhuma ilha: pressione - ou R",
+                (15, 95),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.70,
+                (0, 0, 255),
+                2,
+                cv2.LINE_AA,
+            )
+        return canvas
+
+    def on_mouse(event, x, y, _flags, _param) -> None:
+        if event != cv2.EVENT_LBUTTONDOWN or not state["candidates"]:
+            return
+        full_x = roi_x + (float(x) / display_scale)
+        full_y = roi_y + (float(y) / display_scale)
+        state["selected_index"] = min(
+            range(len(state["candidates"])),
+            key=lambda idx: (
+                (float(state["candidates"][idx]["x_cm"]) - full_x) ** 2
+                + (float(state["candidates"][idx]["y_cm"]) - full_y) ** 2
+            ),
+        )
+
+    recalculate()
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, display_w, display_h)
+    cv2.setMouseCallback(window_name, on_mouse)
+    try:
+        while True:
+            cv2.imshow(window_name, render())
+            key = cv2.waitKey(30) & 0xFF
+            if key in (13, 10) and state["selected_index"] is not None:
+                candidate = state["candidates"][int(state["selected_index"])]
+                return candidate, state["candidates"], state["threshold"]
+            if key in (ord("-"), ord("_")):
+                state["threshold"] = max(0.02, state["threshold"] - 0.02)
+                recalculate()
+            if key in (ord("+"), ord("=")):
+                state["threshold"] = min(0.90, state["threshold"] + 0.02)
+                recalculate()
+            if key in (ord("r"), ord("R")):
+                return None
+            if key == 27:
+                raise KeyboardInterrupt("Selecao manual cancelada.")
+            if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
+                raise KeyboardInterrupt("Janela de selecao manual fechada.")
+    finally:
+        cv2.destroyWindow(window_name)
+
+
+def _lock_manual_candidate(
+    candidate: dict,
+    max_jump_px: float,
+    threshold_percent: float,
+) -> dict:
     reset_focus_lock()
     FOCUS_LOCK["active"] = True
     FOCUS_LOCK["primary"] = _lock_reference_from(candidate)
@@ -520,6 +844,7 @@ def _lock_manual_candidate(candidate: dict, max_jump_px: float) -> dict:
     FOCUS_LOCK["last_y"] = float(candidate["y_cm"])
     FOCUS_LOCK["freeze_reference"] = True
     FOCUS_LOCK["max_jump_px"] = float(max_jump_px)
+    FOCUS_LOCK["threshold_percent"] = float(threshold_percent)
     return get_focus_signature()
 
 
@@ -528,94 +853,31 @@ def escolher_ilha_manualmente(
     threshold_percent: float | None = None,
     max_jump_px: float = 95.0,
 ) -> dict:
-    """Mostra as ilhas detectadas e trava a que o usuario clicar."""
+    """Recorta a busca, mostra as ilhas locais e trava a que o usuario clicar."""
     frame_gray = _as_gray_float(frame)
     threshold = DUAL_THRESHOLD_PERCENT if threshold_percent is None else threshold_percent
-    candidates = _find_focus_candidates(frame_gray, threshold)
-    if not candidates:
-        raise RuntimeError("Nenhuma ilha luminosa foi encontrada para selecao manual.")
+    while True:
+        search_roi = _selecionar_regiao_de_busca(frame_gray)
+        result = _escolher_candidato_no_recorte(frame_gray, search_roi, threshold)
+        if result is not None:
+            candidate, candidates, threshold = result
+            break
 
-    h, w = frame_gray.shape
-    scale = min(1.0, 1400.0 / max(w, 1), 900.0 / max(h, 1))
-    display_w = max(1, int(round(w * scale)))
-    display_h = max(1, int(round(h * scale)))
-    normalized = cv2.normalize(frame_gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    base = cv2.cvtColor(normalized, cv2.COLOR_GRAY2BGR)
-    if scale != 1.0:
-        base = cv2.resize(base, (display_w, display_h), interpolation=cv2.INTER_AREA)
-
-    window_name = "Escolha manual da ilha - clique e pressione Enter"
-    selected = {"index": None}
-
-    def render() -> np.ndarray:
-        canvas = base.copy()
-        for idx, candidate in enumerate(candidates):
-            px = int(round(float(candidate["x_cm"]) * scale))
-            py = int(round(float(candidate["y_cm"]) * scale))
-            is_selected = idx == selected["index"]
-            color = (0, 255, 0) if is_selected else (0, 255, 255)
-            radius = 12 if is_selected else 7
-            cv2.circle(canvas, (px, py), radius, color, 2)
-            if is_selected:
-                cv2.putText(
-                    canvas,
-                    f"ilha {idx + 1}",
-                    (px + 12, max(24, py - 12)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    color,
-                    2,
-                    cv2.LINE_AA,
-                )
-        cv2.putText(
-            canvas,
-            "Clique na ilha desejada | Enter confirma | Esc cancela",
-            (20, 35),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA,
-        )
-        return canvas
-
-    def on_mouse(event, x, y, _flags, _param) -> None:
-        if event != cv2.EVENT_LBUTTONDOWN:
-            return
-        full_x = float(x) / scale
-        full_y = float(y) / scale
-        selected["index"] = min(
-            range(len(candidates)),
-            key=lambda idx: (
-                (float(candidates[idx]["x_cm"]) - full_x) ** 2
-                + (float(candidates[idx]["y_cm"]) - full_y) ** 2
-            ),
-        )
-
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.setMouseCallback(window_name, on_mouse)
-    print(
-        f"Selecao manual: {len(candidates)} ilha(s) marcada(s). "
-        "Clique na desejada e pressione Enter."
+    signature = _lock_manual_candidate(
+        candidate,
+        max_jump_px=max_jump_px,
+        threshold_percent=threshold,
     )
-    try:
-        while True:
-            cv2.imshow(window_name, render())
-            key = cv2.waitKey(30) & 0xFF
-            if key in (13, 10) and selected["index"] is not None:
-                break
-            if key == 27:
-                raise KeyboardInterrupt("Selecao manual cancelada.")
-            if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
-                raise KeyboardInterrupt("Janela de selecao manual fechada.")
-    finally:
-        cv2.destroyWindow(window_name)
-
-    candidate = candidates[int(selected["index"])]
-    signature = _lock_manual_candidate(candidate, max_jump_px=max_jump_px)
     return {
         "x_px": float(candidate["x_cm"]),
         "y_px": float(candidate["y_cm"]),
+        "selection_roi": {
+            "start_x": int(search_roi[0]),
+            "start_y": int(search_roi[1]),
+            "width": int(search_roi[2]),
+            "height": int(search_roi[3]),
+        },
+        "selection_threshold_percent": float(threshold),
         "signature": signature,
         "candidate": _candidate_debug(candidate, FOCUS_LOCK["primary"], None),
         "candidate_count": len(candidates),
@@ -662,13 +924,34 @@ def _centro_foco_principal(frame_gray: np.ndarray, threshold_percent: float):
     global LAST_FOCUS_DEBUG
 
     lock_before = _focus_lock_snapshot()
-    candidates = _find_focus_candidates(frame_gray, threshold_percent)
+    search_roi = None
+    if (
+        lock_before["active"]
+        and lock_before["last_x"] is not None
+        and lock_before["last_y"] is not None
+    ):
+        max_jump = lock_before["max_jump_px"]
+        if max_jump is None:
+            max_jump = LOCAL_RADIUS_PX
+        search_radius = int(np.ceil(float(max_jump) + LOCK_SEARCH_MARGIN_PX))
+        search_roi = (
+            int(round(float(lock_before["last_x"]))) - search_radius,
+            int(round(float(lock_before["last_y"]))) - search_radius,
+            (2 * search_radius) + 1,
+            (2 * search_radius) + 1,
+        )
+    candidates = _find_focus_candidates(
+        frame_gray,
+        threshold_percent,
+        search_roi=search_roi,
+    )
     candidate = _select_focus_candidate(candidates)
     if candidate is None:
         LAST_FOCUS_DEBUG = {
             "mode": FOCUS_MODE,
             "selected": None,
             "candidate_count": len(candidates),
+            "search_roi": search_roi,
             "lock_before": lock_before,
             "lock_after": _focus_lock_snapshot(),
             "candidates": [
@@ -685,6 +968,7 @@ def _centro_foco_principal(frame_gray: np.ndarray, threshold_percent: float):
         "mode": FOCUS_MODE,
         "selected": _candidate_debug(candidate, lock_before["primary"], lock_before["secondary"]),
         "candidate_count": len(candidates),
+        "search_roi": search_roi,
         "lock_before": lock_before,
         "lock_after": lock_after,
         "candidates": [
@@ -706,7 +990,14 @@ def centro_massa(frame: np.ndarray, threshold_percent: float | None = None):
 
     frame_gray = _as_gray_float(frame)
     if FOCUS_MODE == "dual":
-        threshold = DUAL_THRESHOLD_PERCENT if threshold_percent is None else threshold_percent
+        locked_threshold = FOCUS_LOCK.get("threshold_percent")
+        threshold = (
+            locked_threshold
+            if threshold_percent is None and locked_threshold is not None
+            else DUAL_THRESHOLD_PERCENT
+            if threshold_percent is None
+            else threshold_percent
+        )
         return _centro_foco_principal(frame_gray, threshold)
 
     threshold = 0.5 if threshold_percent is None else threshold_percent
