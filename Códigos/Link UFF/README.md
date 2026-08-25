@@ -98,6 +98,16 @@ Tracker continuo (somente depois de calibrar com a IDS):
 python ".\Link UFF\Tracker_IDS.py"
 ```
 
+Caracterizacao temporal sem conectar ou mover o mount:
+
+```powershell
+python ".\Link UFF\caracterizacao_beacon\caracterizar_beacon_ids.py" --minutes 10
+```
+
+Esse programa mede posicao, intensidade, area, formato, sinal valido e FPS em
+cada frame. Tambem salva medias da imagem e frames de eventos bruscos. Consulte
+`Link UFF/caracterizacao_beacon/README.md` para os arquivos gerados e opcoes.
+
 O tracker pode usar uma luz diferente daquela empregada na calibracao. Na
 opcao padrao `1=selecionar a luz agora`, recorte a regiao e clique na ilha que
 sera acompanhada naquela sessao. Essa escolha e temporaria: ela nao altera as

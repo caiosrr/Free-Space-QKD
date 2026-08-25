@@ -37,6 +37,7 @@ CALIBRATION_OUTPUT_DIR = RESULTS_DIR / "calibracao"
 CALIBRATION_METADATA_DIR = CALIBRATION_OUTPUT_DIR / "metadados"
 MATRICES_OUTPUT_DIR = RESULTS_DIR / "matrizes"
 TRACKER_OUTPUT_DIR = RESULTS_DIR / "tracker"
+BEACON_CHARACTERIZATION_OUTPUT_DIR = RESULTS_DIR / "caracterizacao_beacon"
 
 # Alias mantido para compatibilidade com scripts locais que importavam OUTPUT_DIR.
 OUTPUT_DIR = RESULTS_DIR
@@ -59,3 +60,6 @@ def apply_environment() -> None:
     os.environ["QKD_CALIBRATION_METADATA_DIR"] = str(CALIBRATION_METADATA_DIR)
     os.environ["QKD_CALIBRATION_MATRIX_DIR"] = str(MATRICES_OUTPUT_DIR)
     os.environ["QKD_TRACKER_OUTPUT_DIR"] = str(TRACKER_OUTPUT_DIR)
+    os.environ["QKD_BEACON_CHARACTERIZATION_OUTPUT_DIR"] = str(
+        BEACON_CHARACTERIZATION_OUTPUT_DIR
+    )

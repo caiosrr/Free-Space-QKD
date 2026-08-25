@@ -239,6 +239,38 @@ sensor; se a fonte desaparecer completamente, sera necessaria uma busca segura
 em grade ou espiral. A ideia fica registrada, mas nao sera implementada antes
 de haver tempo de bancada para validacao.
 
+### Futuro: tracker temporal robusto e oclusoes
+
+O mount deve corrigir deriva lenta do centro medio do beacon, nao perseguir a
+turbulencia rapida. Antes de alterar o controle, usar o caracterizador em
+`Link UFF/caracterizacao_beacon/` para medir a perturbacao e comparar janelas
+temporais. A estrategia candidata e hibrida:
+
+1. Manter aquisicao rapida e validar a identidade em cada frame.
+2. Acumular frames validos normalizados para formar a mancha media.
+3. Manter os centroides individuais para rejeitar outliers e diagnosticar o
+   que aconteceu dentro da janela.
+4. Corrigir o mount apenas se a estimativa media permanecer fora da zona de
+   repouso por mais de uma janela.
+5. Reiniciar o acumulador depois de cada movimento e apos perda prolongada.
+
+Casos que o tracker futuro precisa tratar explicitamente:
+
+* oclusao temporaria por embarcacao ou outro objeto: velocidade zero, manter a
+  ultima identidade/posicao e aguardar recuperacao por tempo limitado;
+* reaparecimento: exigir varios frames coerentes antes de voltar a comandar;
+* aumento ou reducao brusca do spot: ampliar temporariamente a tolerancia de
+  forma sem aceitar uma fonte concorrente;
+* perda alem do limite: permanecer parado ou retornar de forma segura conforme
+  politica escolhida, nunca iniciar busca ampla automaticamente sem limites;
+* salvar frame bruto e marcado no inicio da perda, recuperacao, salto, mudanca
+  de tamanho/intensidade, borda da ROI e falha de captura;
+* usar cooldown por tipo de evento para uma oclusao longa nao encher o disco.
+
+Separar sempre a caracterizacao da perturbacao da dinamica do atuador. A PSD e
+o tempo de correlacao da luz indicam o que seria desejavel corrigir; latencia,
+resposta mecanica e estabilidade do mount limitam o que pode ser corrigido.
+
 ### Controle por potencia da fibra
 
 Potencia e uma medida escalar e nao informa diretamente o sentido do erro.
