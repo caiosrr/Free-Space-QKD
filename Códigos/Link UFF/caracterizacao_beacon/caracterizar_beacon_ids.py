@@ -343,13 +343,22 @@ def json_write(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def write_png_unicode(path: Path, image: np.ndarray) -> None:
+    """Grava PNG em caminhos Unicode no Windows sem depender de cv2.imwrite."""
+    image_u8 = np.clip(image, 0, 255).astype(np.uint8)
+    success, encoded = cv2.imencode(".png", image_u8)
+    if not success:
+        raise RuntimeError(f"OpenCV nao conseguiu codificar o PNG: {path}")
+    path.write_bytes(encoded.tobytes())
+
+
 def save_mean(session_dir: Path, name: str, running: RunningImageMean) -> None:
     if running.mean is None or running.count == 0:
         return
     mean_float = running.mean.astype(np.float32)
     np.save(session_dir / f"{name}.npy", mean_float)
     image = np.clip(np.rint(mean_float), 0, 255).astype(np.uint8)
-    cv2.imwrite(str(session_dir / f"{name}.png"), image)
+    write_png_unicode(session_dir / f"{name}.png", image)
 
 
 def make_overlay(
@@ -405,8 +414,8 @@ def save_event_images(
     stem = f"evento_{event_index:04d}_{safe_name('-'.join(kinds))}"
     raw_path = session_dir / "eventos" / f"{stem}_raw.png"
     marked_path = session_dir / "eventos" / f"{stem}_marcado.png"
-    cv2.imwrite(str(raw_path), np.clip(raw_frame, 0, 255).astype(np.uint8))
-    cv2.imwrite(str(marked_path), overlay)
+    write_png_unicode(raw_path, raw_frame)
+    write_png_unicode(marked_path, overlay)
     return raw_path, marked_path
 
 
@@ -471,7 +480,8 @@ def run_session(args: argparse.Namespace) -> Path:
     telemetry_file = None
     events_file = None
     stopped_by = "completed"
-    started_perf = time.perf_counter()
+    setup_started_perf = time.perf_counter()
+    measurement_started_perf: float | None = None
     started_wall = datetime.now().astimezone().isoformat(timespec="milliseconds")
     frame_index = 0
     valid_count = 0
@@ -491,8 +501,8 @@ def run_session(args: argparse.Namespace) -> Path:
     normalized_valid_mean = RunningImageMean()
     event_detector = EventDetector()
     last_frame_time = 0.0
-    last_flush_time = started_perf
-    last_disk_check_time = started_perf
+    last_flush_time = setup_started_perf
+    last_disk_check_time = setup_started_perf
     last_display_time = 0.0
     last_raw: np.ndarray | None = None
     last_norm: np.ndarray | None = None
@@ -596,7 +606,7 @@ def run_session(args: argparse.Namespace) -> Path:
             },
         }
         json_write(session_dir / "metadados.json", metadata)
-        cv2.imwrite(str(session_dir / "frame_selecao.png"), selection_frame)
+        write_png_unicode(session_dir / "frame_selecao.png", selection_frame)
 
         telemetry_file = (session_dir / "telemetria.csv").open(
             "w", newline="", encoding="utf-8"
@@ -690,9 +700,14 @@ def run_session(args: argparse.Namespace) -> Path:
         )
         print("O mount NAO sera conectado. Pressione Q, Esc ou Ctrl+C para terminar.")
 
+        # A duracao solicitada mede somente a aquisicao, sem incluir conexao e selecao.
+        measurement_started_perf = time.perf_counter()
+        last_flush_time = measurement_started_perf
+        last_disk_check_time = measurement_started_perf
+
         while True:
             loop_started = time.perf_counter()
-            elapsed = loop_started - started_perf
+            elapsed = loop_started - measurement_started_perf
             if args.minutes > 0 and elapsed >= args.minutes * 60.0:
                 stopped_by = "duration_reached"
                 break
@@ -706,7 +721,7 @@ def run_session(args: argparse.Namespace) -> Path:
                 capture_error_count += 1
                 consecutive_capture_errors += 1
                 now = time.perf_counter()
-                elapsed = now - started_perf
+                elapsed = now - measurement_started_perf
                 event = ["capture_error"] if event_detector._allow("capture_error", now) else []
                 row = {field: "" for field in CSV_FIELDS}
                 row.update(
@@ -749,7 +764,7 @@ def run_session(args: argparse.Namespace) -> Path:
                 continue
 
             now = time.perf_counter()
-            elapsed = now - started_perf
+            elapsed = now - measurement_started_perf
             measured_fps = 0.0 if last_frame_time <= 0 else 1.0 / max(now - last_frame_time, 1e-6)
             last_frame_time = now
             if measured_fps > 0:
@@ -923,7 +938,12 @@ def run_session(args: argparse.Namespace) -> Path:
         raise
     finally:
         ended_perf = time.perf_counter()
-        duration_s = ended_perf - started_perf
+        total_duration_s = ended_perf - setup_started_perf
+        duration_s = (
+            0.0
+            if measurement_started_perf is None
+            else ended_perf - measurement_started_perf
+        )
         if telemetry_file is not None:
             telemetry_file.flush()
             telemetry_file.close()
@@ -943,6 +963,7 @@ def run_session(args: argparse.Namespace) -> Path:
             "ended_at": datetime.now().astimezone().isoformat(timespec="milliseconds"),
             "stopped_by": stopped_by,
             "duration_s": duration_s,
+            "total_duration_including_setup_s": total_duration_s,
             "frames_attempted": frame_index,
             "valid_frames": valid_count,
             "valid_percent": 100.0 * valid_count / max(frame_index, 1),

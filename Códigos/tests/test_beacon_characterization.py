@@ -1,5 +1,6 @@
 import importlib.util
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -92,6 +93,17 @@ class BeaconCharacterizationTests(unittest.TestCase):
                 int(beacon.MAX_EVENT_STORAGE_MB * 1024 * 1024),
             )
         )
+
+    def test_png_writer_supports_unicode_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "códigos" / "média.png"
+            path.parent.mkdir()
+            beacon.write_png_unicode(path, np.full((8, 9), 123, dtype=np.uint8))
+            self.assertTrue(path.exists())
+            loaded = np.fromfile(path, dtype=np.uint8)
+            decoded = beacon.cv2.imdecode(loaded, beacon.cv2.IMREAD_GRAYSCALE)
+            self.assertEqual(decoded.shape, (8, 9))
+            self.assertTrue(np.all(decoded == 123))
 
 
 if __name__ == "__main__":
