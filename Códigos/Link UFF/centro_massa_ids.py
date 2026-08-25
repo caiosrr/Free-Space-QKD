@@ -1,6 +1,5 @@
-"""Executa a calibracao foco multiplo usando a IDS U3-3680XCP-NIR."""
+"""Executa o centro de massa/foco multiplo usando a IDS U3-3680XCP-NIR."""
 
-import runpy
 import sys
 from pathlib import Path
 
@@ -15,10 +14,13 @@ import config_camera_ids as camera_config
 
 camera_config.apply_environment()
 
+from foco_multiplos import centro_massa as programa
+
+
+programa.CAMERA_GAIN = camera_config.ANALOG_GAIN
+programa.EXPOSURE_SECONDS = camera_config.EXPOSURE_US * 1e-6
+programa.CAPTURE_COOLDOWN_SLEEP_S = 0.0
+
+
 if __name__ == "__main__":
-    target = (
-        CODIGOS_DIR
-        / "foco_multiplos"
-        / "calibracao_foco.py"
-    )
-    runpy.run_path(str(target), run_name="__main__")
+    programa.main()

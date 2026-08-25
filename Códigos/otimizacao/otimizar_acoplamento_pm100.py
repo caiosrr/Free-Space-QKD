@@ -5,17 +5,16 @@ import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from urllib import request
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from artifact_paths import json_output_path
-from controle.mov_mount_remoto import TelescopeClient, move_relative_remote
+from controle import mount_control
+from controle.mount_agent_client import call_json
 
 
-DEFAULT_RECEIVER_URL = "http://127.0.0.1:11111/api/v1/telescope/0"
 DEFAULT_EMITTER_AGENT_URL = "http://10.6.0.145:18080"
 DEFAULT_WAVELENGTH_NM = 632.8
 DEFAULT_SETTLE_S = 0.8
@@ -196,28 +195,19 @@ class PM100Reader:
 
 def call_agent(agent_url: str, endpoint: str, payload: dict | None = None) -> dict:
     base = agent_url.rstrip("/")
-    data = None
-    headers = {}
     method = "GET" if payload is None else "POST"
-    if payload is not None:
-        data = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    req = request.Request(f"{base}/{endpoint.lstrip('/')}", data=data, headers=headers, method=method)
-    with request.urlopen(req, timeout=180) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    return call_json(method, f"{base}/{endpoint.lstrip('/')}", payload)
 
 
 class CouplingOptimizer:
     def __init__(
         self,
         pm: PM100Reader,
-        receiver: TelescopeClient,
         emitter_agent_url: str | None,
         settle_s: float,
         samples: int,
     ):
         self.pm = pm
-        self.receiver = receiver
         self.emitter_agent_url = emitter_agent_url
         self.settle_s = settle_s
         self.samples = samples
@@ -239,7 +229,7 @@ class CouplingOptimizer:
     def move_receiver(self, axis: str, delta_deg: float) -> None:
         delta_az = delta_deg if axis == "az" else 0.0
         delta_alt = delta_deg if axis == "alt" else 0.0
-        move_relative_remote(self.receiver, delta_az, delta_alt)
+        mount_control.move_axes_pid_2d(True, delta_az, delta_alt)
 
     def move_emitter(self, axis: str, delta_deg: float) -> None:
         if self.emitter_agent_url is None:
@@ -317,7 +307,6 @@ def parse_steps(text: str) -> list[float]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Otimiza acoplamento usando PM100USB como metrica.")
-    parser.add_argument("--receiver-url", default=DEFAULT_RECEIVER_URL)
     parser.add_argument("--emitter-agent-url", default=None)
     parser.add_argument("--pm-resource", default=None)
     parser.add_argument("--wavelength-nm", type=float, default=DEFAULT_WAVELENGTH_NM)
@@ -332,9 +321,11 @@ def main() -> None:
     print(f"PM100: {pm.idn}")
     print(f"VISA resource: {pm.resource_name}")
 
-    receiver = TelescopeClient(args.receiver_url)
-    receiver.ensure_ready()
-    print(f"Receiver local: {args.receiver_url}")
+    mount_control.ensure_connected()
+    mount_control.ensure_unparked()
+    mount_control.ensure_not_tracking()
+    receiver_az, receiver_alt = mount_control.read_altaz()
+    print(f"Receiver local: Az={receiver_az:.6f} deg | Alt={receiver_alt:.6f} deg")
 
     if args.emitter_agent_url:
         print(f"Emitter agent: {args.emitter_agent_url}")
@@ -344,7 +335,6 @@ def main() -> None:
 
     optimizer = CouplingOptimizer(
         pm=pm,
-        receiver=receiver,
         emitter_agent_url=args.emitter_agent_url,
         settle_s=args.settle_s,
         samples=args.samples,
@@ -366,7 +356,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nOtimização interrompida.")
     finally:
-        receiver.stop()
+        mount_control.stop_axes_safely()
         if args.emitter_agent_url:
             try:
                 call_agent(args.emitter_agent_url, "/stop", {})

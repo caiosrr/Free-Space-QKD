@@ -10,7 +10,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from artifact_paths import display_path
 from controle.alvo_alinhamento import centro_frame, salvar_alvo
-from foco_multiplos.Center_of_Mass_foco_temp import (
+from foco_multiplos.centro_massa import (
     EXPOSURE_SECONDS,
     capture_frame,
     centro_massa,

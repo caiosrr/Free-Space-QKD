@@ -17,7 +17,6 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from artifact_paths import display_path, json_output_path, matrix_candidates
-from controle.Center_of_Mass import centro_camera, centro_massa as centro_massa_full_frame
 from controle.Tracker import (
     MeasurementPDTrim,
     calcular_cm_corrigido,
@@ -30,7 +29,7 @@ from controle.Tracker import (
 from controle.mount_control import VEL_MAX_LIMITE, VEL_MIN_LIMITE
 
 try:
-    from foco_multiplos import Center_of_Mass_foco_temp as foco_temp
+    from foco_multiplos import centro_massa as foco_temp
 except Exception:
     foco_temp = None
 
@@ -679,15 +678,8 @@ def _configure_focus_detector(focus_mode: str) -> None:
 
 
 def _measure_frame_cm(frame: np.ndarray, focus_mode: str, full_frame: bool):
-    if focus_mode == "dual" and foco_temp is not None:
+    if foco_temp is not None and (focus_mode == "dual" or full_frame):
         cm = foco_temp.centro_massa(frame)
-        if cm is None:
-            return None
-        x_cm, y_cm, _, touches_edge = cm
-        return float(x_cm), float(y_cm), bool(touches_edge)
-
-    if full_frame:
-        cm = centro_massa_full_frame(frame)
         if cm is None:
             return None
         x_cm, y_cm, _, touches_edge = cm
@@ -1053,7 +1045,8 @@ def centralize_with_center_of_mass_safe(
             return False, {"reason": "no_signal", "iterations": idx - 1}
 
         x_cm, y_cm, touches_edge = cm
-        cx, cy = centro_camera(frame)
+        height, width = frame.shape[:2]
+        cx, cy = (width - 1) / 2, (height - 1) / 2
         dx = float(x_cm - cx)
         dy = float(y_cm - cy)
         radius = float(np.hypot(dx, dy))

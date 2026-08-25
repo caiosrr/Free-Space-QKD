@@ -11,8 +11,8 @@ CODIGOS_DIR = Path(__file__).resolve().parents[1]
 if str(CODIGOS_DIR) not in sys.path:
     sys.path.insert(0, str(CODIGOS_DIR))
 
-from foco_multiplos import Center_of_Mass_foco_temp as focus
-from foco_multiplos import calibracao_foco as calibration
+from foco_multiplos import centro_massa as focus
+from calibracoes.legado import calibracao_estrela as calibration
 
 
 class ManualFocusRoiTests(unittest.TestCase):

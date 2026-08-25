@@ -1,10 +1,15 @@
 import tempfile
 import unittest
+import sys
 from pathlib import Path
 
 import numpy as np
 
-from foco_multiplos import calibracao_varredura_continua as continuous
+CODIGOS_DIR = Path(__file__).resolve().parents[1]
+if str(CODIGOS_DIR) not in sys.path:
+    sys.path.insert(0, str(CODIGOS_DIR))
+
+from calibracoes import calibracao_continua_core as continuous
 
 
 class ContinuousCalibrationTests(unittest.TestCase):
@@ -91,6 +96,28 @@ class ContinuousCalibrationTests(unittest.TestCase):
         daz, dalt = continuous._offsets_from_start(359.999, 10.0, 0.004, 9.998)
         self.assertAlmostEqual(daz, 0.005)
         self.assertAlmostEqual(dalt, -0.002)
+
+    def test_robust_profile_separates_fit_local_holdout_and_wide_validation(self):
+        profile = continuous.calibration_profile("robusto")
+        roles = [spec.role for spec in profile.specs]
+
+        self.assertEqual(roles.count("fit"), 4)
+        self.assertEqual(roles.count("holdout_local"), 4)
+        self.assertEqual(roles.count("holdout_amplo"), 4)
+        self.assertTrue(
+            all(
+                spec.half_range_deg == continuous.LOCAL_HALF_RANGE_DEG
+                for spec in profile.specs
+                if spec.role == "fit"
+            )
+        )
+        self.assertTrue(
+            all(
+                spec.half_range_deg > continuous.LOCAL_HALF_RANGE_DEG
+                for spec in profile.specs
+                if spec.role == "holdout_amplo"
+            )
+        )
 
 
 if __name__ == "__main__":

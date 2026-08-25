@@ -10,7 +10,7 @@ import numpy as np
 
 import controle.Tracker as tracker
 import controle.mount_control as mount_control
-import foco_multiplos.calibracao_foco as calibracao
+import calibracoes.legado.calibracao_estrela as calibracao
 
 
 class TrackerSafetyTests(unittest.TestCase):

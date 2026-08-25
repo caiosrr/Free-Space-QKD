@@ -18,7 +18,7 @@ FOCO_DIR = Path(
     )
 )
 
-from controle.camera_backend import (
+from controle.cameras.backend import (
     backend_name,
     capture_raw_frame,
     connect_camera,
@@ -38,8 +38,9 @@ from controle.mount_control import (
 )
 
 
-FOCUS_MODE = "single"
-RAW_SIGNAL_MIN = 20.0 if backend_name() == "ids" else 200.0
+CAMERA_BACKEND = backend_name()
+FOCUS_MODE = "dual"
+RAW_SIGNAL_MIN = 20.0 if CAMERA_BACKEND in {"ids", "zwo_sdk"} else 200.0
 DUAL_THRESHOLD_PERCENT = 0.45
 LOCAL_RADIUS_PX = 90
 MIN_LOCAL_PIXELS = 8
@@ -54,16 +55,17 @@ LOCK_NEAR_CONTINUITY_PX = 24.0
 # fachada ou outra ilha fora da vizinhanca nao apaga uma luz mais fraca.
 LOCK_SEARCH_MARGIN_PX = 20.0
 lim_px = 2.0
-CAMERA_GAIN = (
-    float(os.environ.get("QKD_IDS_ANALOG_GAIN", "1"))
-    if backend_name() == "ids"
-    else ASI_GAIN
-)
-EXPOSURE_SECONDS = (
-    float(os.environ.get("QKD_IDS_EXPOSURE_US", "7276")) * 1e-6
-    if backend_name() == "ids"
-    else ASI_EXPOSURE_SECONDS
-)
+if CAMERA_BACKEND == "ids":
+    CAMERA_GAIN = float(os.environ.get("QKD_IDS_ANALOG_GAIN", "1"))
+    EXPOSURE_SECONDS = float(os.environ.get("QKD_IDS_EXPOSURE_US", "7276")) * 1e-6
+elif CAMERA_BACKEND == "zwo_sdk":
+    CAMERA_GAIN = float(os.environ.get("QKD_ZWO_GAIN", str(ASI_GAIN)))
+    EXPOSURE_SECONDS = float(
+        os.environ.get("QKD_ZWO_EXPOSURE_US", str(ASI_EXPOSURE_SECONDS * 1e6))
+    ) * 1e-6
+else:
+    CAMERA_GAIN = ASI_GAIN
+    EXPOSURE_SECONDS = ASI_EXPOSURE_SECONDS
 ROTATE_IMAGE_180 = os.environ.get("QKD_ROTATE_IMAGE_180", "1") != "0"
 IDS_MATRIX_PREFIX = "ids_foco_temp" if ROTATE_IMAGE_180 else "ids_raw_foco_temp"
 CAPTURE_HTTP_ATTEMPTS = 3

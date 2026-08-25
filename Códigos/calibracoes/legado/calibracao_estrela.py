@@ -22,7 +22,7 @@ from artifact_paths import (
     matrix_candidates,
     matrix_output_path,
 )
-from foco_multiplos.Center_of_Mass_foco_temp import (
+from foco_multiplos.centro_massa import (
     backend_name,
     capture_frame,
     centro_massa,
@@ -1543,7 +1543,7 @@ def main():
     get_asi_performance = None
     print_asi_performance = None
     if backend_name() == "alpaca":
-        from controle.camera_asi_fast import (
+        from controle.cameras.alpaca import (
             get_performance_stats,
             print_performance_summary,
             reset_performance_stats,

@@ -39,7 +39,7 @@ TWIDDLE_MAX_ITERS = 5
 TWIDDLE_MIN_DP_SUM = 0.01
 DP_SHRINK = 0.60
 DP_GROW = 1.20
-RESULTS_JSON = json_output_path("autotune_mov_simultaneo_resultados.json")
+RESULTS_JSON = json_output_path("autotune_mount_control_resultados.json")
 
 # Mantemos Ki fixo para reduzir risco e dimensionalidade.
 KI_FIXED = 0.0001
@@ -423,7 +423,7 @@ def print_podium(history: list[CandidateEvaluation]):
         ),
     )
 
-    print("\n=== Podio Autotune mov_simultaneo ===")
+    print("\n=== Podio autotune mount_control ===")
     for idx, item in enumerate(ranking[:5], start=1):
         median_str = f"{item.median_time_s:.3f}s" if item.median_time_s is not None else "n/a"
         print(
@@ -487,7 +487,7 @@ def main():
     ensure_unparked()
     ensure_not_tracking()
 
-    print("=== Autotune Seguro do mov_simultaneo ===")
+    print("=== Autotune seguro do mount_control ===")
     print("Busca local tipo twiddle em Kp/Kd, com Ki fixo e limites rigidos de seguranca.\n")
     mount = None
 

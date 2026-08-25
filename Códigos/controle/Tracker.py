@@ -80,8 +80,8 @@ from controle.mount_control import (
     read_altaz,
     stop_axes_safely,
 )
-from controle.camera_backend import backend_name
-from foco_multiplos import Center_of_Mass_foco_temp as foco_temp
+from controle.cameras.backend import backend_name
+from foco_multiplos import centro_massa as foco_temp
 
 
 # =============================================================================
@@ -196,7 +196,7 @@ def call(method: str, command: str, timeout: float = 5.0, **extra_args):
 
 
 def _ids_camera():
-    from controle.camera_ids_peak import camera
+    from controle.cameras.ids_peak import camera
 
     return camera
 
@@ -602,7 +602,7 @@ def wait_until_image_ready(
 
 
 def fetch_image_array() -> np.ndarray:
-    from controle.camera_asi_fast import fetch_image_array as fetch_image_array_fast
+    from controle.cameras.alpaca import fetch_image_array as fetch_image_array_fast
 
     return fetch_image_array_fast()
 
@@ -611,7 +611,7 @@ def capture_frame(exposure_seconds: float) -> np.ndarray:
     if backend_name() == "ids":
         frame = _ids_camera().capture(exposure_seconds).astype(np.float32)
     else:
-        from controle.camera_asi_fast import record_capture_time
+        from controle.cameras.alpaca import record_capture_time
 
         capture_started = time.perf_counter()
         start_exposure(exposure_seconds, light=True)

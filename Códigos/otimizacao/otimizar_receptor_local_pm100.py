@@ -13,7 +13,7 @@ if str(ROOT_DIR) not in sys.path:
 from artifact_paths import json_output_path
 from controle import mount_control
 from controle.alvo_alinhamento import salvar_alvo
-from foco_multiplos import Center_of_Mass_foco_temp as foco_temp
+from foco_multiplos import centro_massa as foco_temp
 from otimizacao.otimizar_acoplamento_pm100 import PM100Reader
 
 

@@ -77,29 +77,20 @@ Feche o IDS peak Cockpit antes de executar.
 Centro de massa/centralizacao:
 
 ```powershell
-python ".\Link UFF\Center_of_Mass_foco_temp_IDS.py"
+python ".\Link UFF\centro_massa_ids.py"
 ```
 
-Calibracao angular-pixel:
+Calibracao angular-pixel continua (mesmo executavel da ZWO):
 
 ```powershell
-python ".\Link UFF\calibracao_foco_ids.py"
+python .\calibracoes\calibracao_continua.py --camera ids --perfil robusto
 ```
 
-Calibracao alternativa por varredura continua (recomendada quando a luz muda
-de forma ou se desloca muito entre os pontos da calibracao tradicional):
-
-```powershell
-python ".\Link UFF\calibracao_varredura_continua_ids.py"
-```
-
-Ela faz quatro trajetorias lentas de `0.008 deg`, capturando durante o
-movimento: Az nos dois sentidos e Alt nos dois sentidos. A matriz so pode ser
-ativada se ida e volta concordarem e a resposta em pixels superar o ruido. Ao
-aprovar, o programa pergunta se deve ativa-la no tracker. Antes da ativacao,
-as matrizes vigentes sao copiadas para
-`Link UFF/resultados/calibracao/backups/`; a calibracao tradicional e seus
-arquivos continuam disponiveis.
+O perfil `robusto` usa quatro trajetorias de `0.008 deg` para ajustar, outras
+quatro para validacao independente e quatro de `0.014 deg` para testar a faixa
+maior sem mistura-la na matriz local. Para uma calibracao curta, use
+`--perfil rapido`. Antes da ativacao, as matrizes vigentes sao copiadas para
+`Link UFF/resultados/calibracao/backups/`.
 
 Tracker continuo (somente depois de calibrar com a IDS):
 
@@ -124,11 +115,7 @@ Ambos usam por padrao `7276 us`, `20 fps`, ganho analogico `1`, ganho digital
 com o spot visivel, folga mecanica disponivel e possibilidade de interromper com
 `Ctrl+C`.
 
-Quando a calibracao perguntar se o teste ocorre no link longo UFF-CBPF, responda
-`s`. Esse perfil usa cinco frames por medicao e tolerancias proprias para drift
-atmosferico, mas ainda repete ou rejeita medidas com jitter extremo.
-
-Em cenas com varias luzes, escolha `1=escolher ilha + ROI do tracker`. Na
+Em cenas com varias luzes, na selecao interativa, na
 primeira tela, arraste um retangulo ao redor da regiao onde esta a luz e
 pressione Enter. O limiar e recalculado somente dentro desse recorte. Na segunda
 tela, clique na ilha correta e pressione Enter. Use `-`/`+` para diminuir ou
@@ -137,8 +124,8 @@ mesma ROI `256 x 256` do tracker, a identidade escolhida fica congelada e
 somente a matriz fine local e medida. O tracker adota automaticamente o modo de
 ilha salvo ao ser iniciado depois.
 
-Os programas originais continuam usando a camera Alpaca/ASI. O backend IDS so e
-selecionado pelos executaveis desta pasta.
+O backend IDS e selecionado por `--camera ids` e recebe automaticamente os
+parametros e caminhos de `Link UFF/config_camera_ids.py`.
 
 O tracker IDS usa ROI nativa de `256 x 256` pixels. Esse tamanho respeita os
 incrementos de largura da U3-3680XCP-NIR. As posicoes da ROI tambem sao

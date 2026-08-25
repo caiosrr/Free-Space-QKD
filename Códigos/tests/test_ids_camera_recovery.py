@@ -10,7 +10,7 @@ CODIGOS_DIR = Path(__file__).resolve().parents[1]
 if str(CODIGOS_DIR) not in sys.path:
     sys.path.insert(0, str(CODIGOS_DIR))
 
-from controle.camera_ids_peak import IDSPeakCamera
+from controle.cameras.ids_peak import IDSPeakCamera
 
 
 class IdsCameraRecoveryTests(unittest.TestCase):

@@ -4,12 +4,14 @@ Controle, calibracao e tracking para testes de apontamento com telescopios, came
 
 ## Estrutura
 
-- `controle/`: codigo principal de conexao, movimento, tracking, agente remoto e utilitarios compartilhados.
-- `controle/mount_control.py`: movimento principal do mount local; `mov_simultaneo.py` e apenas alias de compatibilidade.
-- `calibracoes/Calibracao_ang-pix_dual_v3.py`: calibracao angular-pixel principal para um foco.
+- `controle/`: tracker, movimento do mount, agente remoto e memoria compartilhada do alvo.
+- `controle/cameras/`: backends Alpaca/ASCOM, IDS e ZWO SDK.
+- `controle/alvo_alinhamento.py`: biblioteca interna de coordenadas, ROI e assinatura do alvo; nao e executada diretamente.
+- `controle/mount_control.py`: movimento principal do mount local.
+- `calibracoes/calibracao_continua.py`: calibracao angular-pixel principal, com ZWO SDK e IDS.
 - `foco_multiplos/`: fluxo para imagens com dois ou mais focos/reflexoes; tambem funciona para foco unico e pode virar o padrao.
 - `calibracoes/autotune/`: autotunes, validacoes e buscas de parametros.
-- `calibracoes/legado/`: versoes antigas ou experimentais mantidas como referencia.
+- `calibracoes/legado/calibracao_estrela.py`: calibracao antiga por pontos, mantida apenas como referencia.
 - `otimizacao/`: scripts que usam power meter/camera como metrica para maximizar acoplamento.
 - `ferramentas/`: scripts de bancada/diagnostico, como definir alvo da fibra e diagnosticar mounts.
 - `resultados/matrizes/`: matrizes usadas pelos scripts.
@@ -20,14 +22,14 @@ Controle, calibracao e tracking para testes de apontamento com telescopios, came
 ## Comandos Uteis
 
 ```powershell
-python .\foco_multiplos\Center_of_Mass_foco_temp.py
-python .\foco_multiplos\calibracao_foco.py
+python .\foco_multiplos\centro_massa.py
+python .\calibracoes\calibracao_continua.py --camera zwo --perfil robusto
 python .\controle\Tracker.py
 python .\controle\mount_control.py
-python .\controle\mov_mount_remoto.py
+python .\controle\mount_agent_client.py
 python .\ferramentas\definir_alvo_fibra.py
 python .\ferramentas\diagnostico_mounts.py
-python .\calibracoes\autotune\autotune_mov_mount_remoto.py
+python .\calibracoes\autotune\autotune_mount_control.py
 python .\otimizacao\otimizar_acoplamento_pm100.py
 ```
 
@@ -43,31 +45,41 @@ ALPACA_ADDRESS = "127.0.0.1:11111"
 DEVICE_NUMBER = 0
 ```
 
-Essa configuracao e usada por `Center_of_Mass_foco_temp.py`, pela calibracao de
-foco multiplo e por `controle/Tracker.py`. O fluxo IDS/Link UFF continua usando
+Essa configuracao e usada por `foco_multiplos/centro_massa.py`, pela calibracao
+continua ZWO e por `controle/Tracker.py`. O fluxo IDS/Link UFF continua usando
 seu proprio `Link UFF/config_camera_ids.py`.
 
 A captura ASI tenta automaticamente a transferencia binaria ImageBytes e volta
 para JSON se o ASCOM Remote Server nao a oferecer. Depois de atualizar o
 repositorio, instale a dependencia com `python -m pip install -r requirements.txt`.
 
-Ao iniciar uma calibracao, `auditoria_foco_temp` e limpa e recebe uma unica
-pasta `calibracao_AAAA-MM-DD_HH-MM-SS`. Ela inclui as imagens, a posicao inicial
-do mount e `resumo_execucao.json` com os tempos medidos.
+## Calibracao continua
 
-A calibracao pergunta se o ensaio e no link longo UFF-CBPF. Respondendo `s`,
-ela usa cinco frames por medicao, mediana robusta e limites separados para drift
-e jitter atmosfericos. O movimento fine passa de `0.010` para `0.015` grau para
-melhorar a relacao sinal/drift. Respondendo `n` ou Enter, preserva o perfil de
-laboratorio.
+O executavel principal tem dois backends e dois perfis:
 
-Quando houver predios ou varias regioes luminosas, escolha `1=escolher ilha +
-ROI do tracker` na pergunta de medicao. O programa mostra as ilhas em amarelo:
-clique na desejada e pressione Enter. A assinatura e a geometria dessa ilha
-ficam congeladas. Para a ASI, a ROI padrao e `384 x 384` pixels e a calibracao
-fine combina os raios `0.004`, `0.008` e `0.016` grau. Antes de mover o mount,
-cinco frames validam se a ilha continua estavel. A matriz local e salva como
-fine e coarse para o tracker nao misturar o resultado novo com uma coarse antiga.
+```powershell
+python .\calibracoes\calibracao_continua.py --camera zwo --perfil robusto
+python .\calibracoes\calibracao_continua.py --camera ids --perfil robusto
+python .\calibracoes\calibracao_continua.py --camera zwo --perfil rapido
+```
+
+O perfil `rapido` usa quatro trajetorias de `0.008 deg`. O perfil `robusto`
+repete as direcoes em outra ordem usando dados separados para validacao e
+depois testa `0.014 deg`. A matriz do tracker continua sendo ajustada somente
+na faixa local; o movimento maior serve para detectar nao linearidade. Cada
+execucao salva CSV, matrizes candidatas e resumo em
+`resultados/calibracao/continua/`. A matriz vigente so muda depois das
+validacoes e de confirmacao explicita, com backup automatico.
+
+Para a ZWO, instale o binding e o SDK oficial:
+
+```powershell
+python -m pip install -r requirements-zwo.txt
+python .\calibracoes\calibracao_continua.py --camera zwo --perfil robusto --sdk-path "C:\caminho\ASICamera2.dll"
+```
+
+Feche ASIStudio e desconecte a camera do ASCOM antes de abri-la pelo SDK. O
+mount continua no ASCOM; somente a aquisicao da camera usa USB/SDK direto.
 
 ROI, raios, zona de repouso, duracao maxima, limites absolutos e frequencia do
 CSV ficam centralizados em `config_tracker.py`. Cada sessao cria uma pasta em

@@ -1,4 +1,4 @@
-"""Transferencia eficiente de imagens ASI pelo ASCOM Alpaca.
+"""Controle e transferencia eficiente da camera ASI pelo ASCOM Alpaca.
 
 Tenta ImageBytes (binario) primeiro. Se o Remote Server/driver ainda devolver
 JSON, memoriza isso e usa o modo compativel nas capturas seguintes.
@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import threading
 import time
+import itertools
 
 import numpy as np
+import requests
 from alpaca.camera import Camera
 from alpaca.exceptions import InvalidValueException
 
@@ -17,6 +19,10 @@ from config_camera_asi import ALPACA_ADDRESS, DEVICE_NUMBER
 
 
 _camera = Camera(ALPACA_ADDRESS, DEVICE_NUMBER)
+_base_url = f"http://{ALPACA_ADDRESS}/api/v1/camera/{DEVICE_NUMBER}"
+_client_id = 1
+_transaction_ids = itertools.count(1)
+_session = requests.Session()
 _lock = threading.Lock()
 _imagebytes_supported: bool | None = None
 _stats = {
@@ -27,6 +33,57 @@ _stats = {
     "transfer_max_seconds": 0.0,
     "capture_seconds": 0.0,
 }
+
+
+def call(method: str, command: str, timeout: float = 5.0, **extra_args):
+    params = {
+        "ClientID": _client_id,
+        "ClientTransactionID": next(_transaction_ids),
+    }
+    params.update(extra_args.pop("params", {}))
+    response = _session.request(
+        method,
+        f"{_base_url}/{command}",
+        params=params,
+        timeout=timeout,
+        **extra_args,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("ErrorNumber", 0):
+        raise RuntimeError(f"{command}: {payload.get('ErrorMessage')}")
+    return payload.get("Value")
+
+
+def connect() -> None:
+    print("Conectando a camera ASI/Alpaca...")
+    call("PUT", "connected", data={"Connected": True})
+
+
+def disconnect() -> None:
+    print("Desconectando a camera ASI/Alpaca...")
+    call("PUT", "connected", data={"Connected": False})
+
+
+def set_gain(gain: int) -> None:
+    call("PUT", "gain", data={"Gain": int(gain)})
+
+
+def start_exposure(duration_seconds: float, light: bool = True) -> None:
+    call(
+        "PUT",
+        "startexposure",
+        data={"Duration": float(duration_seconds), "Light": bool(light)},
+    )
+
+
+def wait_until_image_ready(poll_interval: float = 0.001, timeout: float = 5.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if bool(call("GET", "imageready")):
+            return
+        time.sleep(poll_interval)
+    raise TimeoutError("Tempo limite esperando ImageReady = True")
 
 
 def _shape_from_metadata(info) -> tuple[int, ...]:

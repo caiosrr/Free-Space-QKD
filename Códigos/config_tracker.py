@@ -2,7 +2,7 @@
 
 Os valores deste arquivo sao deliberadamente conservadores para sessoes longas.
 Camera, ganho e exposicao continuam em ``config_camera_asi.py`` ou, para a IDS,
-em ``Link UFF/config_camera_ids.py``.
+em ``Link UFF/config_camera_ids.py``. Os drivers ficam em ``controle/cameras``.
 """
 
 # ROI fixa ao redor da luz escolhida. Uma ROI maior facilita reencontrar um spot

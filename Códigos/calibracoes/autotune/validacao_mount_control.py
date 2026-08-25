@@ -11,7 +11,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from artifact_paths import display_path, json_candidates, json_output_path
-from calibracoes.autotune.autotune_mov_simultaneo import (
+from calibracoes.autotune.autotune_mount_control import (
     MoveTrialResult,
     TestMove,
     TunedParams,
@@ -22,8 +22,8 @@ from calibracoes.autotune.autotune_mov_simultaneo import (
     move_axis,
 )
 
-SOURCE_RESULTS_JSON = "autotune_mov_simultaneo_resultados.json"
-RESULTS_JSON = json_output_path("validacao_podio_mov_simultaneo_resultados.json")
+SOURCE_RESULTS_JSON = "autotune_mount_control_resultados.json"
+RESULTS_JSON = json_output_path("validacao_mount_control_resultados.json")
 TOP_N = 3
 VALIDATION_REPEATS = 1
 
@@ -198,7 +198,7 @@ def print_podium(results: list[CandidateValidation]):
         ),
     )
 
-    print("\n=== Podio Validacao do mov_simultaneo ===")
+    print("\n=== Podio de validacao do mount_control ===")
     for idx, item in enumerate(ranking, start=1):
         median_str = f"{item.median_time_s:.3f}s" if item.median_time_s is not None else "n/a"
         print(
@@ -256,7 +256,7 @@ def main():
             source_path = source_candidates[0]
         top_candidates = _load_top_candidates(source_path, TOP_N)
 
-        print("=== Validacao do Podio mov_simultaneo ===")
+        print("=== Validacao do podio mount_control ===")
         print("Top 3 do autotune principal testados em amplitudes menores e movimentos diagonais.\n")
 
         results = [

@@ -1,349 +1,271 @@
-<h1 align="center">Notas IC</h1>
+# Notas de continuidade do Free-Space-QKD
 
-## Retorno das ferias - plano de retomada
+Atualizado em 2026-08-20. Este documento guarda somente o estado atual,
+decisoes tecnicas ainda validas, roteiro de estudo e ideias futuras.
 
-Data da anotacao: 2026-07-10.
+## Estado atual do projeto
 
-Contexto: o setup esta usando dois computadores e dois telescopios. O notebook controla o telescopio emissor via `mount_agent`; o Alien e o PC do laboratorio e controla o telescopio receptor e a camera. A comunicacao entre eles esta sendo feita por HTTP, sem depender de conexao Alpaca direta entre PCs para os dois mounts.
+### Fluxo principal
 
-### Antes de retomar testes longos
+1. `foco_multiplos/centro_massa.py` detecta e seleciona a fonte.
+2. `calibracoes/calibracao_continua.py` mede a relacao angular-pixel.
+3. `controle/Tracker.py` carrega a matriz, acompanha a ilha e controla o mount.
+4. `controle/mount_control.py` concentra movimento local e parada segura.
+5. `controle/alvo_alinhamento.py` guarda coordenadas, ROI e assinatura da ilha;
+   e uma biblioteca interna, nao um programa para executar.
 
-1. Fazer `git pull` no notebook e no Alien.
-2. Conferir `git status` nos dois PCs antes de rodar qualquer coisa.
-3. Verificar se o ambiente Python/`.venv` esta ativo e com as dependencias instaladas.
-4. Conferir cabos USB, fontes dos telescopios, camera e laser antes de energizar.
-5. Ligar o laser somente depois de checar tampas, caminho optico e seguranca.
-6. Rodar um teste simples de movimento em cada mount antes do tracker.
+Os drivers ficam em `controle/cameras/`:
 
-### Estado bom antes das ferias
+* `alpaca.py`: ASI pelo ASCOM/Alpaca;
+* `ids_peak.py`: IDS pelo SDK peak;
+* `zwo_sdk.py`: ASI pelo SDK nativo da ZWO;
+* `backend.py`: interface comum usada pelos programas.
 
-O tracker melhorou bastante depois do autotune com dois telescopios. O melhor conjunto encontrado foi:
+### Resultado experimental relevante
 
-* `KpAz = 1.500`
-* `KpAlt = 1.440`
-* `KdAz = 0.180`
-* `KdAlt = 0.180`
-* `Trim = 1.200`
-* `Alpha = 0.650`
-* `Accel = 2.000`
+O tracker IDS estabilizou a fonte do enlace UFF-CBPF por aproximadamente
+1 h 40 min, incluindo perturbacoes manuais, sem trocar para fachadas ou outras
+luzes quando a fonte desaparecia. Isso mostrou que a combinacao de selecao
+manual, assinatura, continuidade espacial, matriz local e travas de seguranca
+e adequada para o enlace longo.
 
-Esse conjunto teve `sucessos=6/6` no autotune e deve ser usado como ponto de partida tanto no `Tracker.py` quanto no `autotune_pid_tracker.py`.
+Parametros atuais do tracker, obtidos pelo autotune com sucesso em 6/6 ensaios:
 
-### Pendencias principais
+* `KpAz = 1.500`;
+* `KpAlt = 1.440`;
+* `KdAz = 0.180`;
+* `KdAlt = 0.180`;
+* `Trim = 1.200`;
+* `Alpha = 0.650`;
+* `Accel = 2.000`.
 
-* Investigar e corrigir o comportamento em que movimentos bruscos deixam o tracker "em orbita" por um tempo antes de estabilizar e trazer o spot de volta para o centro.
-* Rodar mais um autotune do tracker com os parametros acima como ponto inicial, procurando melhorias menores ao redor desse conjunto.
-* Antes de tentar maximizar o acoplamento na fibra, testar bem o alinhamento por camera com os dois telescopios.
-* Testar o alinhamento com dois telescopios usando o notebook e o Alien:
-  * notebook: telescopio emissor, rodando `mount_agent`;
-  * Alien: telescopio receptor, camera, tracker e autotune.
-* Confirmar que o `mount_agent_client.py` consegue mover o telescopio emissor por angulo e que o retorno para a posicao inicial funciona.
-* Depois de realinhar manualmente os telescopios, refazer a calibracao das matrizes antes de confiar no tracker/autotune.
-* Centralizar o spot com `foco_multiplos/Center_of_Mass_foco_temp.py` antes de rodar tracker/autotune.
-* Verificar se o tracker esta usando as matrizes corretas para o modo dual:
-  * `foco_temp_A_inv_fine.npy`;
-  * `foco_temp_A_inv_coarse.npy`.
+Esses valores sao ponto de partida, nao constantes universais. Mudancas de
+mount, camera, optica ou enlace exigem nova validacao.
 
-### Cuidados tecnicos ao voltar
+### Calibracao atual
 
-* Se o spot comecar perto do centro e a centralizacao automatica tentar joga-lo para fora, parar e verificar matriz/sinal antes de continuar.
-* O laser provavelmente nao precisa de novo ajuste, mas conferir se potencia, foco e posicao inicial parecem consistentes depois das ferias.
-* Se houver perda de camera via Alpaca/driver, reiniciar a camera antes de insistir em calibracao longa.
-* Se o tracker tiver muitos `runaway events`, nao ir direto para otimizacao por potencia; primeiro melhorar estabilidade na camera.
-* Registrar o alvo de camera associado ao melhor acoplamento quando a fibra comecar a acoplar bem.
+O executavel principal e:
 
-## Ideia principal: autotune do tracker com dois telescopios
+`python .\calibracoes\calibracao_continua.py --camera zwo --perfil robusto`
 
-Data da anotacao: 2026-04-30.
+Tambem aceita `--camera ids` e `--perfil rapido`.
 
-O objetivo futuro e criar um autotune mais realista para o tracker. O laser que chega no telescopio principal vem de um segundo telescopio. A ideia e conectar os dois telescopios ao computador:
+* `rapido`: quatro varreduras locais de `0.008 deg`;
+* `robusto`: quatro varreduras para ajuste, quatro holdouts locais e quatro
+  testes de `0.014 deg`;
+* somente os dados locais entram na matriz do tracker;
+* a amplitude maior verifica linearidade, mas nao altera o ajuste local;
+* cada movimento parte da origem absoluta e o encerramento tenta restaura-la;
+* matrizes ativas so mudam depois da validacao e confirmacao do operador.
 
-* Telescopio 1: sistema controlado pelo tracker. Ele usa a camera para manter o laser centralizado no sensor e, pelo prototipo mecanico atual, isso tambem deve manter o foco no encaixe da fibra.
-* Telescopio 2: gerador de perturbacoes. O autotune deve mover esse telescopio para deslocar o feixe de entrada enquanto o telescopio 1 tenta acompanhar.
+A calibracao por pontos foi preservada apenas como
+`calibracoes/legado/calibracao_estrela.py`.
 
-Essa abordagem deve testar rejeicao de perturbacao do sistema real, em vez de testar apenas uma perturbacao artificial aplicada no mesmo telescopio que esta corrigindo.
+### Desempenho de camera
 
-## Estrutura sugerida
+No caminho ASCOM/Alpaca, o custo dominante foi aquisicao e transferencia, nao
+o centro de massa. O processamento local em ROI de tamanho moderado ficou na
+ordem de poucos milissegundos.
 
-Criar um novo arquivo, por exemplo:
+O backend `zwo_sdk` ja existe para a calibracao e usa video persistente, ganho,
+exposicao e ROI nativos. Ainda precisa ser validado com a camera real antes de
+ser colocado no tracker. O backend Alpaca deve continuar como fallback.
 
-`autotune_tracker_duplo_telescopio.py`
+## Plano de estudo dos codigos
 
-Esse arquivo deve:
+Objetivo: conseguir explicar, modificar e diagnosticar cada parte importante
+sem depender do historico das implementacoes.
 
-* Rodar o tracker controlando apenas o telescopio 1.
-* Mover apenas o telescopio 2 para criar perturbacoes padronizadas.
-* Testar varios conjuntos de parametros do tracker.
-* Medir o erro na camera durante cada ensaio.
-* Gerar um ranking dos parametros.
+### Padrao de documentacao
 
-## Parametros mais importantes para tunar
+Cada modulo importante deve informar no inicio:
 
-O tracker atual e mais um controle `PD + trim lento` do que um PID classico. Para o autotune, testar primeiro:
+* objetivo;
+* entradas e saidas;
+* unidades utilizadas;
+* dependencias de hardware;
+* efeitos sobre camera e mount;
+* comportamento de seguranca.
 
-* `KP_AZ`
-* `KP_ALT`
-* `KD_AZ`
-* `KD_ALT`
-* `CMD_ACCEL_LIMIT`
-* `MEASUREMENT_ALPHA`
+Programas grandes devem ser divididos em blocos com titulos. Funcoes publicas
+e matematicamente importantes devem ter docstrings curtas. Comentarios internos
+devem explicar o motivo de uma decisao, nao repetir a sintaxe do Python.
 
-O trim deve ser ajustado depois. Ele serve mais para erro persistente pequeno perto do centro, nao para perseguir perturbacao rapida.
+Exemplo de comentario util:
 
-## Ensaio padrao sugerido
+```python
+# Centraliza cada trajetoria separadamente para impedir que o drift entre
+# varreduras seja interpretado como resposta angular do mount.
+```
 
-Para cada conjunto de parametros:
+Evitar comentarios como `# calcula a mediana` antes de `np.median(...)`.
 
-1. Centralizar o laser com o tracker.
-2. Esperar estabilizar dentro da tolerancia.
-3. Aplicar perturbacoes pequenas no telescopio 2:
-   * `az+`
-   * `az-`
-   * `alt+`
-   * `alt-`
-   * diagonais pequenas
-4. Voltar o telescopio 2 para a posicao inicial apos cada perturbacao.
-5. Repetir com rampas lentas, simulando o feixe andando continuamente.
+### Ordem recomendada
 
-Comecar com perturbacoes pequenas, idealmente gerando algo como `10-40 px` de deslocamento na camera. Depois aumentar se a malha estiver estavel.
+#### Dia 1 — Centro de massa e ilhas
 
-## Metricas para ranquear
+Arquivo: `foco_multiplos/centro_massa.py`.
 
-Nao escolher simplesmente o ganho mais rapido. Para acoplamento em fibra, estabilidade perto do centro e mais importante.
+Estudar:
 
-Metricas sugeridas:
+* normalizacao do frame;
+* threshold;
+* componentes conexos/ilhas;
+* centro de massa ponderado;
+* assinatura da fonte;
+* continuidade espacial;
+* ROI e deteccao de borda.
 
-* RMS do erro em pixels.
-* Erro maximo em pixels.
-* Tempo para voltar para dentro de `2 px`.
-* Numero de brakes/runaway events.
-* Tempo em saturacao de comando.
-* Oscilacao perto do centro.
-* Perda de sinal.
-* Se o laser saiu do ROI da camera.
+#### Dia 2 — Calibracao e algebra linear
 
-O melhor conjunto deve ser o que centraliza rapido sem ficar nervoso, sem movimento circular e sem depender de muitos brakes.
+Arquivo: `calibracoes/calibracao_continua_core.py`.
 
-## Estado atual relevante
+Estudar:
 
-O `Tracker.py` ja foi ajustado para perguntar:
+* vetor angular `[dAz, dAlt]`;
+* vetor visual `[dx, dy]`;
+* matriz `A` e inversa `A_inv`;
+* ajuste por minimos quadrados;
+* IRLS/Huber para outliers;
+* condicionamento;
+* holdout e validacao de linearidade;
+* sincronizacao aproximada entre frame e posicao do mount.
 
-`Modo do laser (1=foco unico, 2=dupla reflexao)`
+#### Dia 3 — Movimento do mount
 
-No modo `1`, ele usa as matrizes normais:
+Arquivo: `controle/mount_control.py`.
 
-* `A_inv_fine.npy`
-* `A_inv_coarse.npy`
+Estudar:
 
-No modo `2`, ele usa as matrizes temporarias da calibracao com dois focos:
+* posicao absoluta e movimento relativo;
+* wrap do azimute em `0/360 deg`;
+* sinais fisicos dos eixos;
+* tolerancia;
+* controle PID/PD;
+* limite de velocidade;
+* parada e retorno seguro.
 
-* `foco_temp_A_inv_fine.npy`
-* `foco_temp_A_inv_coarse.npy`
+#### Dia 4 — Tracker
 
-O tracker sempre usa o mount real; a pergunta de simulador foi removida.
+Arquivo: `controle/Tracker.py`.
 
-Tambem foi adicionado um freio para movimento manual brusco: se o spot salta muito entre frames, o controle zera por um instante antes de tentar recentralizar.
+Estudar:
 
-## Observacoes sobre desempenho
+* carregamento da matriz;
+* conversao de erro em pixels para erro angular;
+* zona de repouso e histerese;
+* PD e trim lento;
+* perda de sinal;
+* salto de ilha e runaway;
+* watchdog de posicao;
+* telemetria CSV;
+* encerramento e retorno.
 
-Na ultima medicao do tracker:
+#### Dia 5 — Cameras e integracao
 
-* Camera ficou por volta de `10-13 Hz`.
-* `cap` ficou perto de `70-80 ms`.
-* `CM` ficou perto de `0.2 ms`.
-* `UI` ficou perto de `13 ms`.
+Pasta: `controle/cameras/`.
 
-Conclusao: o gargalo principal e captura/transferencia da camera via Alpaca, nao o calculo do centro de massa.
+Estudar:
 
-Foi testado reduzir `WINDOW_SIZE` de `200` para `160`, o que melhorou a taxa, mas a preferencia atual e manter `200 px` por dar mais margem quando o laser se move. Se necessario em testes futuros, reduzir o ROI pode ser uma opcao.
+* diferenca entre Alpaca e SDK nativo;
+* exposicao, ganho e formato do frame;
+* ROI no sensor;
+* captura persistente;
+* timeout, reconexao e frames descartados;
+* convencao de orientacao da imagem.
 
-## Futuro: aquisicao direta da ASI pelo SDK da ZWO
+### Exercicios sugeridos
 
-Data da anotacao: 2026-08-18.
+1. Gerar uma imagem sintetica com uma fonte gaussiana e calcular seu CM.
+2. Adicionar ruido de fundo e observar o efeito do threshold.
+3. Colocar uma segunda fonte mais intensa e manter a identidade da primeira.
+4. Simular uma fonte piscando e definir uma politica de perda de sinal.
+5. Criar uma matriz `A`, gerar deslocamentos sinteticos e recupera-la.
+6. Adicionar outliers e comparar minimos quadrados comum com ajuste robusto.
+7. Aplicar `A_inv` manualmente a um erro em pixels e conferir sinais/unidades.
+8. Criar um mount simulado e observar convergencia, overshoot e saturacao.
+9. Escrever um teste unitario antes de mudar um threshold do tracker.
+10. Explicar com as proprias palavras por que uma matriz local nao deve ser
+    extrapolada por varios graus.
 
-O caminho ASCOM/Alpaca ja usa as principais otimizacoes disponiveis sem trocar
-de backend:
+Ao estudar um modulo, registrar duvidas e pequenas explicacoes no proprio
+codigo. Alteracoes de comportamento devem ser separadas de mudancas puramente
+documentais para facilitar revisao e testes.
 
-* sessao HTTP persistente;
-* transferencia binaria `ImageBytes`, com JSON apenas como fallback;
-* ROI configurada diretamente na camera;
-* tela e controle em frequencias separadas.
+## Pendencias tecnicas
 
-Mesmo assim, cada frame ASCOM continua seguindo aproximadamente:
+### Validar a ZWO pelo SDK
 
-`StartExposure -> consultas ImageReady -> download ImageBytes -> proximo frame`
+1. Instalar o SDK oficial e `zwoasi`.
+2. Fechar ASIStudio e desconectar a camera do ASCOM.
+3. Conferir orientacao, ROI, tipo do array, ganho e exposicao.
+4. Comparar SDK e Alpaca com a mesma fonte e configuracao.
+5. Medir Hz, latencia media/p95, jitter, frames perdidos e variancia do CM.
+6. Rodar um ensaio longo antes de permitir tracking automatico pelo SDK.
 
-Isso exige varias requisicoes HTTP e nao oferece o mesmo fluxo continuo de um
-SDK nativo. A exposicao curta nao e necessariamente o maior custo; driver,
-leitura do sensor, consultas e transferencia podem dominar o intervalo.
+So criar produtor-consumidor depois dessa medicao. Se for necessario, processar
+apenas o frame mais recente e nunca manter uma fila crescente.
 
-### Proposta
+### Autotune com dois telescopios
 
-Criar no futuro um backend `zwo_sdk`, semelhante ao backend direto da IDS:
+O receptor deve executar o tracker. O emissor, controlado por `mount_agent`,
+deve gerar perturbacoes padronizadas em Az, Alt e diagonais. Avaliar:
 
-`camera ASI -> SDK ZWO/USB -> frames continuos -> tracker`
+* RMS e erro maximo;
+* tempo de retorno;
+* overshoot e oscilacao;
+* eventos de runaway/freio;
+* saturacao de comando;
+* perda de sinal ou saida da ROI.
 
-O mount continuaria usando ASCOM/Alpaca. Somente a captura da camera deixaria o
-ASCOM Remote Server. O tracker, centro de massa, matrizes, watchdog e CSV devem
-continuar compartilhados entre os backends.
+O objetivo e rejeicao de perturbacao do experimento completo, nao apenas
+otimizar rapidez no mesmo mount que corrige.
 
-Manter o backend atual `alpaca` como fallback. A selecao ideal deve ficar em uma
-configuracao simples, por exemplo:
+### Futuro: mapa de Jacobianas locais
 
-`CAMERA_BACKEND = "alpaca"` ou `CAMERA_BACKEND = "zwo_sdk"`
+Uma matriz `2 x 2` descreve apenas a vizinhanca onde foi calibrada. Para uma
+regiao maior:
 
-Nao remover o caminho ASCOM enquanto o SDK nao passar por testes longos.
+1. Definir uma grade limitada de posicoes absolutas.
+2. Calibrar uma Jacobiana local em cada no.
+3. Salvar posicao, `A`, `A_inv`, RMS, condicionamento e faixa validada.
+4. Repetir alguns nos para medir reprodutibilidade.
+5. Selecionar a matriz mais proxima ou interpolar apenas entre vizinhos validos.
+6. Recusar extrapolacao quando nao houver um no confiavel.
 
-### Por que priorizar o SDK
+Esse mapa pode alimentar um alinhamento grosso, mais lento e menos preciso,
+antes de entregar o spot ao tracker fino. Ele ainda depende de a fonte estar no
+sensor; se a fonte desaparecer completamente, sera necessaria uma busca segura
+em grade ou espiral. A ideia fica registrada, mas nao sera implementada antes
+de haver tempo de bancada para validacao.
 
-* Permite aquisicao continua, sem iniciar uma exposicao HTTP para cada frame.
-* Pode reduzir latencia e variacao entre frames.
-* Mantem controle direto de ROI, ganho, exposicao e formato RAW.
-* E a opcao mais promissora para aumentar os Hz sem diminuir demais a ROI.
+### Controle por potencia da fibra
 
-DirectShow/WDM pode ser rapido, mas nao e a primeira escolha porque normalmente
-nao oferece RAW16. Como qualidade e prioridade, testar primeiro RAW8 e RAW16
-pelo SDK oficial da ZWO.
+Potencia e uma medida escalar e nao informa diretamente o sentido do erro.
+Portanto, nao usar um PID simples sobre `potencia_alvo - potencia_medida`.
 
-### Antes de implementar
+Estrategias adequadas:
 
-1. Confirmar o modelo exato da ASI e instalar driver/SDK oficial compativel.
-2. Confirmar se existe wrapper Python confiavel ou integrar a DLL por `ctypes`.
-3. Fechar/desconectar a camera no ASCOM antes de abrir pelo SDK; dois programas
-   nao devem disputar o mesmo dispositivo USB.
-4. Registrar no modo ASCOM, para referencia:
-   * ROI usada;
-   * Hz de medicao;
-   * tempo medio e maximo de captura/transferencia;
-   * exposicao, ganho e profundidade de bits;
-   * variancia do CM e frames perdidos.
+* busca local discreta;
+* subida de gradiente;
+* extremum seeking;
+* dither com deteccao de fase.
 
-### Ensaio comparativo no laboratorio
+Fluxo futuro possivel:
 
-Usar exatamente a mesma luz, exposicao, ganho e ROI nos dois backends e medir:
+1. Tracker mantem o spot visivel e aproximadamente estavel.
+2. Pequenos movimentos estimam `dP/dAz` e `dP/dAlt`.
+3. O receptor se move no sentido de aumento da potencia.
+4. A posicao visual correspondente ao melhor acoplamento vira o novo alvo.
+5. O emissor faz ajustes mais lentos pelo `mount_agent`.
 
-* Hz medio, minimo e percentis de latencia;
-* jitter do intervalo entre frames;
-* frames incompletos/perdidos;
-* uso de CPU;
-* intensidade, forma e variancia do centro de massa;
-* resposta do tracker a perturbacoes iguais;
-* estabilidade durante pelo menos uma hora.
+## Checklist de seguranca para bancada
 
-Verificar com cuidado:
-
-* orientacao e eventual transposicao da imagem;
-* coordenadas `StartX/StartY` da ROI;
-* tipo do array (`uint8` ou `uint16`);
-* pedestal/normalizacao;
-* se a assinatura da ilha continua compativel;
-* se as matrizes precisam ser refeitas. Se orientacao, escala ou ROI mudarem,
-  refazer a calibracao antes de permitir movimento automatico.
-
-### Paralelizacao
-
-Uma fila produtor-consumidor tambem pode ser testada:
-
-* thread 1 captura continuamente;
-* thread 2 processa apenas o frame mais recente, descartando atraso acumulado;
-* thread 3 mantem o controle do mount;
-* watchdog e CSV continuam independentes.
-
-Nao permitir fila crescente de frames: para tracking importa a imagem mais
-recente, nao processar imagens antigas. Essa paralelizacao deve ser feita depois
-do backend SDK funcionar, pois o CM em ROI moderada custa poucos milissegundos e
-o ganho de pipeline no ASCOM tende a ser pequeno.
-
-### Estado atual para o proximo teste
-
-O tracker ASI passou a usar ROI `384 x 384`, mostra Hz reais e grava telemetria
-CSV. Antes de migrar para o SDK, usar esses dados como baseline. O teste local
-mediu aproximadamente `3.6 ms/frame` para o processamento do CM em ROI 384;
-portanto, a primeira investigacao deve continuar sendo captura/transferencia.
-
-## Ideia importante para o futuro
-
-O autotune de dois telescopios deve ser tratado como um teste de rejeicao de perturbacao do experimento completo:
-
-`telescopio 2 move o feixe -> telescopio 1 corrige com o tracker -> camera mede erro residual`
-
-Isso deve produzir parametros mais uteis para acoplamento na fibra do que o autotune antigo.
-
-## Controle futuro usando potencia da fibra
-
-Data da anotacao: 2026-07-08.
-
-A potencia medida no powermeter pode ser usada para otimizar e manter o acoplamento na fibra, mas nao funciona como um PID direto simples.
-
-No tracker da camera, o erro tem direcao:
-
-`erro_px = posicao_alvo - posicao_laser`
-
-Esse erro diz para qual lado mover o mount. Se o laser esta a direita do alvo, o controle sabe que precisa mover no sentido oposto.
-
-No powermeter, a potencia e uma medida escalar:
-
-`erro_potencia = potencia_alvo - potencia_medida`
-
-Esse valor diz que o acoplamento esta ruim ou bom, mas nao diz se o melhor movimento e `+Az`, `-Az`, `+Alt`, `-Alt` ou uma diagonal. Portanto, um PID direto usando apenas `potencia_alvo - potencia_medida` ficaria cego para a direcao.
-
-### Estrategia mais correta
-
-Usar a potencia para estimar a inclinacao local da superficie de acoplamento:
-
-1. Medir a potencia atual `P0`.
-2. Testar um pequeno movimento `+Az` e medir `P(+Az)`.
-3. Testar `-Az` e medir `P(-Az)`.
-4. Estimar `dP/dAz`.
-5. Repetir para `+Alt` e `-Alt`, estimando `dP/dAlt`.
-6. Mover na direcao em que a potencia aumenta.
-
-Isso e mais parecido com:
-
-* hill climbing;
-* gradient ascent;
-* extremum seeking control;
-* lock-in com dither.
-
-### Versao discreta atual
-
-O script `otimizacao/otimizar_receptor_local_pm100.py` faz uma busca local discreta:
-
-* mede a potencia atual;
-* testa vizinhos em Az/Alt;
-* volta para a posicao inicial de cada teste;
-* escolhe o vizinho de maior potencia;
-* aceita esse movimento;
-* repete com passos menores.
-
-Essa versao e lenta, mas segura e reversivel para bancada.
-
-### Possivel versao futura continua
-
-Criar uma malha de dither:
-
-* aplicar uma pequena oscilacao em Az e/ou Alt;
-* medir se a potencia oscila em fase ou contra-fase com o dither;
-* usar isso para descobrir o sinal do gradiente;
-* mover lentamente o mount no sentido que aumenta a potencia;
-* reduzir o passo perto do pico.
-
-Essa abordagem poderia manter o acoplamento no pico mesmo se o feixe derivar lentamente.
-
-### Estrategia com dois telescopios
-
-Quando os dois mounts estiverem disponiveis:
-
-* receptor: ajuste fino e rapido, usando camera/tracker e powermeter;
-* emissor: ajuste grosso/lento, procurando colocar o feixe dentro da regiao de captura do receptor;
-* depois que o receptor achar o pico de potencia, salvar a posicao do spot na camera como novo alvo de alinhamento;
-* o tracker deve manter o spot nesse alvo salvo, nao necessariamente no centro geometrico da camera.
-
-Uma rotina promissora:
-
-1. Usar camera/tracker para manter o spot no alvo salvo.
-2. Fazer busca por potencia no receptor.
-3. Salvar o pico encontrado como `alvo_alinhamento_camera.json`.
-4. Usar o emissor para melhorar a potencia global.
-5. Refazer ajuste fino no receptor.
-6. Repetir ate a melhora ficar pequena.
+* Conferir cabos, fontes, folga mecanica e caminho optico.
+* Verificar a posicao absoluta antes de calibrar ou trackear.
+* Testar movimentos pequenos nos dois sinais de cada eixo.
+* Manter parada fisica ou corte de energia acessivel.
+* Usar `Ctrl+C` como parada de software, sem tratá-lo como protecao mecanica.
+* Nao movimentar automaticamente sem imagem, matriz valida e watchdog ativo.
+* Refazer a calibracao ao mudar camera, orientacao, optica ou montagem.
+* Preservar CSV, resumo e matrizes associados a resultados apresentados.

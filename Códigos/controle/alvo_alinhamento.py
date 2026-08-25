@@ -1,3 +1,9 @@
+"""Memoria compartilhada do alvo visual;
+
+Calibracao, centro de massa e tracker usam estas funcoes para manter a mesma
+convencao de coordenadas, ROI e assinatura da ilha entre programas.
+"""
+
 import json
 import os
 import time
