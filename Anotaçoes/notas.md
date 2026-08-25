@@ -246,13 +246,28 @@ turbulencia rapida. Antes de alterar o controle, usar o caracterizador em
 `Link UFF/caracterizacao_beacon/` para medir a perturbacao e comparar janelas
 temporais. A estrategia candidata e hibrida:
 
-1. Manter aquisicao rapida e validar a identidade em cada frame.
-2. Acumular frames validos normalizados para formar a mancha media.
-3. Manter os centroides individuais para rejeitar outliers e diagnosticar o
+1. Usar exposicoes curtas o bastante para evitar saturacao e amostrar a
+   variacao instantanea, mas com SNR suficiente para reconhecer o beacon em
+   cada frame.
+2. Manter aquisicao rapida e validar a identidade em cada frame.
+3. Acumular em `float32`/`float64`, nunca em `uint8`, para a soma nao estourar.
+   Comparar a media bruta, que pondera instantes mais luminosos, com a media
+   normalizada, que da peso semelhante a cada frame valido.
+4. Acumular somente frames validos para formar a mancha media. Oclusoes,
+   saturacao, frames incompletos e candidatos incoerentes ficam de fora.
+5. Manter os centroides individuais para rejeitar outliers e diagnosticar o
    que aconteceu dentro da janela.
-4. Corrigir o mount apenas se a estimativa media permanecer fora da zona de
+6. Corrigir o mount apenas se a estimativa media permanecer fora da zona de
    repouso por mais de uma janela.
-5. Reiniciar o acumulador depois de cada movimento e apos perda prolongada.
+7. Reiniciar o acumulador depois de cada movimento e apos perda prolongada.
+
+A exposicao ideal nao e simplesmente a menor possivel. Escolher a menor que,
+com ganho baixo, mantenha alta taxa de deteccao, contraste suficiente sobre o
+fundo e nenhum pixel relevante saturado. Considerar tambem o duty cycle: reduzir
+a exposicao sem aumentar o FPS diminui os fotons coletados, mas nao reduz
+necessariamente o intervalo entre amostras. A janela temporal deve ser escolhida
+depois de medir FPS real, autocorrelacao e PSD; frames correlacionados nao contam
+como amostras estatisticamente independentes.
 
 Casos que o tracker futuro precisa tratar explicitamente:
 
