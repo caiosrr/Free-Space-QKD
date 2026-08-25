@@ -38,6 +38,9 @@ class IDSPeakCamera:
         self.stream_recovery_count = 0
         self.allocated_buffer_count = 0
         self.current_roi = None
+        self.requested_fps = DEFAULT_FPS
+        self.applied_fps = None
+        self.current_exposure_us = None
 
     def _node(self, name: str) -> Any:
         if self.nodemap is None:
@@ -73,6 +76,19 @@ class IDSPeakCamera:
                 node.SetCurrentEntry("Off")
         except Exception:
             pass
+
+    def _configure_frame_rate(self) -> float:
+        """Reaplica o FPS solicitado para os limites da ROI atual."""
+        try:
+            enable = self._node("AcquisitionFrameRateEnable")
+            if enable.IsWriteable():
+                enable.SetValue(True)
+        except Exception:
+            pass
+        self.applied_fps = self._set_float(
+            self._node("AcquisitionFrameRate"), self.requested_fps
+        )
+        return self.applied_fps
 
     def _set_full_sensor(self) -> None:
         for name in ("OffsetX", "OffsetY"):
@@ -170,14 +186,9 @@ class IDSPeakCamera:
             self._set_full_sensor()
             self.pixel_format = self._set_pixel_format()
 
-            try:
-                enable = self._node("AcquisitionFrameRateEnable")
-                if enable.IsWriteable():
-                    enable.SetValue(True)
-            except Exception:
-                pass
-            fps = self._set_float(self._node("AcquisitionFrameRate"), DEFAULT_FPS)
+            fps = self._configure_frame_rate()
             exposure = self._set_float(self._node("ExposureTime"), DEFAULT_EXPOSURE_US)
+            self.current_exposure_us = exposure
             analog = self._set_gain_selector("AnalogAll", DEFAULT_ANALOG_GAIN)
             digital = self._set_gain_selector("DigitalAll", DEFAULT_DIGITAL_GAIN)
 
@@ -330,8 +341,17 @@ class IDSPeakCamera:
             actual_h = self._set_integer(self._node("Height"), int(height))
             actual_x = self._set_integer(self._node("OffsetX"), int(offset_x))
             actual_y = self._set_integer(self._node("OffsetY"), int(offset_y))
+            # O maximo de AcquisitionFrameRate depende da altura da imagem.
+            # Na conexao em sensor completo, o limite de transporte pode
+            # reduzir o pedido a ~5 fps. Depois de recortar a ROI, e preciso
+            # solicitar o FPS novamente para aproveitar a aquisicao rapida.
+            fps = self._configure_frame_rate()
             self._start_acquisition()
             self.current_roi = (actual_w, actual_h, actual_x, actual_y)
+            print(
+                f"ROI IDS: {actual_w}x{actual_h} em ({actual_x}, {actual_y}) | "
+                f"frame rate reaplicado={fps:.3f} fps"
+            )
             return self.current_roi
         except Exception:
             # Tenta deixar a camera utilizavel mesmo se uma ROI for rejeitada.
@@ -391,9 +411,14 @@ class IDSPeakCamera:
 
         requested_us = float(exposure_seconds) * 1e6
         try:
-            current_us = float(self._node("ExposureTime").Value())
-            if abs(current_us - requested_us) > 0.5:
-                self._set_float(self._node("ExposureTime"), requested_us)
+            exposure_changed = (
+                self.current_exposure_us is None
+                or abs(self.current_exposure_us - requested_us) > 0.5
+            )
+            if exposure_changed:
+                self.current_exposure_us = self._set_float(
+                    self._node("ExposureTime"), requested_us
+                )
         except Exception:
             pass
 

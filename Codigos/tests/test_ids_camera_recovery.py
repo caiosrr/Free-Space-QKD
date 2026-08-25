@@ -81,6 +81,28 @@ class IdsCameraRecoveryTests(unittest.TestCase):
         with mock.patch.object(camera, "_node", return_value=frame_rate_node):
             self.assertEqual(camera._frame_wait_timeout_ms(), 500)
 
+    def test_set_roi_reapplies_requested_frame_rate(self):
+        camera = IDSPeakCamera()
+        camera.nodemap = object()
+        camera.data_stream = object()
+        camera.acquisition_started = True
+
+        with (
+            mock.patch.object(camera, "_stop_acquisition"),
+            mock.patch.object(camera, "_node", side_effect=lambda name: name),
+            mock.patch.object(
+                camera,
+                "_set_integer",
+                side_effect=[0, 0, 516, 512, 1080, 866],
+            ),
+            mock.patch.object(camera, "_configure_frame_rate", return_value=50.0) as configure,
+            mock.patch.object(camera, "_start_acquisition"),
+        ):
+            roi = camera.set_roi(512, 512, 1080, 866)
+
+        configure.assert_called_once_with()
+        self.assertEqual(roi, (516, 512, 1080, 866))
+
 
 if __name__ == "__main__":
     unittest.main()
