@@ -98,6 +98,25 @@ Tracker continuo (somente depois de calibrar com a IDS):
 python ".\Link UFF\Tracker_IDS.py"
 ```
 
+O erro enviado ao mount e calculado no centro de massa de uma soma deslizante
+dos frames validos dos ultimos `2 s`. A identidade ainda e conferida frame a
+frame; saltos isolados e frames sem a ilha escolhida nao entram na media. Ao
+perder o sinal, o tracker envia velocidade zero e espera a mesma luz reaparecer.
+O controle so e liberado depois de cinco frames coerentes. Depois de `75 s` sem
+recuperacao, a sessao termina com o mount parado, sem busca ou retorno cegos.
+
+Esses parametros ficam no inicio de `config_tracker.py`. A exposicao automatica
+conservadora tambem esta implementada ali, mas vem com
+`AUTO_EXPOSURE_ENABLED = False`. Primeiro valide a media temporal no modo
+`1=observar sem mover`. Quando habilitada, a exposicao IDS muda lentamente,
+considerando o pico da ilha travada e a saturacao fora dela; durante perda ou
+recuperacao ela permanece congelada.
+
+O CSV registra tamanho efetivo da media, tempo sem sinal, recuperacao,
+exposicao, pico do alvo, saturacao externa e outliers. O primeiro frame de cada
+perda e de cada recuperacao tambem e salvo na pasta da sessao, com limite de
+`100` imagens para uma execucao longa nao crescer sem controle.
+
 Caracterizacao temporal sem conectar ou mover o mount:
 
 ```powershell

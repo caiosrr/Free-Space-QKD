@@ -43,6 +43,17 @@ from config_camera_asi import ALPACA_ADDRESS, DEVICE_NUMBER
 from config_camera_asi import EXPOSURE_SECONDS as ASI_EXPOSURE_SECONDS
 from config_camera_asi import GAIN as ASI_GAIN
 from config_tracker import (
+    AUTO_EXPOSURE_ENABLED,
+    AUTO_EXPOSURE_MAX_OUTSIDE_SATURATED_FRACTION,
+    AUTO_EXPOSURE_MAX_US,
+    AUTO_EXPOSURE_MIN_US,
+    AUTO_EXPOSURE_SATURATION_LEVEL,
+    AUTO_EXPOSURE_STABLE_SECONDS,
+    AUTO_EXPOSURE_STEP_DOWN,
+    AUTO_EXPOSURE_STEP_UP,
+    AUTO_EXPOSURE_TARGET_HIGH,
+    AUTO_EXPOSURE_TARGET_LOW,
+    AUTO_EXPOSURE_UPDATE_SECONDS,
     BORDER_CONFIRM_FRAMES,
     CSV_FLUSH_SECONDS,
     CSV_LOG_HZ,
@@ -59,6 +70,16 @@ from config_tracker import (
     RETURN_TO_START_ON_LIMIT,
     RETURN_TOLERANCE_DEG,
     SIGNAL_LOSS_LIMIT_SECONDS,
+    TEMPORAL_APERTURE_RADIUS_PX,
+    TEMPORAL_CONTROL_GAIN_SCALE,
+    TEMPORAL_INPUT_JUMP_PX,
+    TEMPORAL_MEAN_THRESHOLD_PERCENT,
+    TEMPORAL_MIN_VALID_FRAMES,
+    TEMPORAL_RECOVERY_VALID_FRAMES,
+    TEMPORAL_RESET_AFTER_LOSS_SECONDS,
+    TEMPORAL_WARMUP_SECONDS,
+    TEMPORAL_WINDOW_SECONDS,
+    TRACKER_EVENT_IMAGE_LIMIT,
     TRACKER_MAX_SPOT_JUMP_PX,
     VARIANCE_WINDOW_SECONDS,
     WATCHDOG_READ_FAILURES,
@@ -98,6 +119,8 @@ IMAGE_READY_POLL_S = 0.001
 IMAGE_READY_SPIN_POLLS = 3
 _transaction_ids = itertools.count(1)
 session = requests.Session()
+LAST_RAW_TRACKER_FRAME = None
+LAST_CAPTURE_STATS = {}
 
 # Imagem e frequencia de operacao.
 WINDOW_SIZE = roi_size_for_backend(backend_name())
@@ -129,8 +152,8 @@ SAFE_TEST_MAX_SECONDS = 60.0
 FINE_MATRIX_ENTER_RADIUS_PX = 8.0
 FINE_MATRIX_EXIT_RADIUS_PX = 14.0
 
-# Suavizacao das medicoes e envio dos comandos.
-MEASUREMENT_ALPHA = 0.65
+# Envio dos comandos. A suavizacao antiga de um unico centro de massa por frame
+# foi substituida pela soma temporal robusta implementada no Bloco 3.
 CMD_ACCEL_LIMIT = 2.00
 CMD_KEEPALIVE_S = 0.15
 MIN_CMD_DELTA_TO_SEND = 2e-4
@@ -608,6 +631,8 @@ def fetch_image_array() -> np.ndarray:
 
 
 def capture_frame(exposure_seconds: float) -> np.ndarray:
+    global LAST_RAW_TRACKER_FRAME, LAST_CAPTURE_STATS
+
     if backend_name() == "ids":
         frame = _ids_camera().capture(exposure_seconds).astype(np.float32)
     else:
@@ -619,14 +644,37 @@ def capture_frame(exposure_seconds: float) -> np.ndarray:
         frame = fetch_image_array().astype(np.float32)
         record_capture_time(time.perf_counter() - capture_started)
 
-    pedestal = np.median(frame) + (0.5 * np.std(frame))
-    max_val = frame.max()
+    min_val = float(frame.min())
+    max_val = float(frame.max())
+    median_val = float(np.median(frame))
+    std_val = float(np.std(frame))
+    pedestal = median_val + (0.5 * std_val)
     if max_val <= pedestal:
-        return np.zeros_like(frame, dtype=np.uint8)
+        norm = np.zeros_like(frame, dtype=np.uint8)
+    else:
+        norm = np.clip((frame - pedestal) / (max_val - pedestal + 1e-6), 0, 1)
+        norm = (norm * 255).astype(np.uint8)
 
-    norm = np.clip((frame - pedestal) / (max_val - pedestal + 1e-6), 0, 1)
-    norm = (norm * 255).astype(np.uint8)
-    return np.rot90(norm, 2) if ROTATE_IMAGE_180 else norm
+    if ROTATE_IMAGE_180:
+        norm = np.rot90(norm, 2)
+        frame = np.rot90(frame, 2)
+
+    # O detector de identidade usa o sinal bruto para comparar pico, area e
+    # formato. Mantemos esses dados sincronizados com CADA frame do tracker;
+    # assim ele nao reaproveita por engano o frame da selecao inicial.
+    LAST_RAW_TRACKER_FRAME = frame
+    LAST_CAPTURE_STATS = {
+        "raw_min": min_val,
+        "raw_max": max_val,
+        "raw_median": median_val,
+        "raw_std": std_val,
+        "pedestal": float(pedestal),
+        "norm_max": float(norm.max()),
+        "norm_nonzero": int(np.count_nonzero(norm)),
+    }
+    foco_temp.LAST_RAW_FRAME = frame
+    foco_temp.LAST_CAPTURE_STATS = dict(LAST_CAPTURE_STATS)
+    return norm
 
 
 # =============================================================================
@@ -670,6 +718,239 @@ def medir_laser(frame_window: np.ndarray, focus_mode: str):
         return float(cm[0]), float(cm[1])
 
     return calcular_cm_corrigido(frame_window)
+
+
+# =============================================================================
+# BLOCO 3B - MEDIA TEMPORAL E EXPOSICAO CONSERVADORA
+# =============================================================================
+# O detector acima decide se cada frame ainda pertence a mesma luz. Somente os
+# frames aprovados entram nesta soma deslizante. O centro enviado ao controle e
+# medido no borrao medio acumulado por tempo, reduzindo o seeing rapido sem
+# misturar uma parede ou uma segunda fonte luminosa.
+
+class TemporalFrameEstimator:
+    """Soma frames normalizados e mede o CM robusto numa janela de tempo."""
+
+    def __init__(
+        self,
+        window_seconds=TEMPORAL_WINDOW_SECONDS,
+        warmup_seconds=TEMPORAL_WARMUP_SECONDS,
+        min_frames=TEMPORAL_MIN_VALID_FRAMES,
+        aperture_radius_px=TEMPORAL_APERTURE_RADIUS_PX,
+        max_input_jump_px=TEMPORAL_INPUT_JUMP_PX,
+        threshold_percent=TEMPORAL_MEAN_THRESHOLD_PERCENT,
+    ):
+        self.window_seconds = float(window_seconds)
+        self.warmup_seconds = float(warmup_seconds)
+        self.min_frames = int(min_frames)
+        self.aperture_radius_px = int(aperture_radius_px)
+        self.max_input_jump_px = float(max_input_jump_px)
+        self.threshold_percent = float(threshold_percent)
+        self._entries = deque()
+        self._weighted_sum = None
+        self._weight_sum = 0.0
+        self.rejected_inputs = 0
+
+    def clear(self) -> None:
+        self._entries.clear()
+        self._weighted_sum = None
+        self._weight_sum = 0.0
+
+    @property
+    def frame_count(self) -> int:
+        return len(self._entries)
+
+    @property
+    def window_span_s(self) -> float:
+        if len(self._entries) < 2:
+            return 0.0
+        return float(self._entries[-1][0] - self._entries[0][0])
+
+    def _prune(self, now: float) -> None:
+        cutoff = float(now) - self.window_seconds
+        while self._entries and self._entries[0][0] < cutoff:
+            _, old_frame, _, _, old_weight = self._entries.popleft()
+            self._weighted_sum -= old_frame.astype(np.float32) * old_weight
+            self._weight_sum -= old_weight
+        if not self._entries:
+            self._weighted_sum = None
+            self._weight_sum = 0.0
+
+    def add(
+        self,
+        now: float,
+        frame: np.ndarray,
+        x_px: float,
+        y_px: float,
+        quality: float = 1.0,
+    ) -> bool:
+        """Adiciona um frame; retorna False quando o CM e um salto isolado."""
+        self._prune(now)
+        x_px = float(x_px)
+        y_px = float(y_px)
+        if not np.isfinite(x_px) or not np.isfinite(y_px):
+            return False
+
+        if self._entries:
+            centers = np.asarray([(item[2], item[3]) for item in self._entries], dtype=float)
+            center = np.median(centers, axis=0)
+            radial = np.hypot(centers[:, 0] - center[0], centers[:, 1] - center[1])
+            radial_mad = float(np.median(np.abs(radial - np.median(radial))))
+            allowed_jump = self.max_input_jump_px + min(8.0, 4.0 * radial_mad)
+            # Compara com o ultimo ponto, e nao com a mediana da janela inteira.
+            # Assim um deslocamento gradual maior ao longo dos 2 s continua
+            # valido, enquanto uma troca instantanea de ilha e rejeitada.
+            last_x = float(self._entries[-1][2])
+            last_y = float(self._entries[-1][3])
+            if np.hypot(x_px - last_x, y_px - last_y) > allowed_jump:
+                self.rejected_inputs += 1
+                return False
+
+        frame_u8 = np.asarray(frame, dtype=np.uint8)
+        if frame_u8.ndim != 2:
+            raise ValueError("A media temporal espera frames monocromaticos 2D.")
+        if self._weighted_sum is not None and frame_u8.shape != self._weighted_sum.shape:
+            raise ValueError("O tamanho do frame mudou durante a media temporal.")
+
+        weight = float(np.clip(quality, 0.25, 1.0))
+        stored = np.ascontiguousarray(frame_u8).copy()
+        if self._weighted_sum is None:
+            self._weighted_sum = np.zeros(stored.shape, dtype=np.float32)
+        self._weighted_sum += stored.astype(np.float32) * weight
+        self._weight_sum += weight
+        self._entries.append((float(now), stored, x_px, y_px, weight))
+        self._prune(now)
+        return True
+
+    def estimate(self, now: float) -> dict | None:
+        self._prune(now)
+        if len(self._entries) < self.min_frames or self._weight_sum <= 0.0:
+            return None
+        span_s = float(self._entries[-1][0] - self._entries[0][0])
+        if span_s < self.warmup_seconds:
+            return None
+
+        centers = np.asarray([(item[2], item[3]) for item in self._entries], dtype=float)
+        expected_x, expected_y = np.median(centers, axis=0)
+        mean_frame = self._weighted_sum / self._weight_sum
+        h, w = mean_frame.shape
+        radius = self.aperture_radius_px
+        x0 = max(0, int(np.floor(expected_x - radius)))
+        x1 = min(w, int(np.ceil(expected_x + radius + 1)))
+        y0 = max(0, int(np.floor(expected_y - radius)))
+        y1 = min(h, int(np.ceil(expected_y + radius + 1)))
+        local = mean_frame[y0:y1, x0:x1].astype(np.float32, copy=True)
+        if local.size == 0:
+            return None
+
+        yy, xx = np.indices(local.shape, dtype=np.float32)
+        local_x = expected_x - x0
+        local_y = expected_y - y0
+        circle = ((xx - local_x) ** 2 + (yy - local_y) ** 2) <= radius**2
+        pedestal = float(np.median(local[circle])) if np.any(circle) else 0.0
+        weights = np.clip(local - pedestal, 0.0, None)
+        weights[~circle] = 0.0
+        peak = float(weights.max())
+        if peak <= 0.0:
+            return None
+        weights[weights < (peak * self.threshold_percent)] = 0.0
+        total = float(weights.sum())
+        if total <= 0.0:
+            return None
+
+        x_cm = float(x0 + ((xx * weights).sum() / total))
+        y_cm = float(y0 + ((yy * weights).sum() / total))
+        return {
+            "x_px": x_cm,
+            "y_px": y_cm,
+            "frame_count": self.frame_count,
+            "window_span_s": span_s,
+            "centroid_std_x_px": float(np.std(centers[:, 0])),
+            "centroid_std_y_px": float(np.std(centers[:, 1])),
+            "mean_peak": peak,
+        }
+
+
+class ConservativeExposureController:
+    """Ajusta lentamente a IDS sem perseguir fundo claro ou uma luz concorrente."""
+
+    def __init__(self, enabled=AUTO_EXPOSURE_ENABLED):
+        self.enabled = bool(enabled and backend_name() == "ids")
+        self._stable_since = None
+        self._last_update = None
+
+    def update(
+        self,
+        now: float,
+        current_us: float,
+        *,
+        signal_locked: bool,
+        target_peak: float | None,
+        outside_saturated_fraction: float | None,
+    ) -> tuple[float, str | None]:
+        current_us = float(current_us)
+        if not self.enabled:
+            return current_us, None
+        if not signal_locked or target_peak is None or not np.isfinite(target_peak):
+            self._stable_since = None
+            return current_us, None
+        if self._stable_since is None:
+            self._stable_since = float(now)
+            return current_us, None
+        if (now - self._stable_since) < AUTO_EXPOSURE_STABLE_SECONDS:
+            return current_us, None
+        if self._last_update is not None and (now - self._last_update) < AUTO_EXPOSURE_UPDATE_SECONDS:
+            return current_us, None
+
+        outside_sat = (
+            0.0
+            if outside_saturated_fraction is None or not np.isfinite(outside_saturated_fraction)
+            else float(outside_saturated_fraction)
+        )
+        reason = None
+        proposed = current_us
+        if outside_sat > AUTO_EXPOSURE_MAX_OUTSIDE_SATURATED_FRACTION:
+            proposed *= AUTO_EXPOSURE_STEP_DOWN
+            reason = "saturacao_fora_do_alvo"
+        elif target_peak > AUTO_EXPOSURE_TARGET_HIGH:
+            proposed *= AUTO_EXPOSURE_STEP_DOWN
+            reason = "alvo_muito_forte"
+        elif target_peak < AUTO_EXPOSURE_TARGET_LOW:
+            proposed *= AUTO_EXPOSURE_STEP_UP
+            reason = "alvo_fraco"
+
+        proposed = float(np.clip(proposed, AUTO_EXPOSURE_MIN_US, AUTO_EXPOSURE_MAX_US))
+        if reason is None or abs(proposed - current_us) < 0.5:
+            return current_us, None
+        self._last_update = float(now)
+        self._stable_since = float(now)
+        return proposed, reason
+
+
+def _measurement_quality(selected_debug: dict) -> float:
+    similarity = selected_debug.get("similarity_primary")
+    if similarity is None or not np.isfinite(similarity):
+        return 1.0
+    return float(np.clip(similarity, 0.25, 1.0))
+
+
+def _outside_saturated_fraction(
+    raw_frame: np.ndarray | None,
+    x_px: float,
+    y_px: float,
+    radius_px: int = TEMPORAL_APERTURE_RADIUS_PX,
+) -> float | None:
+    """Fracao saturada fora do alvo; outras luzes limitam, mas nao guiam, a exposicao."""
+    if raw_frame is None or raw_frame.ndim != 2:
+        return None
+    h, w = raw_frame.shape
+    yy, xx = np.ogrid[:h, :w]
+    target_mask = ((xx - float(x_px)) ** 2 + (yy - float(y_px)) ** 2) <= radius_px**2
+    outside_count = int(raw_frame.size - np.count_nonzero(target_mask))
+    if outside_count <= 0:
+        return 0.0
+    saturated = raw_frame >= AUTO_EXPOSURE_SATURATION_LEVEL
+    return float(np.count_nonzero(saturated & ~target_mask) / outside_count)
 
 
 # =============================================================================
@@ -801,6 +1082,14 @@ class SharedState:
     trim_mode_active: bool = False
     hold_active: bool = False
     measurement_hz: float = 0.0
+    temporal_frame_count: int = 0
+    temporal_window_s: float = 0.0
+    recovery_valid_frames: int = 0
+    signal_lost_s: float = 0.0
+    exposure_us: float = EXPOSURE_SECONDS * 1e6
+    target_raw_peak: float | None = None
+    outside_saturated_fraction: float | None = None
+    temporal_outlier: bool = False
     control_loop_hz: float = 0.0
     spot_touches_border: bool = False
     mount_az_deg: float | None = None
@@ -828,6 +1117,14 @@ class TrackerCsvLogger:
         "distancia_px",
         "erro_x_filtrado_px",
         "erro_y_filtrado_px",
+        "frames_na_media",
+        "janela_media_s",
+        "frames_recuperacao",
+        "tempo_sem_sinal_s",
+        "exposicao_us",
+        "pico_bruto_alvo",
+        "fracao_saturada_fora_alvo",
+        "outlier_temporal",
         "variancia_x_px2",
         "variancia_y_px2",
         "desvio_padrao_2d_px",
@@ -869,6 +1166,7 @@ class TrackerCsvLogger:
         self._last_write_t = 0.0
         self._last_flush_t = session_started_monotonic
         self._samples = deque()
+        self._event_frame_count = 0
         self._summary = {
             "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "initial_azimuth_deg": initial_az_deg,
@@ -879,6 +1177,13 @@ class TrackerCsvLogger:
             "roi_size_px": WINDOW_SIZE,
             "hold_enter_radius_px": HOLD_ENTER_RADIUS_PX,
             "hold_exit_radius_px": HOLD_EXIT_RADIUS_PX,
+            "temporal_window_seconds": TEMPORAL_WINDOW_SECONDS,
+            "temporal_warmup_seconds": TEMPORAL_WARMUP_SECONDS,
+            "temporal_recovery_valid_frames": TEMPORAL_RECOVERY_VALID_FRAMES,
+            "signal_loss_limit_seconds": SIGNAL_LOSS_LIMIT_SECONDS,
+            "automatic_exposure_enabled": bool(
+                AUTO_EXPOSURE_ENABLED and backend_name() == "ids"
+            ),
             "csv_path": display_path(self.csv_path),
         }
 
@@ -933,6 +1238,16 @@ class TrackerCsvLogger:
             "distancia_px": number(np.hypot(dx, dy), 3),
             "erro_x_filtrado_px": number(state_values["dx_filt_px"], 3),
             "erro_y_filtrado_px": number(state_values["dy_filt_px"], 3),
+            "frames_na_media": int(state_values["temporal_frame_count"]),
+            "janela_media_s": number(state_values["temporal_window_s"], 3),
+            "frames_recuperacao": int(state_values["recovery_valid_frames"]),
+            "tempo_sem_sinal_s": number(state_values["signal_lost_s"], 3),
+            "exposicao_us": number(state_values["exposure_us"], 1),
+            "pico_bruto_alvo": number(state_values["target_raw_peak"], 2),
+            "fracao_saturada_fora_alvo": number(
+                state_values["outside_saturated_fraction"], 6
+            ),
+            "outlier_temporal": int(bool(state_values["temporal_outlier"])),
             "variancia_x_px2": round(variance_x, 4),
             "variancia_y_px2": round(variance_y, 4),
             "desvio_padrao_2d_px": round(std_2d, 4),
@@ -960,10 +1275,15 @@ class TrackerCsvLogger:
             self._last_flush_t = now
 
     def save_event_frame(self, frame: np.ndarray | None, event: str) -> Path | None:
-        if frame is None:
+        if frame is None or self._event_frame_count >= TRACKER_EVENT_IMAGE_LIMIT:
             return None
+        self._event_frame_count += 1
         safe_event = "".join(c if c.isalnum() else "_" for c in event).strip("_")
-        path = self.session_dir / f"evento_{safe_event or 'seguranca'}.png"
+        timestamp = datetime.now().strftime("%H-%M-%S-%f")[:-3]
+        path = self.session_dir / (
+            f"evento_{self._event_frame_count:03d}_{timestamp}_"
+            f"{safe_event or 'seguranca'}.png"
+        )
         cv2.imwrite(str(path), frame)
         return path
 
@@ -1000,6 +1320,14 @@ def _state_snapshot(state: SharedState) -> dict:
             "trim_mode_active": state.trim_mode_active,
             "hold_active": state.hold_active,
             "measurement_hz": state.measurement_hz,
+            "temporal_frame_count": state.temporal_frame_count,
+            "temporal_window_s": state.temporal_window_s,
+            "recovery_valid_frames": state.recovery_valid_frames,
+            "signal_lost_s": state.signal_lost_s,
+            "exposure_us": state.exposure_us,
+            "target_raw_peak": state.target_raw_peak,
+            "outside_saturated_fraction": state.outside_saturated_fraction,
+            "temporal_outlier": state.temporal_outlier,
             "control_loop_hz": state.control_loop_hz,
             "spot_touches_border": state.spot_touches_border,
             "mount_az_deg": state.mount_az_deg,
@@ -1019,6 +1347,11 @@ def _request_safety_stop(state: SharedState, reason: str) -> bool:
         state.stop = True
     stop_axes_safely()
     return True
+
+
+def _return_is_safe_for_reason(reason: str | None) -> bool:
+    """Nao inicia movimento cego quando o beacon desapareceu por completo."""
+    return reason != "sinal_perdido_por_tempo_excessivo"
 
 
 def _mount_offsets_from_start(
@@ -1271,9 +1604,9 @@ def control_loop_continuo(
     usar_mount: bool,
 ):
     ctrl_az = MeasurementPDTrim(
-        kp=KP_AZ,
-        kd=KD_AZ,
-        trim_gain=TRIM_GAIN_AZ,
+        kp=KP_AZ * TEMPORAL_CONTROL_GAIN_SCALE,
+        kd=KD_AZ * TEMPORAL_CONTROL_GAIN_SCALE,
+        trim_gain=TRIM_GAIN_AZ * TEMPORAL_CONTROL_GAIN_SCALE,
         output_limits=(-VEL_MAX_TESTE, VEL_MAX_TESTE),
         derivative_alpha=DERIVATIVE_ALPHA,
         trim_limit=TRIM_LIMIT,
@@ -1285,9 +1618,9 @@ def control_loop_continuo(
         trim_sign_flip_damp=TRIM_SIGN_FLIP_DAMP,
     )
     ctrl_alt = MeasurementPDTrim(
-        kp=KP_ALT,
-        kd=KD_ALT,
-        trim_gain=TRIM_GAIN_ALT,
+        kp=KP_ALT * TEMPORAL_CONTROL_GAIN_SCALE,
+        kd=KD_ALT * TEMPORAL_CONTROL_GAIN_SCALE,
+        trim_gain=TRIM_GAIN_ALT * TEMPORAL_CONTROL_GAIN_SCALE,
         output_limits=(-VEL_MAX_TESTE, VEL_MAX_TESTE),
         derivative_alpha=DERIVATIVE_ALPHA,
         trim_limit=TRIM_LIMIT,
@@ -1683,6 +2016,20 @@ def main():
                 f"tempo<={SAFE_TEST_MAX_SECONDS:.0f}s."
             )
         print("ROI nativa da camera, zona de repouso e watchdog absoluto.")
+        print(
+            f"Medicao temporal: soma deslizante de {TEMPORAL_WINDOW_SECONDS:.1f}s | "
+            f"aquecimento={TEMPORAL_WARMUP_SECONDS:.1f}s | "
+            f"recuperacao={TEMPORAL_RECOVERY_VALID_FRAMES} frames coerentes | "
+            f"ganho do controle={TEMPORAL_CONTROL_GAIN_SCALE:.0%}."
+        )
+        print(
+            f"Perda de sinal: mount para imediatamente, aguarda ate "
+            f"{SIGNAL_LOSS_LIMIT_SECONDS:.0f}s e nao procura movendo os eixos."
+        )
+        print(
+            "Exposicao automatica conservadora IDS: "
+            f"{'ATIVA' if AUTO_EXPOSURE_ENABLED and backend_name() == 'ids' else 'DESLIGADA'}"
+        )
         print(f"Imagem IDS rotacionada 180 graus: {'sim' if ROTATE_IMAGE_180 else 'nao'}")
         print(
             f"Modo do laser: {focus_mode} | "
@@ -1745,9 +2092,15 @@ def main():
         measurement_hz = 0.0
         border_frames = 0
         signal_lost_since = None
+        estimator_cleared_for_loss = False
+        recovery_valid_frames = 0
+        temporal_estimator = TemporalFrameEstimator()
+        exposure_controller = ConservativeExposureController()
+        current_exposure_seconds = EXPOSURE_SECONDS
+        ever_locked = False
 
         while True:
-            frame_window = capture_frame(EXPOSURE_SECONDS)
+            frame_window = capture_frame(current_exposure_seconds)
             last_frame = frame_window
             t_now = time.perf_counter()
             if last_measurement_t > 0.0:
@@ -1759,19 +2112,95 @@ def main():
                     else (0.15 * instant_measurement_hz) + (0.85 * measurement_hz)
                 )
             last_measurement_t = t_now
-            cm = medir_laser(frame_window, focus_mode)
+            instant_cm = medir_laser(frame_window, focus_mode)
             focus_debug = foco_temp.get_focus_debug() if focus_mode == "dual" else {}
             selected_debug = focus_debug.get("selected") or {}
             spot_touches_border = bool(selected_debug.get("toca_borda", False))
+            target_raw_peak = selected_debug.get("raw_peak")
+            instant_valid = instant_cm is not None and not spot_touches_border
+            outside_saturated_fraction = None
+            if instant_valid:
+                outside_saturated_fraction = _outside_saturated_fraction(
+                    LAST_RAW_TRACKER_FRAME,
+                    instant_cm[0],
+                    instant_cm[1],
+                )
 
             if spot_touches_border:
                 border_frames += 1
             else:
                 border_frames = 0
 
-            if cm is None:
+            with state.lock:
+                signal_was_locked = state.has_signal
+            new_exposure_us, exposure_reason = exposure_controller.update(
+                t_now,
+                current_exposure_seconds * 1e6,
+                signal_locked=bool(instant_valid and signal_was_locked),
+                target_peak=target_raw_peak,
+                outside_saturated_fraction=outside_saturated_fraction,
+            )
+            exposure_changed = exposure_reason is not None
+            if exposure_changed:
+                old_exposure_us = current_exposure_seconds * 1e6
+                current_exposure_seconds = new_exposure_us * 1e-6
+                temporal_estimator.clear()
+                recovery_valid_frames = 0
+                estimator_cleared_for_loss = True
                 if signal_lost_since is None:
                     signal_lost_since = t_now
+                print(
+                    "Exposicao IDS ajustada: "
+                    f"{old_exposure_us:.0f} -> {new_exposure_us:.0f} us "
+                    f"({exposure_reason}); reconstruindo a media temporal."
+                )
+
+            temporal_outlier = False
+            temporal_estimate = None
+            accepted_by_temporal_gate = False
+            if instant_valid and not exposure_changed:
+                accepted_by_temporal_gate = temporal_estimator.add(
+                    t_now,
+                    frame_window,
+                    instant_cm[0],
+                    instant_cm[1],
+                    quality=_measurement_quality(selected_debug),
+                )
+                temporal_outlier = not accepted_by_temporal_gate
+                if accepted_by_temporal_gate:
+                    recovery_valid_frames = min(
+                        recovery_valid_frames + 1,
+                        TEMPORAL_RECOVERY_VALID_FRAMES,
+                    )
+                    temporal_estimate = temporal_estimator.estimate(t_now)
+            else:
+                recovery_valid_frames = 0
+
+            if not instant_valid or temporal_outlier:
+                if signal_lost_since is None:
+                    signal_lost_since = t_now
+                recovery_valid_frames = 0
+                loss_elapsed = t_now - signal_lost_since
+                if (
+                    loss_elapsed >= TEMPORAL_RESET_AFTER_LOSS_SECONDS
+                    and not estimator_cleared_for_loss
+                ):
+                    temporal_estimator.clear()
+                    estimator_cleared_for_loss = True
+
+            measurement_valid = bool(
+                temporal_estimate is not None
+                and recovery_valid_frames >= TEMPORAL_RECOVERY_VALID_FRAMES
+                and not exposure_changed
+            )
+            if measurement_valid:
+                cm = (temporal_estimate["x_px"], temporal_estimate["y_px"])
+                signal_lost_since = None
+                estimator_cleared_for_loss = False
+            else:
+                cm = None
+
+            if cm is None:
                 dx = 0.0
                 dy = 0.0
                 x_cm_local = target_x_local
@@ -1781,11 +2210,13 @@ def main():
                 x_cm_local, y_cm_local = cm
                 dx = float(x_cm_local - target_x_local)
                 dy = float(y_cm_local - target_y_local)
-                if not spot_touches_border:
-                    signal_lost_since = None
-                cor_laser = (0, 165, 255) if spot_touches_border else (0, 255, 255)
+                cor_laser = (0, 255, 255)
 
-            measurement_valid = cm is not None and not spot_touches_border
+            temporal_frame_count = temporal_estimator.frame_count
+            temporal_window_s = temporal_estimator.window_span_s
+            signal_lost_s = (
+                0.0 if signal_lost_since is None else float(t_now - signal_lost_since)
+            )
             if not measurement_valid:
                 with state.lock:
                     state.has_signal = False
@@ -1795,26 +2226,30 @@ def main():
                     state.measurement_hz = measurement_hz
             else:
                 with state.lock:
-                    if state.measurement_seq == 0 or not state.has_signal:
-                        dx_filt = dx
-                        dy_filt = dy
-                    else:
-                        dx_filt = (MEASUREMENT_ALPHA * dx) + ((1.0 - MEASUREMENT_ALPHA) * state.dx_filt_px)
-                        dy_filt = (MEASUREMENT_ALPHA * dy) + ((1.0 - MEASUREMENT_ALPHA) * state.dy_filt_px)
-
-                    state.dx_filt_px = float(dx_filt)
-                    state.dy_filt_px = float(dy_filt)
+                    state.dx_filt_px = float(dx)
+                    state.dy_filt_px = float(dy)
                     state.has_signal = True
                     state.spot_touches_border = False
                     state.measurement_seq += 1
                     state.measurement_ts = t_now
                     state.measurement_hz = measurement_hz
 
+            with state.lock:
+                state.temporal_frame_count = temporal_frame_count
+                state.temporal_window_s = temporal_window_s
+                state.recovery_valid_frames = recovery_valid_frames
+                state.signal_lost_s = signal_lost_s
+                state.exposure_us = current_exposure_seconds * 1e6
+                state.target_raw_peak = (
+                    None if target_raw_peak is None else float(target_raw_peak)
+                )
+                state.outside_saturated_fraction = outside_saturated_fraction
+                state.temporal_outlier = temporal_outlier
+
             if border_frames >= BORDER_CONFIRM_FRAMES:
                 _request_safety_stop(state, "ilha_tocou_a_borda_da_roi")
             if (
-                cm is None
-                and signal_lost_since is not None
+                signal_lost_since is not None
                 and (t_now - signal_lost_since) >= SIGNAL_LOSS_LIMIT_SECONDS
             ):
                 _request_safety_stop(state, "sinal_perdido_por_tempo_excessivo")
@@ -1838,9 +2273,15 @@ def main():
             elif spot_touches_border:
                 status_text = "ILHA NA BORDA"
                 status_color = (0, 0, 255)
-            elif cm is None:
-                status_text = "SEM SINAL"
+            elif temporal_outlier:
+                status_text = "FRAME REJEITADO - MOUNT PARADO"
                 status_color = (0, 0, 255)
+            elif instant_cm is None:
+                status_text = "SEM SINAL - AGUARDANDO"
+                status_color = (0, 0, 255)
+            elif cm is None:
+                status_text = "FORMANDO MEDIA / CONFIRMANDO SINAL"
+                status_color = (0, 165, 255)
             elif brake_active:
                 status_text = "FREIO DE SEGURANCA"
                 status_color = (0, 0, 255)
@@ -1857,6 +2298,18 @@ def main():
                 status_text = "RASTREANDO"
                 status_color = (0, 255, 255)
 
+            telemetry_event = state_values["safety_stop_reason"] or ""
+            if not telemetry_event and signal_was_locked and not measurement_valid:
+                telemetry_event = "inicio_perda_sinal"
+                logger.save_event_frame(last_frame, telemetry_event)
+            elif not telemetry_event and measurement_valid and not signal_was_locked:
+                telemetry_event = (
+                    "sinal_recuperado" if ever_locked else "sinal_inicial_confirmado"
+                )
+                if ever_locked:
+                    logger.save_event_frame(last_frame, telemetry_event)
+                ever_locked = True
+
             logger.write(
                 t_now,
                 state_values=state_values,
@@ -1867,7 +2320,7 @@ def main():
                 target_y=target_y_local,
                 dx=dx,
                 dy=dy,
-                event=state_values["safety_stop_reason"] or "",
+                event=telemetry_event,
             )
 
             if state_values["safety_stop_reason"]:
@@ -1931,6 +2384,23 @@ def main():
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.74,
                     (200, 200, 200),
+                    2,
+                    cv2.LINE_AA,
+                )
+                cv2.putText(
+                    frame_display_large,
+                    (
+                        f"Media temporal: {state_values['temporal_frame_count']} frames / "
+                        f"{state_values['temporal_window_s']:.2f}s | "
+                        f"recuperacao={state_values['recovery_valid_frames']}/"
+                        f"{TEMPORAL_RECOVERY_VALID_FRAMES} | "
+                        f"sem sinal={state_values['signal_lost_s']:.1f}s | "
+                        f"exp={state_values['exposure_us']:.0f} us"
+                    ),
+                    (40, 360),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.70,
+                    (180, 220, 255),
                     2,
                     cv2.LINE_AA,
                 )
@@ -2025,6 +2495,7 @@ def main():
             and initial_position is not None
             and usar_mount
             and RETURN_TO_START_ON_LIMIT
+            and _return_is_safe_for_reason(safety_reason)
         ):
             print(
                 "Retornando a posicao absoluta inicial antes de encerrar "
@@ -2035,6 +2506,11 @@ def main():
                 print("Posicao absoluta inicial restaurada.")
             else:
                 print(f"ALERTA: retorno inicial nao confirmado: {return_result}")
+        elif safety_reason == "sinal_perdido_por_tempo_excessivo" and usar_mount:
+            print(
+                "Sinal ausente por tempo excessivo: mount mantido parado, sem "
+                "retorno automatico ou busca cega."
+            )
 
         if logger is not None:
             try:

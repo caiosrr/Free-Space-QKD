@@ -14,6 +14,12 @@ import calibracoes.legado.calibracao_estrela as calibracao
 
 
 class TrackerSafetyTests(unittest.TestCase):
+    @staticmethod
+    def _spot_frame(x_px, y_px, size=64):
+        yy, xx = np.indices((size, size), dtype=np.float32)
+        spot = np.exp(-((xx - x_px) ** 2 + (yy - y_px) ** 2) / (2.0 * 2.5**2))
+        return np.clip(spot * 255.0, 0, 255).astype(np.uint8)
+
     def test_hold_zone_uses_three_frame_hysteresis(self):
         active, count = tracker._update_hold_state(False, 0, 3.0)
         self.assertTrue(active)
@@ -125,6 +131,12 @@ class TrackerSafetyTests(unittest.TestCase):
         self.assertEqual(len(movements), 1)
         self.assertEqual(movements[0][3], tracker.RETURN_MAX_RATE_DEG_S)
 
+    def test_signal_loss_never_triggers_blind_return(self):
+        self.assertFalse(
+            tracker._return_is_safe_for_reason("sinal_perdido_por_tempo_excessivo")
+        )
+        self.assertTrue(tracker._return_is_safe_for_reason("tempo_maximo_da_sessao"))
+
     def test_observation_mode_never_sends_axis_velocity(self):
         state = tracker.SharedState()
 
@@ -185,6 +197,80 @@ class TrackerSafetyTests(unittest.TestCase):
         self.assertEqual(target.source, "manual_tracker_session")
         self.assertEqual((target.x_px, target.y_px), (320.0, 240.0))
         load_saved.assert_called_once()
+
+    def test_temporal_estimator_averages_valid_frames_and_rejects_jump(self):
+        estimator = tracker.TemporalFrameEstimator(
+            window_seconds=2.0,
+            warmup_seconds=0.1,
+            min_frames=3,
+            aperture_radius_px=16,
+            max_input_jump_px=10.0,
+        )
+        for timestamp, x_px, y_px in (
+            (0.0, 31.0, 32.0),
+            (0.1, 33.0, 31.0),
+            (0.2, 32.0, 33.0),
+        ):
+            accepted = estimator.add(
+                timestamp,
+                self._spot_frame(x_px, y_px),
+                x_px,
+                y_px,
+            )
+            self.assertTrue(accepted)
+
+        estimate = estimator.estimate(0.2)
+        self.assertIsNotNone(estimate)
+        self.assertAlmostEqual(estimate["x_px"], 32.0, delta=0.6)
+        self.assertAlmostEqual(estimate["y_px"], 32.0, delta=0.6)
+
+        accepted = estimator.add(0.3, self._spot_frame(55, 55), 55, 55)
+        self.assertFalse(accepted)
+        self.assertEqual(estimator.frame_count, 3)
+        self.assertEqual(estimator.rejected_inputs, 1)
+
+    def test_temporal_estimator_window_is_time_based(self):
+        estimator = tracker.TemporalFrameEstimator(
+            window_seconds=1.0,
+            warmup_seconds=0.0,
+            min_frames=2,
+            aperture_radius_px=12,
+            max_input_jump_px=10.0,
+        )
+        for timestamp in (0.0, 0.5, 1.5):
+            estimator.add(timestamp, self._spot_frame(32, 32), 32, 32)
+        self.assertEqual(estimator.frame_count, 2)
+        self.assertAlmostEqual(estimator.window_span_s, 1.0)
+
+    def test_auto_exposure_is_slow_bounded_and_freezes_without_signal(self):
+        controller = tracker.ConservativeExposureController(enabled=False)
+        controller.enabled = True
+        unchanged, reason = controller.update(
+            0.0,
+            3500.0,
+            signal_locked=False,
+            target_peak=30.0,
+            outside_saturated_fraction=0.0,
+        )
+        self.assertEqual(unchanged, 3500.0)
+        self.assertIsNone(reason)
+
+        controller.update(
+            1.0,
+            3500.0,
+            signal_locked=True,
+            target_peak=30.0,
+            outside_saturated_fraction=0.0,
+        )
+        increased, reason = controller.update(
+            1.0 + tracker.AUTO_EXPOSURE_STABLE_SECONDS,
+            3500.0,
+            signal_locked=True,
+            target_peak=30.0,
+            outside_saturated_fraction=0.0,
+        )
+        self.assertEqual(reason, "alvo_fraco")
+        self.assertGreater(increased, 3500.0)
 
 
 if __name__ == "__main__":

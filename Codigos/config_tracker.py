@@ -25,9 +25,41 @@ HOLD_EXIT_RADIUS_PX = 6.0
 HOLD_EXIT_CONFIRM_FRAMES = 3
 
 # Uma medicao cortada pela borda nao pode comandar o mount. Tres ocorrencias
-# seguidas encerram a sessao; perda completa do sinal tem uma espera maior.
+# seguidas encerram a sessao; na perda completa, o mount para e aguarda a mesma
+# luz reaparecer. O encerramento so ocorre apos 75 s sem recuperacao confirmada.
 BORDER_CONFIRM_FRAMES = 3
-SIGNAL_LOSS_LIMIT_SECONDS = 10.0
+SIGNAL_LOSS_LIMIT_SECONDS = 75.0
+
+# Estimador temporal robusto. Os frames aceitos pela trava de identidade sao
+# normalizados e somados numa janela deslizante de dois segundos. O centro de
+# massa da imagem media, e nao a oscilacao instantanea, alimenta o mount.
+TEMPORAL_WINDOW_SECONDS = 2.0
+TEMPORAL_WARMUP_SECONDS = 0.5
+TEMPORAL_MIN_VALID_FRAMES = 4
+TEMPORAL_RECOVERY_VALID_FRAMES = 5
+TEMPORAL_RESET_AFTER_LOSS_SECONDS = 0.5
+TEMPORAL_APERTURE_RADIUS_PX = 48
+TEMPORAL_INPUT_JUMP_PX = 24.0
+TEMPORAL_MEAN_THRESHOLD_PERCENT = 0.20
+# A media de 2 s tem atraso nominal proximo de 1 s. Reduzir os ganhos evita que
+# o mount ultrapasse o alvo enquanto o erro medio ainda reflete o passado.
+TEMPORAL_CONTROL_GAIN_SCALE = 0.35
+
+# Exposicao automatica conservadora (somente IDS). Comeca desligada para que a
+# primeira validacao do novo tracker altere apenas a media temporal. Quando
+# habilitada, usa a intensidade da ilha travada e tambem limita a saturacao fora
+# dela; nunca aumenta a exposicao durante perda de sinal ou recuperacao.
+AUTO_EXPOSURE_ENABLED = False
+AUTO_EXPOSURE_MIN_US = 1000.0
+AUTO_EXPOSURE_MAX_US = 20000.0
+AUTO_EXPOSURE_TARGET_LOW = 80.0
+AUTO_EXPOSURE_TARGET_HIGH = 220.0
+AUTO_EXPOSURE_SATURATION_LEVEL = 250.0
+AUTO_EXPOSURE_MAX_OUTSIDE_SATURATED_FRACTION = 0.002
+AUTO_EXPOSURE_UPDATE_SECONDS = 10.0
+AUTO_EXPOSURE_STABLE_SECONDS = 3.0
+AUTO_EXPOSURE_STEP_UP = 1.25
+AUTO_EXPOSURE_STEP_DOWN = 0.75
 
 # Limites da sessao longa.
 MAX_SESSION_HOURS = 2.0
@@ -51,6 +83,8 @@ RETURN_ATTEMPTS = 2
 CSV_LOG_HZ = 5.0
 VARIANCE_WINDOW_SECONDS = 2.0
 CSV_FLUSH_SECONDS = 1.0
+# Um PNG pequeno no inicio e na recuperacao das oclusoes, com teto por sessao.
+TRACKER_EVENT_IMAGE_LIMIT = 100
 
 
 def roi_size_for_backend(backend: str) -> int:
@@ -67,3 +101,11 @@ if MAX_OFFSET_AZ_DEG <= 0 or MAX_OFFSET_ALT_DEG <= 0:
     raise ValueError("Os limites absolutos dos eixos precisam ser positivos.")
 if POSITION_WATCHDOG_HZ <= 0 or CSV_LOG_HZ <= 0:
     raise ValueError("As frequencias de watchdog e CSV precisam ser positivas.")
+if not 0 < TEMPORAL_WARMUP_SECONDS <= TEMPORAL_WINDOW_SECONDS:
+    raise ValueError("O aquecimento temporal deve caber na janela temporal.")
+if TEMPORAL_MIN_VALID_FRAMES < 2 or TEMPORAL_RECOVERY_VALID_FRAMES < 2:
+    raise ValueError("A media e a recuperacao precisam de mais de um frame.")
+if not 0 < TEMPORAL_CONTROL_GAIN_SCALE <= 1:
+    raise ValueError("A escala de ganho temporal deve estar em (0, 1].")
+if not 0 < AUTO_EXPOSURE_MIN_US < AUTO_EXPOSURE_MAX_US:
+    raise ValueError("Os limites da exposicao automatica sao invalidos.")

@@ -84,10 +84,18 @@ mount continua no ASCOM; somente a aquisicao da camera usa USB/SDK direto.
 ROI, raios, zona de repouso, duracao maxima, limites absolutos e frequencia do
 CSV ficam centralizados em `config_tracker.py`. Cada sessao cria uma pasta em
 `resultados/debug/sessoes/tracker_AAAA-MM-DD_HH-MM-SS` com `telemetria.csv`,
-`resumo.json` e uma imagem se houver evento de seguranca. Ao atingir o limite de
-tempo, perder o sinal por tempo excessivo, tocar a borda da ROI ou se afastar
-mais que o limite absoluto, o tracker para, retorna devagar a posicao inicial e
-encerra.
+`resumo.json` e imagens limitadas dos eventos de perda/recuperacao. Ao atingir o
+limite de tempo, tocar a borda da ROI ou se afastar mais que o limite absoluto,
+o tracker para, retorna devagar a posicao inicial e encerra. A perda prolongada
+e a excecao: sem referencia visual, ele encerra mantendo o mount parado.
+
+O tracker usa uma soma temporal robusta de `2 s`: somente frames que continuam
+pertencendo a ilha travada entram na imagem media, e o mount corrige o centro de
+massa dessa media. Na oclusao, a velocidade vai imediatamente a zero. A luz
+precisa reaparecer de forma coerente por cinco frames; apos `75 s` sem sinal, o
+programa encerra mantendo o mount parado, sem realizar busca ou retorno cegos.
+A exposicao automatica IDS esta disponivel em `config_tracker.py`, desligada por
+padrao ate ser validada em observacao sem movimento.
 
 ## Observacoes
 

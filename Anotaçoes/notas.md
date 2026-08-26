@@ -1,6 +1,6 @@
 # Notas de continuidade do Free-Space-QKD
 
-Atualizado em 2026-08-20. Este documento guarda somente o estado atual,
+Atualizado em 2026-08-25. Este documento guarda somente o estado atual,
 decisoes tecnicas ainda validas, roteiro de estudo e ideias futuras.
 
 ## Estado atual do projeto
@@ -239,12 +239,14 @@ sensor; se a fonte desaparecer completamente, sera necessaria uma busca segura
 em grade ou espiral. A ideia fica registrada, mas nao sera implementada antes
 de haver tempo de bancada para validacao.
 
-### Futuro: tracker temporal robusto e oclusoes
+### Tracker temporal robusto e oclusoes
 
 O mount deve corrigir deriva lenta do centro medio do beacon, nao perseguir a
 turbulencia rapida. Antes de alterar o controle, usar o caracterizador em
 `Link UFF/caracterizacao_beacon/` para medir a perturbacao e comparar janelas
-temporais. A estrategia candidata e hibrida:
+temporais. A primeira versao foi implementada em 26/08/2026 com janela
+deslizante de `2 s`, escolhida a partir da aquisicao noturna de 8 h. A estrategia
+e hibrida:
 
 1. Usar exposicoes curtas o bastante para evitar saturacao e amostrar a
    variacao instantanea, mas com SNR suficiente para reconhecer o beacon em
@@ -257,9 +259,17 @@ temporais. A estrategia candidata e hibrida:
    saturacao, frames incompletos e candidatos incoerentes ficam de fora.
 5. Manter os centroides individuais para rejeitar outliers e diagnosticar o
    que aconteceu dentro da janela.
-6. Corrigir o mount apenas se a estimativa media permanecer fora da zona de
-   repouso por mais de uma janela.
-7. Reiniciar o acumulador depois de cada movimento e apos perda prolongada.
+6. Alimentar a zona de repouso e o controlador com o centro da imagem media,
+   atualizado continuamente, sem esperar blocos separados de 2 s.
+7. Reiniciar o acumulador apos perda de `0.5 s` e reconstruir a media antes de
+   liberar o mount. Uma oclusao exige cinco frames coerentes para recuperacao.
+
+Na perda, a velocidade vai imediatamente a zero. O detector continua procurando
+somente a mesma identidade perto da ultima posicao e nao movimenta o mount para
+buscar. Apos `75 s`, a sessao termina mantendo o mount parado; especificamente
+nesse caso nao ha retorno automatico cego para a posicao inicial.
+O CSV registra as transicoes e o tracker salva o frame do inicio e da
+recuperacao de cada perda, limitado a 100 PNGs por sessao.
 
 A exposicao ideal nao e simplesmente a menor possivel. Escolher a menor que,
 com ganho baixo, mantenha alta taxa de deteccao, contraste suficiente sobre o
@@ -285,6 +295,43 @@ Casos que o tracker futuro precisa tratar explicitamente:
 Separar sempre a caracterizacao da perturbacao da dinamica do atuador. A PSD e
 o tempo de correlacao da luz indicam o que seria desejavel corrigir; latencia,
 resposta mecanica e estabilidade do mount limitam o que pode ser corrigido.
+
+#### Desempenho da aquisicao IDS
+
+Em teste com ROI de aproximadamente `516 x 512 px`, a frequencia efetiva do
+caracterizador passou de cerca de `4.94 Hz` para `16.7 Hz` depois que o backend
+passou a reaplicar o FPS solicitado apos configurar a ROI. A mesma correcao se
+aplica ao tracker IDS. O pedido atual e de `50 fps`, mas o loop ainda gasta
+cerca de `47.6 ms` em captura, conversao, estatisticas e normalizacao, alem de
+aproximadamente `12 ms` na deteccao e telemetria.
+
+Antes de alterar o controlador, otimizar e medir separadamente:
+
+* espera real pelo buffer da camera, normalizacao, centro de massa e escrita;
+* aquisicao em thread independente, mantendo somente o frame mais recente;
+* acumulacao de exposicoes curtas na thread de aquisicao, sem fila crescente;
+* calculo de fundo/ruido por amostragem reduzida da ROI;
+* eliminacao de copias e conversoes repetidas do frame;
+* caracteristicas caras da forma do spot em frequencia menor que o centroide;
+* idade do frame efetivamente usado pelo tracker e eventuais frames descartados.
+
+Nao aumentar simplesmente o FPS configurado enquanto o consumidor for mais
+lento, pois buffers acumulados podem acrescentar latencia. A arquitetura deve
+priorizar medidas recentes e formar medias temporais com janelas explicitamente
+definidas.
+
+#### Exposicao adaptativa experimental
+
+Foi implementado um ajuste lento opcional para a IDS, inicialmente desligado em
+`config_tracker.py`. Ele usa o pico bruto da ilha travada, reduz a exposicao se
+houver saturacao relevante fora do alvo, respeita limites e intervalo minimo e
+congela completamente durante perda/recuperacao. Cada mudanca limpa a media
+temporal. Validar primeiro no modo de observacao antes de habilitar movimento.
+
+Durante caracterizacoes de intensidade, preferir exposicao e ganho fixos. Se
+houver ajuste automatico, normalizar as medidas pela exposicao e pela resposta
+calibrada da camera; caso contrario, uma mudanca de configuracao pode ser
+confundida com uma variacao fisica do enlace.
 
 ### Controle por potencia da fibra
 
