@@ -23,24 +23,62 @@ Os drivers ficam em `controle/cameras/`:
 
 ### Resultado experimental relevante
 
-O tracker IDS estabilizou a fonte do enlace UFF-CBPF por aproximadamente
-1 h 40 min, incluindo perturbacoes manuais, sem trocar para fachadas ou outras
-luzes quando a fonte desaparecia. Isso mostrou que a combinacao de selecao
-manual, assinatura, continuidade espacial, matriz local e travas de seguranca
-e adequada para o enlace longo.
+O tracker IDS anterior a media temporal estabilizou a fonte do enlace UFF-CBPF
+por aproximadamente 1 h 40 min, incluindo perturbacoes manuais, sem trocar para
+fachadas ou outras luzes quando a fonte desaparecia. Isso mostrou que a
+combinacao de selecao manual, assinatura, continuidade espacial, matriz local e
+travas de seguranca e adequada para o enlace longo.
 
-Parametros atuais do tracker, obtidos pelo autotune com sucesso em 6/6 ensaios:
+Parametros de base obtidos pelo autotune com sucesso em 6/6 ensaios:
 
 * `KpAz = 1.500`;
 * `KpAlt = 1.440`;
 * `KdAz = 0.180`;
 * `KdAlt = 0.180`;
 * `Trim = 1.200`;
-* `Alpha = 0.650`;
 * `Accel = 2.000`.
 
-Esses valores sao ponto de partida, nao constantes universais. Mudancas de
-mount, camera, optica ou enlace exigem nova validacao.
+Esses ganhos foram validados com a medicao antiga, praticamente instantanea. O
+tracker temporal nao usa mais o filtro exponencial `Alpha = 0.650`: ele usa a
+imagem media de `2 s` e aplica `TEMPORAL_CONTROL_GAIN_SCALE = 0.35` por causa do
+atraso nominal proximo de `1 s`. Os ganhos efetivos iniciais passam a ser:
+
+* `KpAz = 0.525`;
+* `KpAlt = 0.504`;
+* `KdAz = KdAlt = 0.063`;
+* `Trim gain = 0.420`.
+
+Essa versao temporal ainda precisa ser validada primeiro em observacao e depois
+em teste limitado do mount. Os valores sao pontos de partida, nao constantes
+universais. Mudancas de mount, camera, optica ou enlace exigem nova validacao.
+
+### Caracterizacao noturna de 8 h
+
+A sessao `beacon_2026-08-25_21-59-27`, sem movimento do mount, registrou:
+
+* `761486` frames em 8 h, `99.9631%` validos e zero erro de captura;
+* IDS em `12000 us`, ROI `516 x 512`, pedido de `62.34 fps` e `26.44 Hz`
+  efetivos;
+* intervalo mediano de `37.82 ms` e P99 de `38.82 ms`;
+* apos excluir cinco associacoes anomalas acima de 15 px, desvio padrao de
+  `0.745 px` em X e `0.702 px` em Y;
+* deslocamento entre o primeiro e o ultimo minuto de apenas `-0.435 px` em X e
+  `-0.240 px` em Y;
+* 281 frames invalidos em 42 intervalos; perda mediana de `54 ms` e maior perda
+  de `5.78 s`;
+* dois frames aceitaram uma fonte concorrente a cerca de `159 px`, confirmando
+  a necessidade de rejeitar saltos antes da media.
+
+A autocorrelacao cruzou `1/e` perto de `0.15 s`, logo frames consecutivos nao
+sao independentes. A media movel de `2 s` (`~53` frames nessa sessao) reduziu a
+oscilacao rapida em cerca de `53%`, com atraso nominal de `1 s`; ficou acima de
+`2 px` em apenas `0.274%` do tempo. Aproximadamente `83%` da variancia espectral
+analisada estava acima de `0.1 Hz`, faixa que o mount provavelmente nao deve
+tentar acompanhar. Esses numeros justificam a janela inicial de `2 s`, mas sao
+de uma unica noite e precisam ser comparados com outras condicoes.
+
+A analise completa e os graficos estao em
+`Arquivos/beacon_8h_2026-08-25/beacon_2026-08-25_21-59-27/analise/`.
 
 ### Calibracao atual
 
@@ -153,9 +191,12 @@ Estudar:
 
 * carregamento da matriz;
 * conversao de erro em pixels para erro angular;
+* validacao frame a frame e soma temporal em `float32`;
+* abertura local usada para medir o CM da imagem media;
 * zona de repouso e histerese;
 * PD e trim lento;
-* perda de sinal;
+* perda, espera e confirmacao de recuperacao do sinal;
+* exposicao adaptativa conservadora;
 * salto de ilha e runaway;
 * watchdog de posicao;
 * telemetria CSV;
@@ -206,6 +247,17 @@ documentais para facilitar revisao e testes.
 So criar produtor-consumidor depois dessa medicao. Se for necessario, processar
 apenas o frame mais recente e nunca manter uma fila crescente.
 
+Arquitetura desejada:
+
+`camera ASI -> SDK ZWO/USB -> frames continuos -> tracker`
+
+Somente a camera deixa o ASCOM; o mount continua no ASCOM/Alpaca. Manter o
+backend Alpaca como fallback ate o SDK passar por ensaio longo. O SDK e
+preferivel a DirectShow/WDM porque permite controlar ROI, ganho, exposicao e
+RAW8/RAW16. No comparativo, usar exatamente a mesma fonte/configuracao e medir
+tambem CPU, orientacao/transposicao, tipo do array, pedestal, compatibilidade da
+assinatura e necessidade de recalibrar as matrizes.
+
 ### Autotune com dois telescopios
 
 O receptor deve executar o tracker. O emissor, controlado por `mount_agent`,
@@ -252,9 +304,9 @@ e hibrida:
    variacao instantanea, mas com SNR suficiente para reconhecer o beacon em
    cada frame.
 2. Manter aquisicao rapida e validar a identidade em cada frame.
-3. Acumular em `float32`/`float64`, nunca em `uint8`, para a soma nao estourar.
-   Comparar a media bruta, que pondera instantes mais luminosos, com a media
-   normalizada, que da peso semelhante a cada frame valido.
+3. Guardar cada frame normalizado em `uint8`, mas acumular a soma ponderada em
+   `float32`, para nao estourar. A versao atual usa a media normalizada; comparar
+   com media bruta continua como experimento futuro.
 4. Acumular somente frames validos para formar a mancha media. Oclusoes,
    saturacao, frames incompletos e candidatos incoerentes ficam de fora.
 5. Manter os centroides individuais para rejeitar outliers e diagnosticar o
@@ -271,6 +323,12 @@ nesse caso nao ha retorno automatico cego para a posicao inicial.
 O CSV registra as transicoes e o tracker salva o frame do inicio e da
 recuperacao de cada perda, limitado a 100 PNGs por sessao.
 
+Na IDS, o detector ainda recebe a ROI inteira de `256 x 256 px`, mas o centro da
+imagem media e calculado somente numa abertura de raio `48 px` ao redor da
+trajetoria robusta da ilha. Assim o tracker conserva margem para reencontrar a
+luz sem deixar fachadas distantes pesarem no CM. Se a fonte sair da ROI fisica,
+a versao atual nao faz busca ampla nem desloca automaticamente a ROI.
+
 A exposicao ideal nao e simplesmente a menor possivel. Escolher a menor que,
 com ganho baixo, mantenha alta taxa de deteccao, contraste suficiente sobre o
 fundo e nenhum pixel relevante saturado. Considerar tambem o duty cycle: reduzir
@@ -279,18 +337,29 @@ necessariamente o intervalo entre amostras. A janela temporal deve ser escolhida
 depois de medir FPS real, autocorrelacao e PSD; frames correlacionados nao contam
 como amostras estatisticamente independentes.
 
-Casos que o tracker futuro precisa tratar explicitamente:
+Ja implementado no tracker temporal:
 
-* oclusao temporaria por embarcacao ou outro objeto: velocidade zero, manter a
-  ultima identidade/posicao e aguardar recuperacao por tempo limitado;
-* reaparecimento: exigir varios frames coerentes antes de voltar a comandar;
-* aumento ou reducao brusca do spot: ampliar temporariamente a tolerancia de
-  forma sem aceitar uma fonte concorrente;
-* perda alem do limite: permanecer parado ou retornar de forma segura conforme
-  politica escolhida, nunca iniciar busca ampla automaticamente sem limites;
-* salvar frame bruto e marcado no inicio da perda, recuperacao, salto, mudanca
-  de tamanho/intensidade, borda da ROI e falha de captura;
-* usar cooldown por tipo de evento para uma oclusao longa nao encher o disco.
+* oclusao temporaria: velocidade zero e espera sem mover o mount;
+* reaparecimento: cinco frames coerentes e reconstrucao da media;
+* perda superior a `75 s`: encerra parado, sem retorno ou busca cegos;
+* salto instantaneo maior que o limite: rejeitado antes da soma;
+* primeiro PNG normalizado da perda e da recuperacao, com teto de 100 imagens;
+* CSV com tamanho/janela da media, recuperacao, tempo sem sinal, exposicao, pico
+  bruto do alvo, saturacao externa e outliers.
+
+Ainda pendente:
+
+* validar alteracoes grandes de forma/tamanho sem relaxar demais a identidade;
+* salvar, quando necessario, frame bruto e frame marcado tambem para salto,
+  mudanca de forma/intensidade, borda da ROI e falha de captura;
+* mover a escrita das imagens para uma thread separada, mantendo limite e
+  cooldown por tipo de evento;
+* testar uma ROI de busca maior ou reposicionavel com uma abertura local de CM,
+  sem aumentar demais o custo por frame;
+* definir uma busca limitada para fonte fora da ROI; nao implementar busca em
+  grade/espiral sem ensaio de seguranca e limites absolutos;
+* comparar janelas de `0.5`, `1`, `2`, `3` e `5 s` em replay e observacao;
+* validar os ganhos reduzidos em teste limitado e medir overshoot.
 
 Separar sempre a caracterizacao da perturbacao da dinamica do atuador. A PSD e
 o tempo de correlacao da luz indicam o que seria desejavel corrigir; latencia,
@@ -298,27 +367,51 @@ resposta mecanica e estabilidade do mount limitam o que pode ser corrigido.
 
 #### Desempenho da aquisicao IDS
 
-Em teste com ROI de aproximadamente `516 x 512 px`, a frequencia efetiva do
-caracterizador passou de cerca de `4.94 Hz` para `16.7 Hz` depois que o backend
-passou a reaplicar o FPS solicitado apos configurar a ROI. A mesma correcao se
-aplica ao tracker IDS. O pedido atual e de `50 fps`, mas o loop ainda gasta
-cerca de `47.6 ms` em captura, conversao, estatisticas e normalizacao, alem de
-aproximadamente `12 ms` na deteccao e telemetria.
+Houve tres medidas diferentes, que nao devem ser confundidas:
 
-Antes de alterar o controlador, otimizar e medir separadamente:
+* antes da correcao do backend, a ROI `516 x 512` fazia a IDS voltar para cerca
+  de `4.94 fps`;
+* depois de reaplicar o FPS ao configurar a ROI, ensaios curtos chegaram a
+  aproximadamente `16.7 Hz`;
+* na sessao de 8 h, com `12000 us`, pedido de `62.34 fps` e a mesma ROI grande,
+  a taxa efetiva foi `26.44 Hz`; captura/normalizacao levou mediana de `25.84 ms`.
 
-* espera real pelo buffer da camera, normalizacao, centro de massa e escrita;
-* aquisicao em thread independente, mantendo somente o frame mais recente;
-* acumulacao de exposicoes curtas na thread de aquisicao, sem fila crescente;
-* calculo de fundo/ruido por amostragem reduzida da ROI;
-* eliminacao de copias e conversoes repetidas do frame;
-* caracteristicas caras da forma do spot em frequencia menor que o centroide;
-* idade do frame efetivamente usado pelo tracker e eventuais frames descartados.
+O backend agora reaplica corretamente o pedido de FPS depois de toda mudanca de
+ROI. A configuracao padrao do Link UFF pede `50 fps` e o tracker IDS usa ROI
+menor, `256 x 256`, portanto pode superar a taxa da caracterizacao. Isso ainda
+nao foi medido no novo tracker. `CONTROL_HZ = 50` e somente a meta da thread que
+envia comandos ao mount; nao prova que a camera ou a medicao estejam a 50 Hz. A
+taxa real e a mostrada como `loop_medicao_hz` na tela e no CSV.
 
-Nao aumentar simplesmente o FPS configurado enquanto o consumidor for mais
-lento, pois buffers acumulados podem acrescentar latencia. A arquitetura deve
-priorizar medidas recentes e formar medias temporais com janelas explicitamente
-definidas.
+O tracker ainda executa captura, normalizacao, identidade, soma temporal, tela e
+telemetria de forma sequencial na thread principal. Aumentar apenas
+`FRAME_RATE_FPS` nao resolve quando esse consumidor e mais lento e pode criar
+latencia nos buffers. Alem disso, exposicao + readout estabelecem um teto fisico.
+
+Plano para aumentar FPS e, principalmente, reduzir latencia do tracker:
+
+1. Medir no novo tracker, com e sem display, `loop_medicao_hz`, tempo de espera
+   do buffer, normalizacao, deteccao/media e idade do frame; registrar media,
+   P95, P99 e frames descartados.
+2. Usar a ROI `256 x 256` e a menor exposicao que preserve identidade/SNR antes
+   de mexer na arquitetura.
+3. Reduzir estatisticas, copias e conversoes repetidas; calcular caracteristicas
+   caras de forma em frequencia menor que o centroide, se os testes permitirem.
+4. Criar produtor-consumidor: uma thread captura continuamente, outra processa
+   somente o frame mais recente e substitui frames antigos. Nunca usar fila
+   crescente; tracking deve descartar atraso, nao tentar processa-lo depois.
+5. Manter controle do mount, watchdog e escrita de eventos separados. A soma de
+   exposicoes curtas pode ocorrer no produtor ou num acumulador com timestamps,
+   sempre preservando a janela real de `2 s`.
+6. So depois aumentar o FPS pedido acima de `50`, verificando a taxa entregue,
+   uso de CPU, latencia P99, estabilidade da identidade e ausencia de backlog.
+
+Mais FPS ajuda a formar a media, atravessar oclusoes muito curtas e reduzir a
+idade da medida, mas nao aumenta automaticamente a largura de banda mecanica do
+mount. Como a autocorrelacao do beacon caiu para `1/e` em cerca de `0.15 s`,
+muitos frames consecutivos continuam correlacionados. O objetivo e baixa
+latencia e uma media temporal confiavel, nao perseguir a turbulencia quadro a
+quadro.
 
 #### Exposicao adaptativa experimental
 
@@ -327,6 +420,11 @@ Foi implementado um ajuste lento opcional para a IDS, inicialmente desligado em
 houver saturacao relevante fora do alvo, respeita limites e intervalo minimo e
 congela completamente durante perda/recuperacao. Cada mudanca limpa a media
 temporal. Validar primeiro no modo de observacao antes de habilitar movimento.
+Valores iniciais: faixa `1000-20000 us`, alvo bruto `80-220`, passo de `+25%`
+ou `-25%`, intervalo minimo de `10 s` e limite de `0.2%` de pixels saturados
+fora da abertura do beacon. Sao valores experimentais, nao calibracao pronta.
+Registrar tambem a taxa de medicao apos cada mudanca, pois aumentar exposicao
+pode reduzir o FPS efetivo.
 
 Durante caracterizacoes de intensidade, preferir exposicao e ganho fixos. Se
 houver ajuste automatico, normalizar as medidas pela exposicao e pela resposta
