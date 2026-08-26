@@ -86,6 +86,11 @@ Calibracao angular-pixel continua (mesmo executavel da ZWO):
 python .\calibracoes\calibracao_continua.py --camera ids --perfil robusto
 ```
 
+Para executar pelo botao Play do VS Code sem digitar argumentos, abra
+`Link UFF/calibracao_continua_ids.py`. O arquivo ja seleciona a IDS e o perfil
+`robusto`. Para uma verificacao curta, altere somente `PERFIL = "robusto"` para
+`PERFIL = "rapido"` no inicio desse iniciador.
+
 O perfil `robusto` usa quatro trajetorias de `0.008 deg` para ajustar, outras
 quatro para validacao independente e quatro de `0.014 deg` para testar a faixa
 maior sem mistura-la na matriz local. Para uma calibracao curta, use
