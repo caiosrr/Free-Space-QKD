@@ -1,0 +1,56 @@
+{
+  "started_at": "2026-08-25T21:59:27.913-03:00",
+  "ended_at": "2026-08-26T05:59:45.920-03:00",
+  "stopped_by": "duration_reached",
+  "duration_s": 28800.035448199997,
+  "total_duration_including_setup_s": 28817.211309000006,
+  "frames_attempted": 761486,
+  "valid_frames": 761205,
+  "valid_percent": 99.96309846799547,
+  "capture_errors": 0,
+  "events_detected": 60,
+  "event_image_sets_saved": 60,
+  "event_images_suppressed_by_limit": 0,
+  "event_storage_mb": 3.070981979370117,
+  "events_by_kind": {
+    "intensity_drop": 20,
+    "signal_lost": 16,
+    "signal_recovered": 16,
+    "spot_expanded": 7,
+    "spot_shrank": 1,
+    "sudden_position_jump": 2,
+    "intensity_increase": 1
+  },
+  "x_sensor_px": {
+    "count": 761205,
+    "mean": 1377.4287491724804,
+    "std": 0.7456302463966584,
+    "min": 1359.614501953125,
+    "max": 1392.0397033691406
+  },
+  "y_sensor_px": {
+    "count": 761205,
+    "mean": 1150.1263643691207,
+    "std": 0.742500516105279,
+    "min": 1136.1398162841797,
+    "max": 1308.5344543457031
+  },
+  "distance_from_reference_px": {
+    "count": 761205,
+    "mean": 0.9047733392769015,
+    "std": 0.6205743018665479,
+    "min": 0.0011910655363089923,
+    "max": 159.2960415765875
+  },
+  "instantaneous_fps": {
+    "count": 761485,
+    "mean": 26.444408534680903,
+    "std": 0.3250211828771076,
+    "min": 11.203590526642358,
+    "max": 39.77756384555703
+  },
+  "mean_all_frame_count": 761486,
+  "mean_valid_frame_count": 761205,
+  "mean_normalized_valid_frame_count": 761205,
+  "mount_control": false
+}

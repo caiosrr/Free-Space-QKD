@@ -1,0 +1,103 @@
+{
+  "program": "caracterizar_beacon_ids",
+  "started_at": "2026-08-25T21:59:27.913-03:00",
+  "mount_control": false,
+  "camera": "IDS",
+  "camera_settings": {
+    "exposure_us": 12000.0,
+    "frame_rate_fps": 62.34,
+    "analog_gain": 1.0,
+    "digital_gain": 1.0,
+    "rotate_image_180": false
+  },
+  "duration_minutes_requested": 480.0,
+  "sensor_size": [
+    2592,
+    1944
+  ],
+  "roi_requested_px": 512,
+  "roi_actual": [
+    516,
+    512,
+    1120,
+    894
+  ],
+  "reference_local_px": [
+    257.33447265625,
+    255.8304443359375
+  ],
+  "selection": {
+    "x_px": 1377.33447265625,
+    "y_px": 1149.8304443359375,
+    "selection_roi": {
+      "start_x": 1182,
+      "start_y": 1007,
+      "width": 377,
+      "height": 290
+    },
+    "selection_threshold_percent": 0.24999999999999986,
+    "signature": {
+      "version": 2,
+      "primary": {
+        "raw_peak": 189.58404541015625,
+        "raw_total": 30092.85546875,
+        "area": 385.0,
+        "bbox_w": 22.0,
+        "bbox_h": 24.0,
+        "compactness": 0.8442989075610797
+      },
+      "secondary": null,
+      "freeze_reference": true,
+      "max_jump_px": 180.0,
+      "threshold_percent": 0.24999999999999986
+    },
+    "candidate": {
+      "x_cm": 1377.33447265625,
+      "y_cm": 1149.8304443359375,
+      "area": 385,
+      "raw_peak": 189.58404541015625,
+      "raw_total": 30092.85546875,
+      "bbox_w": 22,
+      "bbox_h": 24,
+      "compactness": 0.8442989075610797,
+      "toca_borda": false,
+      "similarity_primary": 1.0,
+      "similarity_secondary": null
+    },
+    "candidate_count": 1,
+    "candidates": [
+      {
+        "x_cm": 1377.33447265625,
+        "y_cm": 1149.8304443359375,
+        "area": 385,
+        "raw_peak": 189.58404541015625,
+        "raw_total": 30092.85546875,
+        "bbox_w": 22,
+        "bbox_h": 24,
+        "compactness": 0.8442989075610797,
+        "toca_borda": false,
+        "similarity_primary": 1.0,
+        "similarity_secondary": null
+      }
+    ]
+  },
+  "event_thresholds": {
+    "position_event_px": 15.0,
+    "size_ratio": [
+      0.55,
+      1.8
+    ],
+    "intensity_ratio": [
+      0.35,
+      2.8
+    ],
+    "baseline_frames": 20,
+    "cooldown_s": 5.0
+  },
+  "storage_limits": {
+    "max_telemetry_mb": 512.0,
+    "max_event_image_sets": 200,
+    "max_event_storage_mb": 256.0,
+    "min_free_disk_gb": 2.0
+  }
+}
