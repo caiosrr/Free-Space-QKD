@@ -1,6 +1,6 @@
 # Notas de continuidade do Free-Space-QKD
 
-Atualizado em 2026-08-25. Este documento guarda somente o estado atual,
+Atualizado em 2026-08-26. Este documento guarda somente o estado atual,
 decisoes tecnicas ainda validas, roteiro de estudo e ideias futuras.
 
 ## Estado atual do projeto
