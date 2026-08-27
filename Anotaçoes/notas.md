@@ -273,7 +273,7 @@ deve gerar perturbacoes padronizadas em Az, Alt e diagonais. Avaliar:
 O objetivo e rejeicao de perturbacao do experimento completo, nao apenas
 otimizar rapidez no mesmo mount que corrige.
 
-### Futuro: mapa de Jacobianas locais
+### Mapa de Jacobianas locais
 
 Uma matriz `2 x 2` descreve apenas a vizinhanca onde foi calibrada. Para uma
 regiao maior:
@@ -285,11 +285,18 @@ regiao maior:
 5. Selecionar a matriz mais proxima ou interpolar apenas entre vizinhos validos.
 6. Recusar extrapolacao quando nao houver um no confiavel.
 
-Esse mapa pode alimentar um alinhamento grosso, mais lento e menos preciso,
-antes de entregar o spot ao tracker fino. Ele ainda depende de a fonte estar no
-sensor; se a fonte desaparecer completamente, sera necessaria uma busca segura
-em grade ou espiral. A ideia fica registrada, mas nao sera implementada antes
-de haver tempo de bancada para validacao.
+Infraestrutura implementada em `controle/mapa_jacobianas.py`: a calibracao
+continua aprovada pode acrescentar um no ao mapa, e o alinhador em
+`foco_multiplos/alinhamento_continuo.py` seleciona a Jacobiana pela posicao
+absoluta. Em sobreposicoes validadas, interpola `A` e recalcula `A_inv`; fora da
+cobertura, recusa movimento. Ainda e necessario produzir e validar nos de
+bancada antes de considerar uma faixa angular grande operacional.
+
+O mapa alimenta um alinhamento grosso, mais lento e menos preciso, antes de
+entregar o spot ao tracker fino. Ele ainda depende de a fonte estar no sensor;
+se a fonte desaparecer completamente, seria necessaria uma busca segura em
+grade ou espiral. Essa busca nao foi implementada: na perda do sinal, o mount
+permanece parado.
 
 ### Tracker temporal robusto e oclusoes
 
@@ -415,16 +422,14 @@ quadro.
 
 #### Exposicao adaptativa experimental
 
-Foi implementado um ajuste lento opcional para a IDS, inicialmente desligado em
-`config_tracker.py`. Ele usa o pico bruto da ilha travada, reduz a exposicao se
-houver saturacao relevante fora do alvo, respeita limites e intervalo minimo e
-congela completamente durante perda/recuperacao. Cada mudanca limpa a media
-temporal. Validar primeiro no modo de observacao antes de habilitar movimento.
-Valores iniciais: faixa `1000-20000 us`, alvo bruto `80-220`, passo de `+25%`
-ou `-25%`, intervalo minimo de `10 s` e limite de `0.2%` de pixels saturados
-fora da abertura do beacon. Sao valores experimentais, nao calibracao pronta.
-Registrar tambem a taxa de medicao apos cada mudanca, pois aumentar exposicao
-pode reduzir o FPS efetivo.
+Ideia futura, retirada do fluxo principal durante a simplificacao do tracker.
+Antes de voltar, deve ser validada num programa separado e sem movimento. O
+ajuste usaria o pico bruto da ilha travada, saturacao fora do alvo, limites e
+intervalo minimo; ficaria congelado durante perda/recuperacao e limparia a media
+temporal depois de cada mudanca. Faixa inicial a estudar: `1000-20000 us`, alvo
+bruto `80-220`, passo de `+25%` ou `-25%`, intervalo minimo de `10 s` e limite
+de `0.2%` de pixels saturados fora da abertura. Registrar tambem o FPS, pois
+aumentar a exposicao pode reduzir a taxa efetiva.
 
 Durante caracterizacoes de intensidade, preferir exposicao e ganho fixos. Se
 houver ajuste automatico, normalizar as medidas pela exposicao e pela resposta

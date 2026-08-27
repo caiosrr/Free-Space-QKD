@@ -11,3 +11,6 @@
 
 # Resultados locais do experimento IDS no Link UFF.
 **/Link UFF/resultados/
+
+# Resultados gerados pela estrutura atual (telemetria, imagens e auditorias).
+/Codigos/resultados/

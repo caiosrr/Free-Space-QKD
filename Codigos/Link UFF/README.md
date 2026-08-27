@@ -1,208 +1,69 @@
-# Teste da camera IDS U3-3680XCP
+# Perfil IDS do Link UFF-CBPF
 
-## Configuracao da imagem
+Esta pasta guarda a documentacao e os resultados do enlace. Os programas
+executaveis foram centralizados em `../programas_principais/` e a configuracao
+da IDS fica com os demais modulos internos.
 
-Altere os parametros em `Link UFF\config_camera_ids.py`. No inicio do arquivo
-ficam reunidos os valores usados por todos os programas IDS:
+## Configuracao
+
+Edite `../modulos/configuracoes/camera_ids.py` para alterar:
 
 ```python
-EXPOSURE_US = 7276.0       # 7.276 ms
+EXPOSURE_US = 7276.0
 FRAME_RATE_FPS = 20.0
 ANALOG_GAIN = 1.0
 DIGITAL_GAIN = 1.0
 ROTATE_IMAGE_180 = False
 ```
 
-Depois de salvar o arquivo, teste novamente a aquisicao. Nao e necessario
-editar separadamente centro de massa, calibracao ou tracker. As opcoes de linha
-de comando do `teste_camera_ids.py` ainda podem sobrescrever temporariamente os
-valores apenas naquele teste.
+Feche o IDS peak Cockpit antes de executar Python, pois a camera pode estar em
+uso exclusivo.
 
-Todos os artefatos da IDS ficam isolados em `Link UFF\resultados`:
+## Programas
 
-- `aquisicao`: imagem do teste isolado da camera;
-- `centro_de_massa`: frames marcados e ultimo frame;
-- `calibracao`: auditorias e metadados da calibracao;
-- `matrizes`: matrizes produzidas pela calibracao e lidas pelo centro de massa e tracker;
-- `tracker`: frame de teste da ROI.
-
-Quando os executaveis IDS desta pasta sao usados, centro de massa e tracker
-procuram as matrizes exclusivamente em `Link UFF\resultados\matrizes`. Eles nao
-usam como fallback uma calibracao da ASI ou de outro arranjo.
-
-Este teste acessa somente a camera pelo IDS peak. Ele nao conecta nem movimenta
-o mount.
-
-Antes de executar, feche o IDS peak Cockpit, pois ele pode manter a camera em
-uso exclusivo. No PowerShell, a partir da pasta `Codigos`:
+A partir da pasta `Codigos`:
 
 ```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python ".\Link UFF\teste_camera_ids.py"
+python .\programas_principais\testar_camera_ids.py
+python .\programas_principais\caracterizar_beacon_ids.py --minutes 10
+python .\programas_principais\centro_de_massa.py
+python .\programas_principais\calibracao.py
+python .\programas_principais\tracker.py
 ```
 
-O programa captura 50 frames por padrao, mostra a taxa medida e salva o ultimo
-frame em `Link UFF\resultados\aquisicao\teste_ids.png`. Os valores padrao copiam o teste
-feito no IDS peak Cockpit:
+Nos tres ultimos, escolha IDS quando o programa perguntar pela camera. Todos
+podem ser abertos diretamente e executados pelo botao Play do VS Code.
 
-- exposicao: `7276 us` (`7.276 ms`);
-- frame rate: `20 fps`;
-- ganho analogico: `1`;
-- ganho digital: `1`;
-- exposicao e ganho automaticos desligados.
+## Resultados
 
-Opcoes uteis:
+Todos os artefatos IDS continuam isolados em `Link UFF/resultados/`:
 
-```powershell
-python ".\Link UFF\teste_camera_ids.py" --frames 200 --exposure-us 100
-python ".\Link UFF\teste_camera_ids.py" --fps 10 --analog-gain 2 --digital-gain 1
-python ".\Link UFF\teste_camera_ids.py" --list-only
-```
+- `aquisicao/`: teste isolado da camera;
+- `caracterizacao_beacon/`: telemetria sem movimento do mount;
+- `centro_de_massa/`: observacao e alinhamento;
+- `calibracao/`: auditorias e metadados;
+- `matrizes/`: matrizes lidas pelo alinhamento e tracker;
+- `tracker/`: CSV, resumo e imagens de eventos.
 
-`--exposure-us` usa microssegundos. O programa limita automaticamente o valor
-ao intervalo aceito pela camera e informa o valor realmente aplicado.
+O tracker IDS nao usa matrizes da ASI como fallback. Com
+`ROTATE_IMAGE_180 = False`, procura matrizes com prefixo
+`ids_raw_foco_temp_`; ao mudar a orientacao, calibre novamente.
 
-Em algumas variantes NIR, `ExposureAuto` e `GainAuto` nao sao expostos como
-parametros gravaveis. Nesse caso o teste informa isso e continua, pois exposicao
-e ganhos sao escritos diretamente nos respectivos parametros manuais.
+## Operacao segura
 
-## Centro de massa e calibracao com a IDS
+O tracker seleciona manualmente uma ilha e usa a matriz da calibracao continua.
+Ele calcula o erro sobre uma media temporal de `2 s`, para imediatamente em
+perda de sinal e exige cinco frames coerentes para recuperar. Depois de `75 s`
+sem sinal, encerra sem busca ou retorno cego.
 
-Os executaveis abaixo reutilizam a logica de `foco_multiplos` e o mesmo
-`controle/mount_control.py`, trocando apenas a aquisicao Alpaca pelo IDS peak.
-Feche o IDS peak Cockpit antes de executar.
+A IDS usa ROI nativa e alinha tamanho/offset aos incrementos exigidos pela
+U3-3680XCP-NIR. Falhas persistentes de captura encerram o programa para impedir
+movimento sem imagem.
 
-Centro de massa/centralizacao:
+Calibracao e tracker podem mover o telescopio. Antes de iniciar, confirme folga
+mecanica, comunicacao, matriz e acesso a uma parada fisica. `Q`, `Esc` e
+`Ctrl+C` solicitam velocidade zero, mas essa protecao depende de Windows,
+rede, ASCOM e driver ainda responderem.
 
-```powershell
-python ".\Link UFF\centro_massa_ids.py"
-```
-
-Calibracao angular-pixel continua (mesmo executavel da ZWO):
-
-```powershell
-python .\calibracoes\calibracao_continua.py --camera ids --perfil robusto
-```
-
-Para executar pelo botao Play do VS Code sem digitar argumentos, abra
-`Link UFF/calibracao_continua_ids.py`. O arquivo ja seleciona a IDS e o perfil
-`robusto`. Para uma verificacao curta, altere somente `PERFIL = "robusto"` para
-`PERFIL = "rapido"` no inicio desse iniciador.
-
-O perfil `robusto` usa quatro trajetorias de `0.008 deg` para ajustar, outras
-quatro para validacao independente e quatro de `0.014 deg` para testar a faixa
-maior sem mistura-la na matriz local. Para uma calibracao curta, use
-`--perfil rapido`. Antes da ativacao, as matrizes vigentes sao copiadas para
-`Link UFF/resultados/calibracao/backups/`.
-
-Tracker continuo (somente depois de calibrar com a IDS):
-
-```powershell
-python ".\Link UFF\Tracker_IDS.py"
-```
-
-O erro enviado ao mount e calculado no centro de massa de uma soma deslizante
-dos frames validos dos ultimos `2 s`. A identidade ainda e conferida frame a
-frame; saltos isolados e frames sem a ilha escolhida nao entram na media. Ao
-perder o sinal, o tracker envia velocidade zero e espera a mesma luz reaparecer.
-O controle so e liberado depois de cinco frames coerentes. Depois de `75 s` sem
-recuperacao, a sessao termina com o mount parado, sem busca ou retorno cegos.
-
-Esses parametros ficam no inicio de `config_tracker.py`. A exposicao automatica
-conservadora tambem esta implementada ali, mas vem com
-`AUTO_EXPOSURE_ENABLED = False`. Primeiro valide a media temporal no modo
-`1=observar sem mover`. Quando habilitada, a exposicao IDS muda lentamente,
-considerando o pico da ilha travada e a saturacao fora dela; durante perda ou
-recuperacao ela permanece congelada.
-
-O CSV registra tamanho efetivo da media, tempo sem sinal, recuperacao,
-exposicao, pico do alvo, saturacao externa e outliers. O primeiro frame de cada
-perda e de cada recuperacao tambem e salvo na pasta da sessao, com limite de
-`100` imagens para uma execucao longa nao crescer sem controle.
-
-Caracterizacao temporal sem conectar ou mover o mount:
-
-```powershell
-python ".\Link UFF\caracterizacao_beacon\caracterizar_beacon_ids.py" --minutes 10
-```
-
-Esse programa mede posicao, intensidade, area, formato, sinal valido e FPS em
-cada frame. Tambem salva medias da imagem e frames de eventos bruscos. Consulte
-`Link UFF/caracterizacao_beacon/README.md` para os arquivos gerados e opcoes.
-
-O tracker pode usar uma luz diferente daquela empregada na calibracao. Na
-opcao padrao `1=selecionar a luz agora`, recorte a regiao e clique na ilha que
-sera acompanhada naquela sessao. Essa escolha e temporaria: ela nao altera as
-matrizes nem o alvo salvo pela calibracao. Isso permite calibrar numa fonte
-estavel, retornar o telescopio para a fonte intermitente e so entao iniciar o
-tracker.
-
-Para entender ou ajustar o tracker, abra `controle/Tracker.py`. Toda a logica
-esta nesse unico programa, dividida em blocos numerados: configuracao,
-camera/ROI, medicao do foco, controlador, matrizes, loop do mount e
-encerramento. Normalmente basta alterar o Bloco 1.
-
-Ambos usam por padrao `7276 us`, `20 fps`, ganho analogico `1`, ganho digital
-`1`, sensor completo e `Mono8`. A calibracao movimenta o mount e deve ser feita
-com o spot visivel, folga mecanica disponivel e possibilidade de interromper com
-`Ctrl+C`.
-
-Em cenas com varias luzes, na selecao interativa, na
-primeira tela, arraste um retangulo ao redor da regiao onde esta a luz e
-pressione Enter. O limiar e recalculado somente dentro desse recorte. Na segunda
-tela, clique na ilha correta e pressione Enter. Use `-`/`+` para diminuir ou
-aumentar o threshold sem reiniciar e `R` para refazer o recorte. A IDS usa a
-mesma ROI `256 x 256` do tracker, a identidade escolhida fica congelada e
-somente a matriz fine local e medida. O tracker adota automaticamente o modo de
-ilha salvo ao ser iniciado depois.
-
-O backend IDS e selecionado por `--camera ids` e recebe automaticamente os
-parametros e caminhos de `Link UFF/config_camera_ids.py`.
-
-O tracker IDS usa ROI nativa de `256 x 256` pixels. Esse tamanho respeita os
-incrementos de largura da U3-3680XCP-NIR. As posicoes da ROI tambem sao
-alinhadas aos passos de hardware (`OffsetX=8`, `OffsetY=2`). Antes do primeiro
-uso, gere as matrizes com a calibracao IDS e teste com velocidade/erro pequenos,
-mantendo `q` ou `Ctrl+C` prontos para interromper.
-
-O backend mantem oito buffers de aquisicao. Se a IDS parar de entregar frames,
-primeiro reinicia o DataStream e realoca os buffers; se isso nao bastar, reabre
-o dispositivo e restaura a ROI anterior. Uma falha persistente ainda encerra o
-programa para que o mount nao continue operando sem imagem.
-
-No modo de dupla reflexao, ao definir uma nova referencia pela posicao inicial,
-o centro de massa salva junto ao alvo uma assinatura do foco escolhido: pico,
-intensidade integrada e area. O tracker carrega essa assinatura antes de analisar
-o frame completo e novamente ao testar a ROI, combinando semelhanca e proximidade
-ao alvo. Assim, uma fonte concorrente apenas mais brilhante nao substitui
-automaticamente o foco salvo. Alvos antigos sem assinatura continuam aceitos e
-usam o comportamento anterior.
-
-O centro de massa tambem atualiza automaticamente essa referencia sempre que o
-foco duplo medido estiver dentro da tolerancia de `2 px` do alvo escolhido. A
-imagem PNG continua sendo apenas uma auditoria visual; o tracker usa as
-coordenadas e a assinatura gravadas em `alvo_alinhamento_camera.json`.
-
-Por seguranca, a orientacao da imagem tambem separa os artefatos. Com
-`ROTATE_IMAGE_180 = False`, a calibracao salva matrizes com prefixo
-`ids_raw_foco_temp_` e o alvo em `alvo_alinhamento_camera_sem_rotacao.json`.
-As matrizes antigas `ids_foco_temp_`, geradas com rotacao de 180 graus, nao sao
-reutilizadas. Depois de mudar essa opcao, execute novamente o centro de massa e
-a calibracao antes do tracker. Para restaurar o comportamento antigo, troque a
-opcao para `True`.
-
-Ao receber `Ctrl+C` ou sair normalmente, centro de massa, calibracao e tracker
-tentam enviar velocidade zero ate duas vezes e de forma independente para cada eixo.
-Essa protecao depende de o Windows, a rede, o ASCOM Remote e o driver ainda
-estarem respondendo; ela nao substitui parada fisica, limite mecanico ou corte de
-energia acessivel ao operador.
-
-A calibracao tambem registra a posicao absoluta inicial do mount em
-`posicao_inicial_mount.json`, dentro da auditoria da execucao. Ao terminar, ser
-interrompida com `Ctrl+C` ou encontrar um erro, ela tenta retornar a essa posicao
-e verifica o erro final com a mesma tolerancia de `0.0005 deg` usada pelo controle.
-Por seguranca, um retorno maior que `0.25 deg` em qualquer
-eixo e recusado; nesse caso o operador deve conferir a situacao antes de mover.
-Um segundo `Ctrl+C` durante o retorno interrompe o retorno e manda parar os eixos.
+Detalhes da caracterizacao temporal: consulte
+`../programas_principais/GUIA_CARACTERIZACAO.md`.

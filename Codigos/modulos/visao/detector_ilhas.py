@@ -1,0 +1,1355 @@
+import cv2
+import copy
+import numpy as np
+import os
+import sys
+import time
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+FOCO_DIR = Path(
+    os.environ.get(
+        "QKD_CENTER_OF_MASS_OUTPUT_DIR",
+        os.environ.get(
+            "QKD_CAMERA_OUTPUT_DIR",
+            ROOT_DIR / "resultados" / "centro_de_massa",
+        ),
+    )
+)
+
+from modulos.controle.cameras.backend import (
+    backend_name,
+    capture_raw_frame,
+    connect_camera,
+    disconnect_camera,
+    set_gain,
+)
+from modulos.controle.alvo_alinhamento import escolher_posicao_inicial_ou_centro, salvar_alvo
+from modulos.artefatos import display_path, matrix_candidates
+from modulos.configuracoes.camera_asi import EXPOSURE_SECONDS as ASI_EXPOSURE_SECONDS
+from modulos.configuracoes.camera_asi import GAIN as ASI_GAIN
+from modulos.controle.mount_control import (
+    ensure_connected,
+    ensure_not_tracking,
+    ensure_unparked,
+    move_axes_pid_2d,
+    stop_axes_safely,
+)
+
+
+CAMERA_BACKEND = backend_name()
+FOCUS_MODE = "dual"
+RAW_SIGNAL_MIN = 20.0 if CAMERA_BACKEND in {"ids", "zwo_sdk"} else 200.0
+DUAL_THRESHOLD_PERCENT = 0.45
+LOCAL_RADIUS_PX = 90
+MIN_LOCAL_PIXELS = 8
+MORPH_KERNEL_SIZE = 7
+LOCK_FOCUS_IDENTITY = True
+LOCK_MIN_SIMILARITY = 0.35
+LOCK_STRONG_SIMILARITY = 0.65
+# Se o centro continua perto do ultimo frame, a continuidade espacial vale
+# mais que mudancas de area, pico ou alongamento causadas pelo seeing.
+LOCK_NEAR_CONTINUITY_PX = 24.0
+# Calcula o threshold numa janela movel em torno da luz travada. Assim uma
+# fachada ou outra ilha fora da vizinhanca nao apaga uma luz mais fraca.
+LOCK_SEARCH_MARGIN_PX = 20.0
+lim_px = 2.0
+if CAMERA_BACKEND == "ids":
+    CAMERA_GAIN = float(os.environ.get("QKD_IDS_ANALOG_GAIN", "1"))
+    EXPOSURE_SECONDS = float(os.environ.get("QKD_IDS_EXPOSURE_US", "7276")) * 1e-6
+elif CAMERA_BACKEND == "zwo_sdk":
+    CAMERA_GAIN = float(os.environ.get("QKD_ZWO_GAIN", str(ASI_GAIN)))
+    EXPOSURE_SECONDS = float(
+        os.environ.get("QKD_ZWO_EXPOSURE_US", str(ASI_EXPOSURE_SECONDS * 1e6))
+    ) * 1e-6
+else:
+    CAMERA_GAIN = ASI_GAIN
+    EXPOSURE_SECONDS = ASI_EXPOSURE_SECONDS
+ROTATE_IMAGE_180 = os.environ.get("QKD_ROTATE_IMAGE_180", "1") != "0"
+IDS_MATRIX_PREFIX = "ids_foco_temp" if ROTATE_IMAGE_180 else "ids_raw_foco_temp"
+CAPTURE_HTTP_ATTEMPTS = 3
+CAPTURE_RETRY_SLEEP_S = 0.75
+# ImageReady e a transferencia completa ja serializam as exposicoes.
+CAPTURE_COOLDOWN_SLEEP_S = 0.0
+FINE_MATRIX_ENTER_RADIUS_PX = 8.0
+CENTERING_STEP_GAIN = 0.65
+MAX_CORRECTION_NORM_DEG = 0.015
+MAX_CENTERING_ITERS = 8
+WORSE_ABORT_FACTOR = 1.25
+WORSE_ABORT_MARGIN_PX = 6.0
+ROLLBACK_ON_WORSE = True
+LAST_CAPTURE_STATS = {}
+LAST_RAW_FRAME = None
+LAST_FOCUS_DEBUG = {}
+FOCUS_LOCK = {
+    "active": False,
+    "primary": None,
+    "secondary": None,
+    "last_x": None,
+    "last_y": None,
+    "freeze_reference": False,
+    "max_jump_px": None,
+    "threshold_percent": None,
+}
+
+
+def set_focus_mode(mode: str) -> str:
+    global FOCUS_MODE
+    normalized = str(mode).strip().lower()
+    if normalized in {"2", "dual", "duplo", "dois", "two"}:
+        FOCUS_MODE = "dual"
+    else:
+        FOCUS_MODE = "single"
+    reset_focus_lock()
+    return FOCUS_MODE
+
+
+def get_focus_mode() -> str:
+    return FOCUS_MODE
+
+
+def get_focus_debug() -> dict:
+    return copy.deepcopy(LAST_FOCUS_DEBUG)
+
+
+def reset_focus_lock() -> None:
+    FOCUS_LOCK["active"] = False
+    FOCUS_LOCK["primary"] = None
+    FOCUS_LOCK["secondary"] = None
+    FOCUS_LOCK["last_x"] = None
+    FOCUS_LOCK["last_y"] = None
+    FOCUS_LOCK["freeze_reference"] = False
+    FOCUS_LOCK["max_jump_px"] = None
+    FOCUS_LOCK["threshold_percent"] = None
+
+
+def get_focus_signature() -> dict | None:
+    """Retorna uma referencia serializavel da identidade do foco dual travado."""
+    if not FOCUS_LOCK["active"] or FOCUS_LOCK["primary"] is None:
+        return None
+    return {
+        "version": 2,
+        "primary": copy.deepcopy(FOCUS_LOCK["primary"]),
+        "secondary": copy.deepcopy(FOCUS_LOCK["secondary"]),
+        "freeze_reference": bool(FOCUS_LOCK["freeze_reference"]),
+        "max_jump_px": FOCUS_LOCK["max_jump_px"],
+        "threshold_percent": FOCUS_LOCK["threshold_percent"],
+    }
+
+
+def initialize_focus_lock(
+    signature: dict | None,
+    expected_x: float | None = None,
+    expected_y: float | None = None,
+    freeze_reference: bool | None = None,
+    max_jump_px: float | None = None,
+    threshold_percent: float | None = None,
+) -> bool:
+    """Inicializa o lock dual com assinatura persistida e posicao esperada."""
+    reset_focus_lock()
+    if not isinstance(signature, dict):
+        return False
+
+    def normalize_reference(reference):
+        if not isinstance(reference, dict):
+            return None
+        try:
+            normalized = {
+                "raw_peak": float(reference["raw_peak"]),
+                "raw_total": float(reference["raw_total"]),
+                "area": float(reference["area"]),
+            }
+            for key in ("bbox_w", "bbox_h", "compactness"):
+                if key in reference:
+                    normalized[key] = float(reference[key])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not all(np.isfinite(value) and value > 0 for value in normalized.values()):
+            return None
+        return normalized
+
+    primary = normalize_reference(signature.get("primary"))
+    if primary is None:
+        return False
+    secondary = normalize_reference(signature.get("secondary"))
+
+    FOCUS_LOCK["active"] = True
+    FOCUS_LOCK["primary"] = primary
+    FOCUS_LOCK["secondary"] = secondary
+    FOCUS_LOCK["freeze_reference"] = bool(
+        signature.get("freeze_reference", False)
+        if freeze_reference is None
+        else freeze_reference
+    )
+    saved_max_jump = signature.get("max_jump_px")
+    chosen_max_jump = saved_max_jump if max_jump_px is None else max_jump_px
+    FOCUS_LOCK["max_jump_px"] = (
+        None if chosen_max_jump is None else float(chosen_max_jump)
+    )
+    saved_threshold = signature.get("threshold_percent")
+    chosen_threshold = saved_threshold if threshold_percent is None else threshold_percent
+    if chosen_threshold is not None:
+        chosen_threshold = float(chosen_threshold)
+        if not np.isfinite(chosen_threshold) or not 0.02 <= chosen_threshold <= 0.90:
+            chosen_threshold = None
+    FOCUS_LOCK["threshold_percent"] = chosen_threshold
+    if expected_x is not None and expected_y is not None:
+        expected_x = float(expected_x)
+        expected_y = float(expected_y)
+        if np.isfinite(expected_x) and np.isfinite(expected_y):
+            FOCUS_LOCK["last_x"] = expected_x
+            FOCUS_LOCK["last_y"] = expected_y
+    return True
+
+
+def set_focus_expected_position(
+    expected_x: float,
+    expected_y: float,
+    max_jump_px: float | None = None,
+) -> bool:
+    """Reposiciona a ancora espacial sem alterar a assinatura luminosa salva."""
+    if not FOCUS_LOCK["active"] or FOCUS_LOCK["primary"] is None:
+        return False
+    expected_x = float(expected_x)
+    expected_y = float(expected_y)
+    if not np.isfinite(expected_x) or not np.isfinite(expected_y):
+        return False
+    if max_jump_px is not None:
+        max_jump_px = float(max_jump_px)
+        if not np.isfinite(max_jump_px) or max_jump_px <= 0:
+            return False
+        FOCUS_LOCK["max_jump_px"] = max_jump_px
+    FOCUS_LOCK["last_x"] = expected_x
+    FOCUS_LOCK["last_y"] = expected_y
+    return True
+
+
+def capture_frame(exposure_seconds: float, light: bool = True) -> np.ndarray:
+    global LAST_CAPTURE_STATS, LAST_RAW_FRAME
+
+    last_exc = None
+    for attempt in range(1, CAPTURE_HTTP_ATTEMPTS + 1):
+        try:
+            frame = capture_raw_frame(exposure_seconds, light=light).astype(np.float32)
+
+            min_val = float(frame.min())
+            max_val = float(frame.max())
+            median_val = float(np.median(frame))
+            std_val = float(np.std(frame))
+
+            if max_val < RAW_SIGNAL_MIN or max_val <= min_val:
+                norm = np.zeros_like(frame, dtype=np.uint8)
+                pedestal = min_val
+            else:
+                pedestal = max(min_val, median_val + 0.5 * std_val)
+                if max_val <= pedestal:
+                    pedestal = min_val
+                norm = np.clip((frame - pedestal) / (max_val - pedestal + 1e-6), 0, 1)
+                norm = (norm * 255).astype(np.uint8)
+
+            if ROTATE_IMAGE_180:
+                norm = np.rot90(norm, 2)
+                frame = np.rot90(frame, 2)
+            LAST_RAW_FRAME = frame
+            LAST_CAPTURE_STATS = {
+                "raw_min": min_val,
+                "raw_max": max_val,
+                "raw_median": median_val,
+                "raw_std": std_val,
+                "pedestal": float(pedestal),
+                "norm_max": float(norm.max()),
+                "norm_nonzero": int(np.count_nonzero(norm)),
+            }
+
+            if CAPTURE_COOLDOWN_SLEEP_S > 0:
+                time.sleep(CAPTURE_COOLDOWN_SLEEP_S)
+            return norm
+        except Exception as exc:
+            last_exc = exc
+            if attempt < CAPTURE_HTTP_ATTEMPTS:
+                print(
+                    f"Aviso: falha na captura ({backend_name()}) "
+                    f"({attempt}/{CAPTURE_HTTP_ATTEMPTS}); tentando de novo..."
+                )
+                time.sleep(CAPTURE_RETRY_SLEEP_S)
+
+    raise last_exc
+
+
+def _as_gray_float(frame: np.ndarray) -> np.ndarray:
+    if frame.ndim == 3:
+        return frame.mean(axis=2).astype(np.float32)
+    return frame.astype(np.float32, copy=True)
+
+
+def _centro_massa_padrao(frame_gray: np.ndarray, threshold_percent: float):
+    max_val = float(frame_gray.max())
+    if max_val <= 0:
+        return None
+
+    threshold = max_val * threshold_percent
+    weights = frame_gray.copy()
+    weights[weights < threshold] = 0
+    total = float(weights.sum())
+    if total <= 0:
+        return None
+
+    h, w = weights.shape
+    yy, xx = np.indices((h, w), dtype=np.float32)
+    x_cm = float((xx * weights).sum() / total)
+    y_cm = float((yy * weights).sum() / total)
+    ix = int(np.clip(round(x_cm), 0, w - 1))
+    iy = int(np.clip(round(y_cm), 0, h - 1))
+    toca_borda = bool(
+        np.any(weights[0, :])
+        or np.any(weights[-1, :])
+        or np.any(weights[:, 0])
+        or np.any(weights[:, -1])
+    )
+    return x_cm, y_cm, float(weights[iy, ix]), toca_borda
+
+
+def _raw_signal_frame(frame_gray: np.ndarray) -> np.ndarray:
+    if isinstance(LAST_RAW_FRAME, np.ndarray) and LAST_RAW_FRAME.shape == frame_gray.shape:
+        pedestal = float(LAST_CAPTURE_STATS.get("pedestal", 0.0))
+        return np.clip(LAST_RAW_FRAME.astype(np.float32) - pedestal, 0, None)
+    return frame_gray.astype(np.float32, copy=False)
+
+
+def _similarity(candidate: dict, reference: dict | None) -> float:
+    if reference is None:
+        return 0.0
+
+    feature_weights = {
+        "raw_peak": 0.25,
+        "raw_total": 0.20,
+        "area": 0.15,
+        "bbox_w": 0.12,
+        "bbox_h": 0.12,
+        "compactness": 0.16,
+    }
+    weighted_score = 0.0
+    total_weight = 0.0
+    for key, weight in feature_weights.items():
+        if key not in candidate or key not in reference:
+            continue
+        cand = max(float(candidate[key]), 1e-6)
+        ref = max(float(reference[key]), 1e-6)
+        ratio = min(cand / ref, ref / cand)
+        weighted_score += weight * float(np.clip(ratio, 0.0, 1.0))
+        total_weight += weight
+
+    return float(weighted_score / total_weight) if total_weight > 0 else 0.0
+
+
+def _lock_reference_from(candidate: dict) -> dict:
+    keys = ("raw_peak", "raw_total", "area", "bbox_w", "bbox_h", "compactness")
+    return {key: float(candidate[key]) for key in keys if key in candidate}
+
+
+def _focus_lock_snapshot() -> dict:
+    return {
+        "active": bool(FOCUS_LOCK["active"]),
+        "primary": copy.deepcopy(FOCUS_LOCK["primary"]),
+        "secondary": copy.deepcopy(FOCUS_LOCK["secondary"]),
+        "last_x": FOCUS_LOCK["last_x"],
+        "last_y": FOCUS_LOCK["last_y"],
+        "freeze_reference": bool(FOCUS_LOCK["freeze_reference"]),
+        "max_jump_px": FOCUS_LOCK["max_jump_px"],
+        "threshold_percent": FOCUS_LOCK["threshold_percent"],
+    }
+
+
+def _candidate_debug(candidate: dict, primary: dict | None, secondary: dict | None) -> dict:
+    return {
+        "x_cm": float(candidate["x_cm"]),
+        "y_cm": float(candidate["y_cm"]),
+        "area": int(candidate["area"]),
+        "raw_peak": float(candidate["raw_peak"]),
+        "raw_total": float(candidate["raw_total"]),
+        "bbox_w": int(candidate.get("bbox_w", 0)),
+        "bbox_h": int(candidate.get("bbox_h", 0)),
+        "compactness": float(candidate.get("compactness", 0.0)),
+        "toca_borda": bool(candidate["toca_borda"]),
+        "similarity_primary": float(_similarity(candidate, primary)) if primary is not None else None,
+        "similarity_secondary": float(_similarity(candidate, secondary)) if secondary is not None else None,
+    }
+
+
+def _update_focus_lock(candidate: dict, candidates: list[dict]) -> None:
+    if not LOCK_FOCUS_IDENTITY:
+        return
+
+    if not FOCUS_LOCK["active"]:
+        ordered = sorted(candidates, key=lambda item: item["raw_total"], reverse=True)
+        FOCUS_LOCK["active"] = True
+        FOCUS_LOCK["primary"] = _lock_reference_from(candidate)
+        FOCUS_LOCK["secondary"] = (
+            _lock_reference_from(ordered[1]) if len(ordered) >= 2 else None
+        )
+    elif not candidate["toca_borda"] and not FOCUS_LOCK["freeze_reference"]:
+        primary = FOCUS_LOCK["primary"]
+        if primary is not None:
+            # Atualiza devagar para aceitar variacoes reais sem esquecer a identidade inicial.
+            for key in ("raw_peak", "raw_total", "area"):
+                primary[key] = (0.85 * float(primary[key])) + (0.15 * float(candidate[key]))
+
+    # Uma ilha cortada pela borda nao pode deslocar a ancora. Isso evita que
+    # uma parede aceita por engano abra caminho para novas selecoes erradas.
+    if not candidate["toca_borda"]:
+        FOCUS_LOCK["last_x"] = float(candidate["x_cm"])
+        FOCUS_LOCK["last_y"] = float(candidate["y_cm"])
+
+
+def _select_focus_candidate(candidates: list[dict]) -> dict | None:
+    if not candidates:
+        return None
+
+    if not LOCK_FOCUS_IDENTITY or not FOCUS_LOCK["active"]:
+        return max(candidates, key=lambda item: item["raw_total"])
+
+    primary = FOCUS_LOCK["primary"]
+    secondary = FOCUS_LOCK["secondary"]
+
+    best = None
+    best_score = -1.0
+    best_is_near = False
+    for candidate in candidates:
+        primary_score = _similarity(candidate, primary)
+        secondary_score = _similarity(candidate, secondary)
+
+        dist = None
+        near_continuity = False
+        if FOCUS_LOCK["last_x"] is not None and FOCUS_LOCK["last_y"] is not None:
+            dist = float(
+                np.hypot(
+                    candidate["x_cm"] - FOCUS_LOCK["last_x"],
+                    candidate["y_cm"] - FOCUS_LOCK["last_y"],
+                )
+            )
+            max_jump_px = FOCUS_LOCK["max_jump_px"]
+            if max_jump_px is not None and dist > float(max_jump_px):
+                continue
+            near_continuity = (
+                dist <= LOCK_NEAR_CONTINUITY_PX
+                and not candidate["toca_borda"]
+            )
+
+        if (
+            not near_continuity
+            and secondary is not None
+            and secondary_score > primary_score + 0.12
+        ):
+            continue
+        if not near_continuity and primary_score < LOCK_MIN_SIMILARITY:
+            continue
+
+        if dist is not None:
+            dist_score = 1.0 / (1.0 + (dist / 30.0))
+        else:
+            dist_score = 1.0
+
+        score = (0.65 * primary_score) + (0.35 * dist_score)
+        if near_continuity:
+            score += 0.50
+        if score > best_score:
+            best = candidate
+            best_score = score
+            best_is_near = near_continuity
+
+    if best is None:
+        return None
+
+    if len(candidates) == 1 and secondary is not None and not best_is_near:
+        primary_score = _similarity(best, primary)
+        secondary_score = _similarity(best, secondary)
+        if primary_score < LOCK_STRONG_SIMILARITY and secondary_score >= primary_score:
+            return None
+
+    return best
+
+
+def _clamp_search_roi(
+    search_roi: tuple[int, int, int, int] | None,
+    image_width: int,
+    image_height: int,
+) -> tuple[int, int, int, int]:
+    """Limita uma ROI ``(x, y, largura, altura)`` aos limites da imagem."""
+    if search_roi is None:
+        return 0, 0, int(image_width), int(image_height)
+
+    x, y, width, height = (int(round(value)) for value in search_roi)
+    x0 = int(np.clip(x, 0, max(image_width - 1, 0)))
+    y0 = int(np.clip(y, 0, max(image_height - 1, 0)))
+    x1 = int(np.clip(x + width, x0 + 1, image_width))
+    y1 = int(np.clip(y + height, y0 + 1, image_height))
+    return x0, y0, x1 - x0, y1 - y0
+
+
+def _find_focus_candidates(
+    frame_gray: np.ndarray,
+    threshold_percent: float,
+    search_roi: tuple[int, int, int, int] | None = None,
+) -> list[dict]:
+    """
+    Estrategia no modo dual:
+    1. thresholda a imagem suavizada e separa ilhas de pixels conectados;
+    2. trata cada ilha como um candidato a foco;
+    3. calcula o centro de massa local de cada candidato usando o sinal bruto;
+    4. a escolha nao e pela maior area, mas pela intensidade integrada
+       (raw_total) no primeiro lock e por similaridade/continuidade depois.
+    """
+    image_h, image_w = frame_gray.shape
+    roi_x, roi_y, roi_w, roi_h = _clamp_search_roi(
+        search_roi,
+        image_w,
+        image_h,
+    )
+    roi_x1 = roi_x + roi_w
+    roi_y1 = roi_y + roi_h
+    frame_search = frame_gray[roi_y:roi_y1, roi_x:roi_x1]
+
+    # O limiar passa a ser relativo somente ao recorte escolhido. Uma fachada
+    # brilhante fora dele deixa de esconder uma luz mais fraca.
+    max_val = float(frame_search.max())
+    if max_val <= 0:
+        return []
+
+    blurred = cv2.GaussianBlur(frame_search, (5, 5), 0)
+    raw_signal = _raw_signal_frame(frame_gray)[roi_y:roi_y1, roi_x:roi_x1]
+    threshold = max_val * threshold_percent
+    mask = (blurred >= threshold).astype(np.uint8)
+    if MORPH_KERNEL_SIZE > 1:
+        kernel = np.ones((MORPH_KERNEL_SIZE, MORPH_KERNEL_SIZE), dtype=np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+    num_labels, labels = cv2.connectedComponents(mask, connectivity=8)
+    if num_labels <= 1:
+        return []
+
+    candidates = []
+    yy, xx = np.indices(frame_search.shape, dtype=np.float32)
+    xx += float(roi_x)
+    yy += float(roi_y)
+    for label in range(1, num_labels):
+        selected_mask = labels == label
+        area = int(np.count_nonzero(selected_mask))
+        if area < MIN_LOCAL_PIXELS:
+            continue
+
+        local_ys, local_xs = np.where(selected_mask)
+        bbox_w = int(local_xs.max() - local_xs.min() + 1)
+        bbox_h = int(local_ys.max() - local_ys.min() + 1)
+        contours, _ = cv2.findContours(
+            selected_mask.astype(np.uint8),
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE,
+        )
+        perimeter = max((cv2.arcLength(contour, True) for contour in contours), default=0.0)
+        compactness = (
+            float(np.clip((4.0 * np.pi * area) / (perimeter * perimeter), 0.0, 1.0))
+            if perimeter > 0
+            else 0.0
+        )
+
+        ys, xs = np.where(selected_mask)
+        peak_index = int(np.argmax(frame_search[selected_mask]))
+        peak_y = int(ys[peak_index])
+        peak_x = int(xs[peak_index])
+
+        y0 = max(0, peak_y - LOCAL_RADIUS_PX)
+        y1 = min(roi_h, peak_y + LOCAL_RADIUS_PX + 1)
+        x0 = max(0, peak_x - LOCAL_RADIUS_PX)
+        x1 = min(roi_w, peak_x + LOCAL_RADIUS_PX + 1)
+        local_window = np.zeros_like(selected_mask)
+        local_window[y0:y1, x0:x1] = True
+        selected_mask = selected_mask & local_window
+        area = int(np.count_nonzero(selected_mask))
+        if area < MIN_LOCAL_PIXELS:
+            continue
+
+        raw_weights = np.where(selected_mask, raw_signal, 0)
+        weights = raw_weights
+        total = float(weights.sum())
+        raw_total = float(raw_weights.sum())
+        raw_peak = float(raw_weights.max())
+        if total <= 0 or raw_total <= 0:
+            continue
+
+        x_cm = float((xx * weights).sum() / total)
+        y_cm = float((yy * weights).sum() / total)
+        ix = int(np.clip(round(x_cm), 0, image_w - 1))
+        iy = int(np.clip(round(y_cm), 0, image_h - 1))
+        toca_borda = bool(
+            np.any(selected_mask[0, :])
+            or np.any(selected_mask[-1, :])
+            or np.any(selected_mask[:, 0])
+            or np.any(selected_mask[:, -1])
+        )
+
+        candidates.append(
+            {
+                "x_cm": x_cm,
+                "y_cm": y_cm,
+                "intensity": float(frame_gray[iy, ix]),
+                "toca_borda": toca_borda,
+                "area": area,
+                "raw_peak": raw_peak,
+                "raw_total": raw_total,
+                "bbox_w": bbox_w,
+                "bbox_h": bbox_h,
+                "compactness": compactness,
+            }
+        )
+
+    return candidates
+
+
+def _selecionar_regiao_de_busca(frame_gray: np.ndarray) -> tuple[int, int, int, int]:
+    """Permite desenhar o retangulo usado somente para procurar candidatos."""
+    image_h, image_w = frame_gray.shape
+    scale = min(1.0, 1400.0 / max(image_w, 1), 820.0 / max(image_h, 1))
+    display_w = max(1, int(round(image_w * scale)))
+    display_h = max(1, int(round(image_h * scale)))
+    normalized = cv2.normalize(frame_gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    base = cv2.cvtColor(normalized, cv2.COLOR_GRAY2BGR)
+    if scale != 1.0:
+        base = cv2.resize(base, (display_w, display_h), interpolation=cv2.INTER_AREA)
+
+    window_name = "Etapa 1 - recorte a regiao da luz"
+    state = {
+        "dragging": False,
+        "start": None,
+        "current": None,
+        "rectangle": None,
+    }
+
+    def on_mouse(event, x, y, _flags, _param) -> None:
+        point = (int(np.clip(x, 0, display_w - 1)), int(np.clip(y, 0, display_h - 1)))
+        if event == cv2.EVENT_LBUTTONDOWN:
+            state["dragging"] = True
+            state["start"] = point
+            state["current"] = point
+            state["rectangle"] = None
+        elif event == cv2.EVENT_MOUSEMOVE and state["dragging"]:
+            state["current"] = point
+        elif event == cv2.EVENT_LBUTTONUP and state["dragging"]:
+            state["dragging"] = False
+            state["current"] = point
+            start_x, start_y = state["start"]
+            end_x, end_y = point
+            if abs(end_x - start_x) >= 12 and abs(end_y - start_y) >= 12:
+                state["rectangle"] = (
+                    min(start_x, end_x),
+                    min(start_y, end_y),
+                    max(start_x, end_x),
+                    max(start_y, end_y),
+                )
+
+    def render() -> np.ndarray:
+        canvas = base.copy()
+        rectangle = state["rectangle"]
+        if state["dragging"] and state["start"] is not None:
+            start_x, start_y = state["start"]
+            end_x, end_y = state["current"]
+            rectangle = (
+                min(start_x, end_x),
+                min(start_y, end_y),
+                max(start_x, end_x),
+                max(start_y, end_y),
+            )
+        if rectangle is not None:
+            x0, y0, x1, y1 = rectangle
+            cv2.rectangle(canvas, (x0, y0), (x1, y1), (0, 255, 0), 2)
+        cv2.putText(
+            canvas,
+            "Arraste ao redor da luz | Enter confirma | A usa tudo | Esc cancela",
+            (20, 35),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.72,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        return canvas
+
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, display_w, display_h)
+    cv2.setMouseCallback(window_name, on_mouse)
+    print(
+        "Selecao da regiao: arraste um retangulo ao redor da luz e pressione Enter. "
+        "A usa o sensor inteiro."
+    )
+    try:
+        while True:
+            cv2.imshow(window_name, render())
+            key = cv2.waitKey(30) & 0xFF
+            if key in (13, 10) and state["rectangle"] is not None:
+                x0, y0, x1, y1 = state["rectangle"]
+                roi = (
+                    int(np.floor(x0 / scale)),
+                    int(np.floor(y0 / scale)),
+                    int(np.ceil((x1 - x0 + 1) / scale)),
+                    int(np.ceil((y1 - y0 + 1) / scale)),
+                )
+                return _clamp_search_roi(roi, image_w, image_h)
+            if key in (ord("a"), ord("A")):
+                return 0, 0, image_w, image_h
+            if key == 27:
+                raise KeyboardInterrupt("Selecao manual cancelada.")
+            if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
+                raise KeyboardInterrupt("Janela de recorte fechada.")
+    finally:
+        cv2.destroyWindow(window_name)
+
+
+def _escolher_candidato_no_recorte(
+    frame_gray: np.ndarray,
+    search_roi: tuple[int, int, int, int],
+    threshold_percent: float,
+) -> tuple[dict, list[dict], float] | None:
+    """Escolhe uma ilha; ``None`` solicita que o usuario refaca o recorte."""
+    roi_x, roi_y, roi_w, roi_h = search_roi
+    crop = frame_gray[roi_y:roi_y + roi_h, roi_x:roi_x + roi_w]
+    display_scale = min(4.0, 1400.0 / max(roi_w, 1), 780.0 / max(roi_h, 1))
+    display_w = max(1, int(round(roi_w * display_scale)))
+    display_h = max(1, int(round(roi_h * display_scale)))
+    normalized = cv2.normalize(crop, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    base = cv2.cvtColor(normalized, cv2.COLOR_GRAY2BGR)
+    if display_scale != 1.0:
+        interpolation = cv2.INTER_NEAREST if display_scale > 1.0 else cv2.INTER_AREA
+        base = cv2.resize(base, (display_w, display_h), interpolation=interpolation)
+
+    window_name = "Etapa 2 - escolha a ilha dentro do recorte"
+    state = {
+        "threshold": float(np.clip(threshold_percent, 0.02, 0.90)),
+        "candidates": [],
+        "selected_index": None,
+    }
+
+    def recalculate() -> None:
+        state["candidates"] = _find_focus_candidates(
+            frame_gray,
+            state["threshold"],
+            search_roi=search_roi,
+        )
+        state["selected_index"] = None
+        print(
+            f"Recorte: threshold={100.0 * state['threshold']:.0f}% | "
+            f"{len(state['candidates'])} ilha(s)."
+        )
+
+    def render() -> np.ndarray:
+        canvas = base.copy()
+        for idx, candidate in enumerate(state["candidates"]):
+            px = int(round((float(candidate["x_cm"]) - roi_x) * display_scale))
+            py = int(round((float(candidate["y_cm"]) - roi_y) * display_scale))
+            is_selected = idx == state["selected_index"]
+            color = (0, 255, 0) if is_selected else (0, 255, 255)
+            radius = 12 if is_selected else 7
+            cv2.circle(canvas, (px, py), radius, color, 2)
+            if is_selected:
+                cv2.putText(
+                    canvas,
+                    f"ilha {idx + 1}",
+                    (px + 12, max(74, py - 12)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.65,
+                    color,
+                    2,
+                    cv2.LINE_AA,
+                )
+        cv2.putText(
+            canvas,
+            "Clique na ilha | Enter confirma | -/+ muda threshold | R recorta",
+            (15, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.62,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            canvas,
+            f"Threshold: {100.0 * state['threshold']:.0f}% | Ilhas: {len(state['candidates'])}",
+            (15, 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.62,
+            (0, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        if not state["candidates"]:
+            cv2.putText(
+                canvas,
+                "Nenhuma ilha: pressione - ou R",
+                (15, 95),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.70,
+                (0, 0, 255),
+                2,
+                cv2.LINE_AA,
+            )
+        return canvas
+
+    def on_mouse(event, x, y, _flags, _param) -> None:
+        if event != cv2.EVENT_LBUTTONDOWN or not state["candidates"]:
+            return
+        full_x = roi_x + (float(x) / display_scale)
+        full_y = roi_y + (float(y) / display_scale)
+        state["selected_index"] = min(
+            range(len(state["candidates"])),
+            key=lambda idx: (
+                (float(state["candidates"][idx]["x_cm"]) - full_x) ** 2
+                + (float(state["candidates"][idx]["y_cm"]) - full_y) ** 2
+            ),
+        )
+
+    recalculate()
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, display_w, display_h)
+    cv2.setMouseCallback(window_name, on_mouse)
+    try:
+        while True:
+            cv2.imshow(window_name, render())
+            key = cv2.waitKey(30) & 0xFF
+            if key in (13, 10) and state["selected_index"] is not None:
+                candidate = state["candidates"][int(state["selected_index"])]
+                return candidate, state["candidates"], state["threshold"]
+            if key in (ord("-"), ord("_")):
+                state["threshold"] = max(0.02, state["threshold"] - 0.02)
+                recalculate()
+            if key in (ord("+"), ord("=")):
+                state["threshold"] = min(0.90, state["threshold"] + 0.02)
+                recalculate()
+            if key in (ord("r"), ord("R")):
+                return None
+            if key == 27:
+                raise KeyboardInterrupt("Selecao manual cancelada.")
+            if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
+                raise KeyboardInterrupt("Janela de selecao manual fechada.")
+    finally:
+        cv2.destroyWindow(window_name)
+
+
+def _lock_manual_candidate(
+    candidate: dict,
+    max_jump_px: float,
+    threshold_percent: float,
+) -> dict:
+    reset_focus_lock()
+    FOCUS_LOCK["active"] = True
+    FOCUS_LOCK["primary"] = _lock_reference_from(candidate)
+    FOCUS_LOCK["secondary"] = None
+    FOCUS_LOCK["last_x"] = float(candidate["x_cm"])
+    FOCUS_LOCK["last_y"] = float(candidate["y_cm"])
+    FOCUS_LOCK["freeze_reference"] = True
+    FOCUS_LOCK["max_jump_px"] = float(max_jump_px)
+    FOCUS_LOCK["threshold_percent"] = float(threshold_percent)
+    return get_focus_signature()
+
+
+def escolher_ilha_manualmente(
+    frame: np.ndarray,
+    threshold_percent: float | None = None,
+    max_jump_px: float = 95.0,
+) -> dict:
+    """Recorta a busca, mostra as ilhas locais e trava a que o usuario clicar."""
+    frame_gray = _as_gray_float(frame)
+    threshold = DUAL_THRESHOLD_PERCENT if threshold_percent is None else threshold_percent
+    while True:
+        search_roi = _selecionar_regiao_de_busca(frame_gray)
+        result = _escolher_candidato_no_recorte(frame_gray, search_roi, threshold)
+        if result is not None:
+            candidate, candidates, threshold = result
+            break
+
+    signature = _lock_manual_candidate(
+        candidate,
+        max_jump_px=max_jump_px,
+        threshold_percent=threshold,
+    )
+    return {
+        "x_px": float(candidate["x_cm"]),
+        "y_px": float(candidate["y_cm"]),
+        "selection_roi": {
+            "start_x": int(search_roi[0]),
+            "start_y": int(search_roi[1]),
+            "width": int(search_roi[2]),
+            "height": int(search_roi[3]),
+        },
+        "selection_threshold_percent": float(threshold),
+        "signature": signature,
+        "candidate": _candidate_debug(candidate, FOCUS_LOCK["primary"], None),
+        "candidate_count": len(candidates),
+        "candidates": [
+            _candidate_debug(item, FOCUS_LOCK["primary"], None)
+            for item in candidates
+        ],
+    }
+
+
+def centro_massa_em_roi(
+    frame: np.ndarray,
+    start_x: int,
+    start_y: int,
+    width: int,
+    height: int,
+    threshold_percent: float | None = None,
+):
+    """Calcula o CM em uma ROI fixa preservando o sinal bruto correspondente."""
+    global LAST_RAW_FRAME
+
+    x0 = int(start_x)
+    y0 = int(start_y)
+    x1 = x0 + int(width)
+    y1 = y0 + int(height)
+    frame_roi = frame[y0:y1, x0:x1]
+    if frame_roi.shape[:2] != (int(height), int(width)):
+        raise RuntimeError(
+            f"ROI fora do frame: inicio=({x0},{y0}), tamanho={width}x{height}, "
+            f"frame={frame.shape[1]}x{frame.shape[0]}."
+        )
+
+    raw_full = LAST_RAW_FRAME
+    if isinstance(raw_full, np.ndarray) and raw_full.shape[:2] == frame.shape[:2]:
+        LAST_RAW_FRAME = raw_full[y0:y1, x0:x1]
+    try:
+        cm = centro_massa(frame_roi, threshold_percent=threshold_percent)
+        return frame_roi, cm
+    finally:
+        LAST_RAW_FRAME = raw_full
+
+
+def _centro_foco_principal(frame_gray: np.ndarray, threshold_percent: float):
+    global LAST_FOCUS_DEBUG
+
+    lock_before = _focus_lock_snapshot()
+    search_roi = None
+    if (
+        lock_before["active"]
+        and lock_before["last_x"] is not None
+        and lock_before["last_y"] is not None
+    ):
+        max_jump = lock_before["max_jump_px"]
+        if max_jump is None:
+            max_jump = LOCAL_RADIUS_PX
+        search_radius = int(np.ceil(float(max_jump) + LOCK_SEARCH_MARGIN_PX))
+        search_roi = (
+            int(round(float(lock_before["last_x"]))) - search_radius,
+            int(round(float(lock_before["last_y"]))) - search_radius,
+            (2 * search_radius) + 1,
+            (2 * search_radius) + 1,
+        )
+    candidates = _find_focus_candidates(
+        frame_gray,
+        threshold_percent,
+        search_roi=search_roi,
+    )
+    candidate = _select_focus_candidate(candidates)
+    if candidate is None:
+        LAST_FOCUS_DEBUG = {
+            "mode": FOCUS_MODE,
+            "selected": None,
+            "candidate_count": len(candidates),
+            "search_roi": search_roi,
+            "lock_before": lock_before,
+            "lock_after": _focus_lock_snapshot(),
+            "candidates": [
+                _candidate_debug(item, lock_before["primary"], lock_before["secondary"])
+                for item in candidates
+            ],
+            "rejected": True,
+        }
+        return None
+
+    _update_focus_lock(candidate, candidates)
+    lock_after = _focus_lock_snapshot()
+    LAST_FOCUS_DEBUG = {
+        "mode": FOCUS_MODE,
+        "selected": _candidate_debug(candidate, lock_before["primary"], lock_before["secondary"]),
+        "candidate_count": len(candidates),
+        "search_roi": search_roi,
+        "lock_before": lock_before,
+        "lock_after": lock_after,
+        "candidates": [
+            _candidate_debug(item, lock_before["primary"], lock_before["secondary"])
+            for item in candidates
+        ],
+        "rejected": False,
+    }
+    return (
+        candidate["x_cm"],
+        candidate["y_cm"],
+        candidate["intensity"],
+        candidate["toca_borda"],
+    )
+
+
+def centro_massa(frame: np.ndarray, threshold_percent: float | None = None):
+    global LAST_FOCUS_DEBUG
+
+    frame_gray = _as_gray_float(frame)
+    if FOCUS_MODE == "dual":
+        locked_threshold = FOCUS_LOCK.get("threshold_percent")
+        threshold = (
+            locked_threshold
+            if threshold_percent is None and locked_threshold is not None
+            else DUAL_THRESHOLD_PERCENT
+            if threshold_percent is None
+            else threshold_percent
+        )
+        return _centro_foco_principal(frame_gray, threshold)
+
+    threshold = 0.5 if threshold_percent is None else threshold_percent
+    cm = _centro_massa_padrao(frame_gray, threshold)
+    LAST_FOCUS_DEBUG = {
+        "mode": FOCUS_MODE,
+        "selected": None
+        if cm is None
+        else {
+            "x_cm": float(cm[0]),
+            "y_cm": float(cm[1]),
+            "intensity": float(cm[2]),
+            "toca_borda": bool(cm[3]),
+        },
+        "candidate_count": None,
+        "lock_before": None,
+        "lock_after": None,
+        "candidates": [],
+        "rejected": cm is None,
+    }
+    return cm
+
+
+def _load_calibration_matrices() -> dict[str, tuple[np.ndarray, str]] | None:
+    if backend_name() == "ids":
+        matrix_sets = {
+            "fine": matrix_candidates(f"{IDS_MATRIX_PREFIX}_A_inv_fine.npy"),
+            "coarse": matrix_candidates(f"{IDS_MATRIX_PREFIX}_A_inv_coarse.npy"),
+        }
+    else:
+        matrix_sets = {
+            "fine": matrix_candidates(
+                "foco_temp_A_inv_fine.npy",
+                "A_inv_fine.npy",
+                "calibracao_A_inv.npy",
+            ),
+            "coarse": matrix_candidates(
+                "foco_temp_A_inv_coarse.npy",
+                "A_inv_coarse.npy",
+                "calibracao_A_inv.npy",
+            ),
+        }
+
+    loaded = {}
+    try:
+        for label, candidates in matrix_sets.items():
+            for candidate in candidates:
+                if not candidate.exists():
+                    continue
+                A_inv = np.load(candidate)
+                if A_inv.shape != (2, 2):
+                    raise ValueError(f"Matriz {display_path(candidate)} com shape invalido.")
+                loaded[label] = (A_inv, display_path(candidate))
+                print(f"Matriz {label} carregada: {display_path(candidate)}")
+                break
+
+        if not loaded:
+            tested = [str(path) for paths in matrix_sets.values() for path in paths]
+            raise FileNotFoundError(f"Testei: {', '.join(tested)}")
+
+        if "coarse" not in loaded and "fine" in loaded:
+            loaded["coarse"] = loaded["fine"]
+            print("Aviso: matriz coarse nao encontrada; usando fine como fallback.")
+        if "fine" not in loaded and "coarse" in loaded:
+            loaded["fine"] = loaded["coarse"]
+            print("Aviso: matriz fine nao encontrada; usando coarse como fallback.")
+
+        return loaded
+    except Exception as exc:
+        print(f"\nNao foi possivel carregar a matriz de centralizacao: {exc}")
+        print("Execute primeiro a calibracao 2D para gerar este arquivo.")
+        return None
+
+
+def _select_A_inv(
+    matrices: dict[str, tuple[np.ndarray, str]],
+    radius_px: float,
+) -> tuple[str, np.ndarray]:
+    if radius_px <= FINE_MATRIX_ENTER_RADIUS_PX and "fine" in matrices:
+        return "fine", matrices["fine"][0]
+    return "coarse", matrices["coarse"][0]
+
+
+def _limit_correction(daz_deg: float, dalt_deg: float) -> tuple[float, float, float]:
+    correction = np.array([daz_deg, dalt_deg], dtype=float) * CENTERING_STEP_GAIN
+    norm = float(np.hypot(correction[0], correction[1]))
+    scale = CENTERING_STEP_GAIN
+    if norm > MAX_CORRECTION_NORM_DEG:
+        limit_scale = MAX_CORRECTION_NORM_DEG / max(norm, 1e-12)
+        correction *= limit_scale
+        scale *= limit_scale
+    return float(correction[0]), float(correction[1]), float(scale)
+
+
+def _save_marked_frame(
+    frame: np.ndarray,
+    path: Path,
+    cx: float,
+    cy: float,
+    x_cm: float,
+    y_cm: float,
+    x_cm0: float | None = None,
+    y_cm0: float | None = None,
+) -> None:
+    marked = frame.copy()
+    if marked.ndim == 2:
+        marked = cv2.cvtColor(marked, cv2.COLOR_GRAY2BGR)
+
+    c_ix, c_iy = int(round(cx)), int(round(cy))
+    cm_ix, cm_iy = int(round(x_cm)), int(round(y_cm))
+
+    cv2.circle(marked, (c_ix, c_iy), 8, (255, 0, 0), -1)
+    if x_cm0 is not None and y_cm0 is not None:
+        cm0_ix, cm0_iy = int(round(x_cm0)), int(round(y_cm0))
+        cv2.circle(marked, (cm0_ix, cm0_iy), 8, (0, 255, 0), -1)
+        cv2.line(marked, (cm0_ix, cm0_iy), (cm_ix, cm_iy), (0, 255, 255), 2)
+        cv2.circle(marked, (cm_ix, cm_iy), 8, (0, 0, 255), -1)
+    else:
+        cv2.circle(marked, (cm_ix, cm_iy), 8, (0, 255, 0), -1)
+
+    _save_image(path, marked)
+
+
+def _save_image(path: Path, image: np.ndarray) -> None:
+    """Salva uma imagem mesmo quando o caminho contém caracteres Unicode."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    extension = path.suffix or ".png"
+    ok, encoded = cv2.imencode(extension, image)
+    if not ok:
+        raise RuntimeError(f"OpenCV nao conseguiu codificar a imagem como {extension}")
+    path.write_bytes(encoded.tobytes())
+    if not path.is_file() or path.stat().st_size == 0:
+        raise OSError(f"A imagem nao foi gravada corretamente em: {path}")
+
+
+def _save_confirmed_dual_focus_target(
+    target_x: float,
+    target_y: float,
+    frame: np.ndarray,
+    measured_x: float,
+    measured_y: float,
+) -> Path | None:
+    if FOCUS_MODE != "dual":
+        return None
+    if abs(measured_x - target_x) > lim_px or abs(measured_y - target_y) > lim_px:
+        return None
+    signature = get_focus_signature()
+    if signature is None:
+        return None
+    path = salvar_alvo(
+        target_x,
+        target_y,
+        source="confirmed_dual_focus_target",
+        frame_shape=frame.shape,
+        focus_mode=FOCUS_MODE,
+        samples=1,
+        std_x_px=0.0,
+        std_y_px=0.0,
+        focus_signature=signature,
+    )
+    print(f"Referencia e assinatura do foco confirmadas em: {display_path(path)}")
+    return path
+
+
+def centralizacao_iterativa() -> None:
+    """Centralizacao curta anterior, mantida como alternativa de bancada."""
+    mode = input("Modo do laser (1=foco unico, 2=dupla reflexao) [2]: ").strip() or "2"
+    set_focus_mode(mode)
+    connect_camera()
+    try:
+        print(
+            f"Camera {backend_name()}: ganho={CAMERA_GAIN}, "
+            f"exposicao={EXPOSURE_SECONDS * 1e6:.1f} us"
+        )
+        set_gain(CAMERA_GAIN)
+        frame = capture_frame(EXPOSURE_SECONDS, light=True)
+        cm = centro_massa(frame)
+        if cm is None:
+            print("Nao foi possivel medir o centro do foco travado.")
+            print(
+                "Diagnostico do frame: "
+                f"shape={frame.shape}, min={float(frame.min()):.1f}, "
+                f"max={float(frame.max()):.1f}, pixels_nao_zero={int(np.count_nonzero(frame))}"
+            )
+            if LAST_CAPTURE_STATS:
+                print(
+                    "Diagnostico bruto: "
+                    f"raw_min={LAST_CAPTURE_STATS['raw_min']:.1f}, "
+                    f"raw_max={LAST_CAPTURE_STATS['raw_max']:.1f}, "
+                    f"raw_median={LAST_CAPTURE_STATS['raw_median']:.1f}, "
+                    f"raw_std={LAST_CAPTURE_STATS['raw_std']:.1f}, "
+                    f"pedestal={LAST_CAPTURE_STATS['pedestal']:.1f}"
+                )
+            output_path = FOCO_DIR / "foco_temp_ultimo_frame.png"
+            _save_image(output_path, frame)
+            print(f"Ultimo frame salvo em: {output_path}")
+            return
+
+        x_cm, y_cm, intensidade, toca_borda = cm
+        alvo = escolher_posicao_inicial_ou_centro(
+            frame,
+            x_cm,
+            y_cm,
+            prompt="Referencia para centralizacao",
+            default_choice="3",
+            focus_mode=FOCUS_MODE,
+            focus_signature=get_focus_signature() if FOCUS_MODE == "dual" else None,
+        )
+        cx, cy = alvo.x_px, alvo.y_px
+        print(f"Modo: {FOCUS_MODE}")
+        print(f"Alvo: {alvo.source} | x={cx:.2f}px y={cy:.2f}px")
+        if alvo.path is not None:
+            print(f"Arquivo do alvo: {alvo.path}")
+        print(f"Centro medido: x={x_cm:.2f}px y={y_cm:.2f}px")
+        print(f"Deslocamento: dx={x_cm - cx:+.2f}px dy={y_cm - cy:+.2f}px")
+        print(f"Intensidade no centro: {intensidade:.1f} | toca_borda={toca_borda}")
+        if LAST_CAPTURE_STATS:
+            print(
+                "Captura: "
+                f"raw_max={LAST_CAPTURE_STATS['raw_max']:.1f}, "
+                f"norm_max={LAST_CAPTURE_STATS['norm_max']:.1f}, "
+                f"norm_pixels_nao_zero={LAST_CAPTURE_STATS['norm_nonzero']}"
+            )
+
+        output_path = FOCO_DIR / "foco_temp_inicial_cm_centro.png"
+        _save_marked_frame(frame, output_path, cx, cy, x_cm, y_cm)
+        print(f"Frame inicial salvo em: {output_path}")
+        _save_confirmed_dual_focus_target(cx, cy, frame, x_cm, y_cm)
+
+        move = input("\nDeseja centralizar o laser? (s/n): ").strip().lower()
+        if move != "s":
+            print("Centralizacao automatica cancelada pelo usuario.")
+            return
+
+        matrices = _load_calibration_matrices()
+        if matrices is None:
+            return
+
+        ensure_connected()
+        ensure_unparked()
+        ensure_not_tracking()
+
+        x_cm0, y_cm0 = x_cm, y_cm
+        usar_mount = True
+
+        for iter_idx in range(1, MAX_CENTERING_ITERS + 1):
+            dx = x_cm - cx
+            dy = y_cm - cy
+            radius_px = float(np.hypot(dx, dy))
+            print(f"\nDeslocamento atual (cm - alvo): dx = {dx:+.3f}, dy = {dy:+.3f} px")
+
+            if abs(dx) <= lim_px and abs(dy) <= lim_px:
+                print("Dentro da tolerancia em pixels. Encerrando correcoes.")
+                break
+
+            if toca_borda:
+                print("Foco medido tocando a borda; nao vou aplicar nova correcao automatica.")
+                break
+
+            matrix_name, A_inv = _select_A_inv(matrices, radius_px)
+            vec_px = np.array([-dx, -dy])
+            correcao = A_inv @ vec_px
+            raw_dAz_deg = float(correcao[0])
+            raw_dAlt_deg = float(correcao[1])
+            dAz_deg, dAlt_deg, applied_scale = _limit_correction(raw_dAz_deg, raw_dAlt_deg)
+
+            print("--- Correcao de apontamento usando A^{-1} ---")
+            print(
+                f"Iteracao {iter_idx}/{MAX_CENTERING_ITERS} | matriz={matrix_name} | "
+                f"raio={radius_px:.2f}px | ganho_efetivo={applied_scale:.3f}"
+            )
+            print(
+                f"Movimento calculado: dAz = {raw_dAz_deg:+.6f} deg, "
+                f"dAlt = {raw_dAlt_deg:+.6f} deg"
+            )
+            print(f"Movimento alvo: dAz = {dAz_deg:+.6f} deg, dAlt = {dAlt_deg:+.6f} deg")
+
+            move_axes_pid_2d(usar_mount, dAz_deg, dAlt_deg)
+
+            print("Capturando novo frame para proxima iteracao...")
+            frame = capture_frame(EXPOSURE_SECONDS, light=True)
+            cm = centro_massa(frame)
+            if cm is None:
+                print("Imagem sem sinal ou foco travado nao encontrado apos correcao; interrompendo.")
+                if ROLLBACK_ON_WORSE:
+                    print("Revertendo o ultimo movimento para evitar perder o spot.")
+                    move_axes_pid_2d(usar_mount, -dAz_deg, -dAlt_deg)
+                    frame = capture_frame(EXPOSURE_SECONDS, light=True)
+                    cm = centro_massa(frame)
+                    if cm is not None:
+                        x_cm, y_cm, intensidade, toca_borda = cm
+                output_path = FOCO_DIR / "foco_temp_ultimo_frame.png"
+                _save_image(output_path, frame)
+                print(f"Ultimo frame salvo em: {output_path}")
+                break
+
+            x_cm, y_cm, intensidade, toca_borda = cm
+            new_radius_px = float(np.hypot(x_cm - cx, y_cm - cy))
+            worse_limit = max(
+                radius_px + WORSE_ABORT_MARGIN_PX,
+                radius_px * WORSE_ABORT_FACTOR,
+            )
+            if new_radius_px > worse_limit:
+                print(
+                    "Correcao piorou muito o erro "
+                    f"({radius_px:.2f}px -> {new_radius_px:.2f}px)."
+                )
+                if ROLLBACK_ON_WORSE:
+                    print("Revertendo o ultimo movimento e interrompendo a centralizacao.")
+                    move_axes_pid_2d(usar_mount, -dAz_deg, -dAlt_deg)
+                    frame = capture_frame(EXPOSURE_SECONDS, light=True)
+                    cm = centro_massa(frame)
+                    if cm is not None:
+                        x_cm, y_cm, intensidade, toca_borda = cm
+                break
+        else:
+            print(f"Limite de {MAX_CENTERING_ITERS} iteracoes atingido.")
+
+        print(f"\nCM final: ({x_cm:.2f}, {y_cm:.2f})")
+        dx_final = x_cm - cx
+        dy_final = y_cm - cy
+        print(f"Deslocamento final (cm - alvo): dx = {dx_final:+.3f}, dy = {dy_final:+.3f} px")
+
+        output_path = FOCO_DIR / "foco_temp_final_cm_trajetoria.png"
+        _save_marked_frame(frame, output_path, cx, cy, x_cm, y_cm, x_cm0, y_cm0)
+        print(f"Frame final salvo em: {output_path}")
+        _save_confirmed_dual_focus_target(cx, cy, frame, x_cm, y_cm)
+    except KeyboardInterrupt:
+        print("\nInterrompido pelo usuario (Ctrl+C). Encerrando de forma limpa...")
+    finally:
+        stop_axes_safely()
+        disconnect_camera()
+
+
+def main() -> None:
+    """Abre por padrao o alinhador continuo por ilhas."""
+    print("Centro de massa:")
+    print("  1 = alinhamento continuo por ilhas (novo, recomendado)")
+    print("  2 = centralizacao iterativa curta (comportamento anterior)")
+    escolha = input("Escolha [1]: ").strip() or "1"
+    if escolha == "2":
+        centralizacao_iterativa()
+        return
+
+    from modulos.visao.alinhamento_continuo import executar
+
+    executar(sys.modules[__name__])
+
+
+if __name__ == "__main__":
+    main()

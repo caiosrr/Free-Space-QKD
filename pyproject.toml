@@ -1,0 +1,9 @@
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+# Neste projeto o Ruff destaca somente falhas com impacto real na execucao:
+# erros de sintaxe, nomes indefinidos e construcoes Python invalidas. Regras de
+# estilo (como ordenar imports) nao devem parecer erros nos programas de bancada.
+select = ["E9", "F63", "F7", "F82"]
