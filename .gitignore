@@ -14,3 +14,6 @@
 
 # Resultados gerados pela estrutura atual (telemetria, imagens e auditorias).
 /Codigos/resultados/
+
+# Codigo externo mantido apenas para comparacao local.
+/Codigos/Tracker amnd/
