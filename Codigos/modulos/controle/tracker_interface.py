@@ -25,6 +25,12 @@ def tracking_status(
         return "PARADA DE SEGURANCA", (0, 0, 255)
     if spot_touches_border:
         return "ILHA NA BORDA", (0, 0, 255)
+    if state.get("optical_quality_phase") == "anomalia":
+        return "ANOMALIA OPTICA - MOUNT PARADO", (0, 0, 255)
+    if state.get("optical_quality_phase") == "recuperando":
+        return "LUZ NORMALIZANDO - MOUNT PARADO", (0, 165, 255)
+    if state.get("optical_quality_phase") == "aquecendo":
+        return "MEDINDO APARENCIA NORMAL", (0, 165, 255)
     if temporal_outlier:
         return "FRAME REJEITADO - MOUNT PARADO", (0, 0, 255)
     if not instant_signal:
@@ -70,6 +76,9 @@ class TrackerDisplay:
         elapsed_hours,
         session_hours,
     ):
+        def ratio_text(value):
+            return "--" if value is None else f"{value:.2f}x"
+
         image = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
         image = cv2.resize(
             image,
@@ -121,6 +130,15 @@ class TrackerDisplay:
                 f"sem sinal={state['signal_lost_s']:.1f}s | "
                 f"exp={state['exposure_us']:.0f} us",
                 (180, 220, 255),
+            ),
+            (
+                f"Qualidade: {state['optical_quality_phase']} | "
+                f"int={ratio_text(state['optical_intensity_ratio'])} | "
+                f"area={ratio_text(state['optical_area_ratio'])} | "
+                f"tam={ratio_text(state['optical_width_ratio'])}/"
+                f"{ratio_text(state['optical_height_ratio'])} | "
+                f"estavel={state['optical_stable_s']:.1f}s",
+                (160, 255, 180),
             ),
         ]
         for index, (text, color) in enumerate(lines):

@@ -22,6 +22,10 @@ O tracker pergunta se deve executar um autoteste temporario de recuperacao.
 Responder Enter ou `n` ignora o teste; `s` aplica um pequeno deslocamento antes
 da sessao e exige que a mesma ilha volte ao centro.
 
+Durante a sessao, mudancas bruscas no tamanho, intensidade ou forma da ilha sao
+tratadas como anomalia optica: esses frames nao entram na media e o mount fica
+parado ate a luz permanecer normal por alguns segundos.
+
 Para usar o botao Play, abra o arquivo desejado. `calibracao.py`,
 `centro_de_massa.py` e `tracker.py` perguntam qual camera usar.
 

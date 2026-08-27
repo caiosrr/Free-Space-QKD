@@ -30,7 +30,15 @@ class TrackerState:
     signal_lost_s: float = 0.0
     exposure_us: float = 0.0
     target_raw_peak: float | None = None
+    target_raw_total: float | None = None
     temporal_outlier: bool = False
+    optical_quality_phase: str = "aquecendo"
+    optical_anomaly_reason: str = ""
+    optical_stable_s: float = 0.0
+    optical_intensity_ratio: float | None = None
+    optical_area_ratio: float | None = None
+    optical_width_ratio: float | None = None
+    optical_height_ratio: float | None = None
     control_loop_hz: float = 0.0
     spot_touches_border: bool = False
     mount_az_deg: float | None = None

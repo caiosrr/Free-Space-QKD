@@ -16,6 +16,7 @@ from modulos.controle.tracker_camera import EXPOSURE_SECONDS, capture_frame
 from modulos.controle.tracker_estado import TrackerState
 from modulos.controle.tracker_interface import TrackerDisplay, tracking_status
 from modulos.controle.tracker_medicao import TemporalFrameEstimator, measurement_quality
+from modulos.controle.tracker_qualidade import OpticalQualityGate
 from modulos.controle.tracker_seguranca import solicitar_parada
 from modulos.controle.tracker_telemetria import TrackerCsvLogger
 from modulos.visao import detector_ilhas as foco
@@ -52,6 +53,9 @@ def executar_aquisicao(
 ) -> ResultadoAquisicao:
     """Le frames ate o usuario ou uma trava de seguranca encerrar a sessao."""
     estimator = TemporalFrameEstimator()
+    focus_signature = foco.get_focus_signature() or {}
+    quality_gate = OpticalQualityGate(focus_signature.get("primary"))
+    last_trusted_center = (float(target_x), float(target_y))
     last_measurement_t = 0.0
     measurement_hz = 0.0
     last_display_t = 0.0
@@ -82,7 +86,17 @@ def executar_aquisicao(
         selected = focus_debug.get("selected") or {}
         touches_border = bool(selected.get("toca_borda", False))
         target_raw_peak = selected.get("raw_peak")
-        instant_valid = instant_center is not None and not touches_border
+        target_raw_total = selected.get("raw_total")
+        candidate_valid = instant_center is not None and not touches_border
+        quality = quality_gate.observe(now, selected if candidate_valid else None)
+        instant_valid = candidate_valid and quality.accepted
+        if candidate_valid:
+            if quality.accepted:
+                last_trusted_center = (float(instant_center[0]), float(instant_center[1]))
+            else:
+                # O detector atualiza sua ancora a cada candidato proximo. Um
+                # frame rejeitado nao pode arrastar essa ancora para a anomalia.
+                foco.set_focus_expected_position(*last_trusted_center)
         border_frames = border_frames + 1 if touches_border else 0
 
         temporal_outlier = False
@@ -151,7 +165,17 @@ def executar_aquisicao(
             state.target_raw_peak = (
                 None if target_raw_peak is None else float(target_raw_peak)
             )
+            state.target_raw_total = (
+                None if target_raw_total is None else float(target_raw_total)
+            )
             state.temporal_outlier = temporal_outlier
+            state.optical_quality_phase = quality.phase
+            state.optical_anomaly_reason = ",".join(quality.reasons)
+            state.optical_stable_s = quality.stable_seconds
+            state.optical_intensity_ratio = quality.ratios.get("intensidade")
+            state.optical_area_ratio = quality.ratios.get("area")
+            state.optical_width_ratio = quality.ratios.get("largura")
+            state.optical_height_ratio = quality.ratios.get("altura")
 
         if border_frames >= BORDER_CONFIRM_FRAMES:
             solicitar_parada(state, "ilha_tocou_a_borda_da_roi")
@@ -163,11 +187,26 @@ def executar_aquisicao(
             values,
             spot_touches_border=touches_border,
             temporal_outlier=temporal_outlier,
-            instant_signal=instant_center is not None,
+            instant_signal=candidate_valid,
             measurement_valid=measurement_valid,
         )
 
-        event = values["safety_stop_reason"] or ""
+        event = values["safety_stop_reason"] or quality.event
+        if quality.event:
+            logger.save_event_frame(frame, quality.event)
+            if quality.event.startswith("anomalia_optica_") and not quality.event.endswith(
+                "recuperada"
+            ):
+                print(
+                    "\nAnomalia optica: "
+                    + ", ".join(quality.reasons)
+                    + ". Mount parado; aguardando estabilidade."
+                )
+            elif quality.event == "anomalia_optica_recuperada":
+                print(
+                    "\nQualidade optica recuperada. "
+                    "Reconstruindo a media antes de liberar o controle."
+                )
         if not event and signal_was_locked and not measurement_valid:
             event = "inicio_perda_sinal"
             logger.save_event_frame(frame, event)

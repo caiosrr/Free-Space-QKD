@@ -56,6 +56,24 @@ TEMPORAL_MEAN_THRESHOLD_PERCENT = 0.20
 # o mount ultrapasse o alvo enquanto o erro medio ainda reflete o passado.
 TEMPORAL_CONTROL_GAIN_SCALE = 0.35
 
+# Trava de qualidade optica. Antes de entrar na media temporal, cada ilha e
+# comparada com a mediana recente dos periodos estaveis. Mudancas graduais
+# atualizam a referencia; saltos grandes de intensidade, area ou forma param o
+# mount ate a aparencia normal permanecer estavel por alguns segundos.
+OPTICAL_BASELINE_WINDOW_SECONDS = 5.0
+OPTICAL_INITIAL_STABLE_SECONDS = 2.0
+OPTICAL_RECOVERY_STABLE_SECONDS = 3.0
+OPTICAL_MIN_BASELINE_FRAMES = 5
+OPTICAL_INTENSITY_RATIO_LOW = 0.35
+OPTICAL_INTENSITY_RATIO_HIGH = 2.80
+OPTICAL_AREA_RATIO_LOW = 0.45
+OPTICAL_AREA_RATIO_HIGH = 2.20
+OPTICAL_LINEAR_SIZE_RATIO_LOW = 0.55
+OPTICAL_LINEAR_SIZE_RATIO_HIGH = 1.80
+OPTICAL_COMPACTNESS_RATIO_LOW = 0.45
+OPTICAL_COMPACTNESS_RATIO_HIGH = 2.20
+OPTICAL_MIN_SIGNATURE_SIMILARITY = 0.25
+
 # Limites da sessao longa.
 MAX_SESSION_HOURS = 2.0
 MAX_OFFSET_AZ_DEG = 5.0
@@ -115,3 +133,15 @@ if TEMPORAL_MIN_VALID_FRAMES < 2 or TEMPORAL_RECOVERY_VALID_FRAMES < 2:
     raise ValueError("A media e a recuperacao precisam de mais de um frame.")
 if not 0 < TEMPORAL_CONTROL_GAIN_SCALE <= 1:
     raise ValueError("A escala de ganho temporal deve estar em (0, 1].")
+if not 0 < OPTICAL_INITIAL_STABLE_SECONDS <= OPTICAL_BASELINE_WINDOW_SECONDS:
+    raise ValueError("O aquecimento optico precisa caber na janela de referencia.")
+if OPTICAL_RECOVERY_STABLE_SECONDS < TEMPORAL_WINDOW_SECONDS:
+    raise ValueError("A recuperacao optica nao pode ser menor que a media temporal.")
+for low, high in (
+    (OPTICAL_INTENSITY_RATIO_LOW, OPTICAL_INTENSITY_RATIO_HIGH),
+    (OPTICAL_AREA_RATIO_LOW, OPTICAL_AREA_RATIO_HIGH),
+    (OPTICAL_LINEAR_SIZE_RATIO_LOW, OPTICAL_LINEAR_SIZE_RATIO_HIGH),
+    (OPTICAL_COMPACTNESS_RATIO_LOW, OPTICAL_COMPACTNESS_RATIO_HIGH),
+):
+    if not 0 < low < 1 < high:
+        raise ValueError("Cada faixa de qualidade optica deve envolver a razao 1.")

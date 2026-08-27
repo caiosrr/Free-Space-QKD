@@ -17,6 +17,13 @@ from modulos.configuracoes.tracker import (
     HOLD_EXIT_RADIUS_PX,
     MAX_OFFSET_ALT_DEG,
     MAX_OFFSET_AZ_DEG,
+    OPTICAL_AREA_RATIO_HIGH,
+    OPTICAL_AREA_RATIO_LOW,
+    OPTICAL_INTENSITY_RATIO_HIGH,
+    OPTICAL_INTENSITY_RATIO_LOW,
+    OPTICAL_LINEAR_SIZE_RATIO_HIGH,
+    OPTICAL_LINEAR_SIZE_RATIO_LOW,
+    OPTICAL_RECOVERY_STABLE_SECONDS,
     SIGNAL_LOSS_LIMIT_SECONDS,
     TEMPORAL_RECOVERY_VALID_FRAMES,
     TEMPORAL_WARMUP_SECONDS,
@@ -37,6 +44,7 @@ class TrackerCsvLogger:
         "erro_y_px", "distancia_px", "erro_x_filtrado_px", "erro_y_filtrado_px",
         "frames_na_media", "janela_media_s", "frames_recuperacao",
         "tempo_sem_sinal_s", "exposicao_us", "pico_bruto_alvo",
+        "intensidade_integrada_alvo",
         "outlier_temporal", "variancia_x_px2", "variancia_y_px2",
         "desvio_padrao_2d_px", "erro_az_deg", "erro_alt_deg",
         "velocidade_az_deg_s", "velocidade_alt_deg_s", "azimute_absoluto_deg",
@@ -44,6 +52,9 @@ class TrackerCsvLogger:
         "deslocamento_alt_desde_inicio_deg", "loop_medicao_hz", "loop_controle_hz",
         "calibracao", "zona_parada_ativa", "correcao_lenta_ativa",
         "freio_ativo", "autoteste_ativo", "autoteste_aprovado",
+        "qualidade_optica", "motivo_anomalia_optica",
+        "razao_intensidade", "razao_area", "razao_largura", "razao_altura",
+        "tempo_estavel_optico_s",
         "ilha_tocando_borda", "evento_seguranca",
     ]
 
@@ -75,6 +86,20 @@ class TrackerCsvLogger:
             "temporal_warmup_seconds": TEMPORAL_WARMUP_SECONDS,
             "temporal_recovery_valid_frames": TEMPORAL_RECOVERY_VALID_FRAMES,
             "signal_loss_limit_seconds": SIGNAL_LOSS_LIMIT_SECONDS,
+            "optical_quality_gate": "rolling_median_intensity_area_shape",
+            "optical_recovery_stable_seconds": OPTICAL_RECOVERY_STABLE_SECONDS,
+            "optical_intensity_ratio_range": [
+                OPTICAL_INTENSITY_RATIO_LOW,
+                OPTICAL_INTENSITY_RATIO_HIGH,
+            ],
+            "optical_area_ratio_range": [
+                OPTICAL_AREA_RATIO_LOW,
+                OPTICAL_AREA_RATIO_HIGH,
+            ],
+            "optical_linear_size_ratio_range": [
+                OPTICAL_LINEAR_SIZE_RATIO_LOW,
+                OPTICAL_LINEAR_SIZE_RATIO_HIGH,
+            ],
             "detector": "locked_island",
             "csv_path": display_path(self.csv_path),
         }
@@ -118,6 +143,9 @@ class TrackerCsvLogger:
             "tempo_sem_sinal_s": number(state_values["signal_lost_s"], 3),
             "exposicao_us": number(state_values["exposure_us"], 1),
             "pico_bruto_alvo": number(state_values["target_raw_peak"], 2),
+            "intensidade_integrada_alvo": number(
+                state_values["target_raw_total"], 2
+            ),
             "outlier_temporal": int(bool(state_values["temporal_outlier"])),
             "variancia_x_px2": round(variance_x, 4),
             "variancia_y_px2": round(variance_y, 4),
@@ -138,6 +166,13 @@ class TrackerCsvLogger:
             "freio_ativo": int(bool(state_values["brake_active"])),
             "autoteste_ativo": int(bool(state_values["preflight_active"])),
             "autoteste_aprovado": int(bool(state_values["preflight_passed"])),
+            "qualidade_optica": state_values["optical_quality_phase"],
+            "motivo_anomalia_optica": state_values["optical_anomaly_reason"],
+            "razao_intensidade": number(state_values["optical_intensity_ratio"], 3),
+            "razao_area": number(state_values["optical_area_ratio"], 3),
+            "razao_largura": number(state_values["optical_width_ratio"], 3),
+            "razao_altura": number(state_values["optical_height_ratio"], 3),
+            "tempo_estavel_optico_s": number(state_values["optical_stable_s"], 3),
             "ilha_tocando_borda": int(bool(state_values["spot_touches_border"])),
             "evento_seguranca": event,
         }

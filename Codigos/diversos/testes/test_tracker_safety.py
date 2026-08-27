@@ -14,6 +14,7 @@ import modulos.controle.tracker_aquisicao as tracker_aquisicao
 import modulos.controle.tracker_autoteste as tracker_autoteste
 import modulos.controle.tracker_camera as tracker_camera
 import modulos.controle.tracker_loop as tracker_loop
+import modulos.controle.tracker_qualidade as tracker_qualidade
 import modulos.controle.tracker_seguranca as tracker_seguranca
 from modulos.controle.tracker_estado import TrackerState
 from modulos.controle.tracker_medicao import TemporalFrameEstimator
@@ -28,6 +29,24 @@ class TrackerSafetyTests(unittest.TestCase):
         yy, xx = np.indices((size, size), dtype=np.float32)
         spot = np.exp(-((xx - x_px) ** 2 + (yy - y_px) ** 2) / (2.0 * 2.5**2))
         return np.clip(spot * 255.0, 0, 255).astype(np.uint8)
+
+    @staticmethod
+    def _optical_candidate(
+        raw_total=1000.0,
+        area=100.0,
+        bbox_w=12.0,
+        bbox_h=10.0,
+        compactness=0.7,
+        similarity=0.9,
+    ):
+        return {
+            "raw_total": raw_total,
+            "area": area,
+            "bbox_w": bbox_w,
+            "bbox_h": bbox_h,
+            "compactness": compactness,
+            "similarity_primary": similarity,
+        }
 
     def test_hold_zone_uses_three_frame_hysteresis(self):
         active, count = tracker_loop.atualizar_zona_de_reposo(False, 0, 1.5)
@@ -57,6 +76,99 @@ class TrackerSafetyTests(unittest.TestCase):
     def test_preflight_rejects_excessive_angular_step(self):
         with self.assertRaises(ValueError):
             tracker_autoteste.calcular_deslocamento_mount(np.eye(2))
+
+    def test_optical_gate_rejects_expanded_dim_spot_then_waits_for_recovery(self):
+        normal = self._optical_candidate()
+        gate = tracker_qualidade.OpticalQualityGate(
+            normal,
+            initial_stable_s=0.1,
+            recovery_stable_s=0.2,
+            min_baseline_frames=2,
+        )
+        self.assertFalse(gate.observe(0.0, normal).accepted)
+        self.assertTrue(gate.observe(0.11, normal).accepted)
+
+        expanded = self._optical_candidate(
+            raw_total=300.0,
+            area=400.0,
+            bbox_w=36.0,
+            bbox_h=30.0,
+            compactness=0.25,
+        )
+        rejected = gate.observe(0.2, expanded)
+        self.assertFalse(rejected.accepted)
+        self.assertEqual(rejected.phase, "anomalia")
+        self.assertIn("intensidade_baixa", rejected.reasons)
+        self.assertIn("area_expandida", rejected.reasons)
+
+        self.assertFalse(gate.observe(0.3, normal).accepted)
+        self.assertFalse(gate.observe(0.45, normal).accepted)
+        recovered = gate.observe(0.51, normal)
+        self.assertTrue(recovered.accepted)
+        self.assertEqual(recovered.event, "anomalia_optica_recuperada")
+
+    def test_optical_gate_waits_after_plain_signal_loss(self):
+        normal = self._optical_candidate()
+        gate = tracker_qualidade.OpticalQualityGate(
+            normal,
+            initial_stable_s=0.1,
+            recovery_stable_s=0.2,
+            min_baseline_frames=2,
+        )
+        gate.observe(0.0, normal)
+        self.assertTrue(gate.observe(0.11, normal).accepted)
+        self.assertFalse(gate.observe(0.2, None).accepted)
+        self.assertFalse(gate.observe(0.3, normal).accepted)
+        self.assertTrue(gate.observe(0.51, normal).accepted)
+
+    def test_optical_gate_rejects_sudden_brightening_and_shrinking(self):
+        normal = self._optical_candidate()
+        bright_gate = tracker_qualidade.OpticalQualityGate(
+            normal,
+            initial_stable_s=0.1,
+            recovery_stable_s=0.2,
+            min_baseline_frames=2,
+        )
+        bright_gate.observe(0.0, normal)
+        bright_gate.observe(0.11, normal)
+        bright = bright_gate.observe(
+            0.2,
+            self._optical_candidate(raw_total=3200.0),
+        )
+        self.assertFalse(bright.accepted)
+        self.assertIn("intensidade_alta", bright.reasons)
+
+        small_gate = tracker_qualidade.OpticalQualityGate(
+            normal,
+            initial_stable_s=0.1,
+            recovery_stable_s=0.2,
+            min_baseline_frames=2,
+        )
+        small_gate.observe(0.0, normal)
+        small_gate.observe(0.11, normal)
+        shrunk = small_gate.observe(
+            0.2,
+            self._optical_candidate(area=35.0, bbox_w=5.0, bbox_h=4.0),
+        )
+        self.assertFalse(shrunk.accepted)
+        self.assertIn("area_reduzida", shrunk.reasons)
+
+    def test_optical_gate_tracks_gradual_intensity_change(self):
+        normal = self._optical_candidate()
+        gate = tracker_qualidade.OpticalQualityGate(
+            normal,
+            baseline_window_s=1.0,
+            initial_stable_s=0.1,
+            recovery_stable_s=0.2,
+            min_baseline_frames=2,
+        )
+        gate.observe(0.0, normal)
+        self.assertTrue(gate.observe(0.11, normal).accepted)
+        for index in range(1, 21):
+            gradual = self._optical_candidate(raw_total=1000.0 + (50.0 * index))
+            decision = gate.observe(0.11 + (0.1 * index), gradual)
+            self.assertTrue(decision.accepted)
+            self.assertEqual(decision.phase, "normal")
 
     def test_shared_state_preserves_first_safety_reason(self):
         state = TrackerState()
