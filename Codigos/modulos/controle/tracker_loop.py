@@ -12,6 +12,7 @@ from modulos.configuracoes.tracker import (
     HOLD_EXIT_RADIUS_PX,
     MAX_TRACKING_RATE_DEG_S,
     TEMPORAL_CONTROL_GAIN_SCALE,
+    TEMPORAL_WINDOW_SECONDS,
 )
 from modulos.controle.cameras.backend import backend_name
 from modulos.controle.mount_control import (
@@ -20,7 +21,11 @@ from modulos.controle.mount_control import (
     move_axis,
     stop_axes_safely,
 )
-from modulos.controle.tracker_controle import MeasurementPDTrim, pixel_error_to_mount_error
+from modulos.controle.tracker_controle import (
+    FinePulseAxis,
+    MeasurementPDTrim,
+    pixel_error_to_mount_error,
+)
 from modulos.controle.tracker_estado import TrackerState
 
 
@@ -48,8 +53,14 @@ TRIM_DERIVATIVE_MAX_DEG_S = 0.006
 TRIM_SAME_SIGN_S = 0.80
 TRIM_SIGN_EPS_DEG = 0.00010
 TRIM_SIGN_FLIP_DAMP = 0.35
-TRIM_ENTER_RADIUS_PX = 1.3
-TRIM_EXIT_RADIUS_PX = 2.2
+
+# Abaixo deste raio, comandos menores que a velocidade minima viram pulsos
+# curtos. Entre pulsos, o mount para e espera a media temporal se atualizar.
+FINE_PULSE_RADIUS_PX = 3.0
+FINE_PULSE_CORRECTION_FRACTION = 0.35
+FINE_PULSE_MIN_S = 1.0 / CONTROL_HZ
+FINE_PULSE_MAX_S = 0.12
+FINE_PULSE_SETTLE_S = TEMPORAL_WINDOW_SECONDS
 
 # Freios contra salto manual e erro crescente.
 TOLERANCIA_PX = HOLD_ENTER_RADIUS_PX
@@ -117,6 +128,20 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
     """Mantem o controle do mount desacoplado da aquisicao de imagens."""
     ctrl_az = _novo_controlador(KP_AZ, KD_AZ, TRIM_GAIN_AZ)
     ctrl_alt = _novo_controlador(KP_ALT, KD_ALT, TRIM_GAIN_ALT)
+    fine_az = FinePulseAxis(
+        VEL_MIN_LIMITE,
+        correction_fraction=FINE_PULSE_CORRECTION_FRACTION,
+        min_pulse_s=FINE_PULSE_MIN_S,
+        max_pulse_s=FINE_PULSE_MAX_S,
+        settle_s=FINE_PULSE_SETTLE_S,
+    )
+    fine_alt = FinePulseAxis(
+        VEL_MIN_LIMITE,
+        correction_fraction=FINE_PULSE_CORRECTION_FRACTION,
+        min_pulse_s=FINE_PULSE_MIN_S,
+        max_pulse_s=FINE_PULSE_MAX_S,
+        settle_s=FINE_PULSE_SETTLE_S,
+    )
 
     dt_target = 1.0 / CONTROL_HZ
     last_loop_t = time.perf_counter()
@@ -172,6 +197,8 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     target_cmd_az = target_cmd_alt = 0.0
                     ctrl_az.reset()
                     ctrl_alt.reset()
+                    fine_az.reset()
+                    fine_alt.reset()
                     prev_radius_px = None
                     prev_dx_filt_px = None
                     prev_dy_filt_px = None
@@ -191,6 +218,8 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     if hold_active != previous_hold_active:
                         ctrl_az.reset()
                         ctrl_alt.reset()
+                        fine_az.reset()
+                        fine_alt.reset()
 
                     manual_jump = False
                     if (
@@ -217,6 +246,8 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                         cmd_az = cmd_alt = 0.0
                         ctrl_az.reset()
                         ctrl_alt.reset()
+                        fine_az.reset()
+                        fine_alt.reset()
                         trim_mode_active = False
                         hold_active = False
                         hold_exit_count = 0
@@ -229,17 +260,18 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                             )
                             last_runaway_log_t = loop_t0
                     else:
+                        fine_mode = (
+                            not hold_active
+                            and radius_px <= FINE_PULSE_RADIUS_PX
+                        )
                         if hold_active:
                             trim_mode_active = False
                             ctrl_az.clear_trim()
                             ctrl_alt.clear_trim()
-                        elif radius_px <= TRIM_ENTER_RADIUS_PX:
-                            trim_mode_active = True
-                        elif radius_px >= TRIM_EXIT_RADIUS_PX:
-                            if trim_mode_active:
-                                ctrl_az.clear_trim()
-                                ctrl_alt.clear_trim()
-                            trim_mode_active = False
+                            fine_az.reset()
+                            fine_alt.reset()
+                        else:
+                            trim_mode_active = fine_mode
 
                         if hold_active:
                             err_az = err_alt = 0.0
@@ -248,13 +280,25 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                             err_az, err_alt = pixel_error_to_mount_error(
                                 dx_filt, dy_filt, A_inv
                             )
-                            trim_allowed = trim_mode_active and (loop_t0 >= brake_until)
-                            target_cmd_az, _ = ctrl_az.update(
-                                err_az, measurement_ts, trim_allowed
-                            )
-                            target_cmd_alt, _ = ctrl_alt.update(
-                                err_alt, measurement_ts, trim_allowed
-                            )
+                            if fine_mode:
+                                ctrl_az.reset()
+                                ctrl_alt.reset()
+                                pulse_enabled = loop_t0 >= brake_until
+                                target_cmd_az = fine_az.command(
+                                    loop_t0, err_az, pulse_enabled
+                                )
+                                target_cmd_alt = fine_alt.command(
+                                    loop_t0, err_alt, pulse_enabled
+                                )
+                            else:
+                                fine_az.reset()
+                                fine_alt.reset()
+                                target_cmd_az, _ = ctrl_az.update(
+                                    err_az, measurement_ts, False
+                                )
+                                target_cmd_alt, _ = ctrl_alt.update(
+                                    err_alt, measurement_ts, False
+                                )
 
                         if ENABLE_RUNAWAY_BRAKE:
                             cmd_norm = float(np.hypot(cmd_az, cmd_alt))
@@ -283,6 +327,8 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                                 cmd_az = cmd_alt = 0.0
                                 ctrl_az.reset()
                                 ctrl_alt.reset()
+                                fine_az.reset()
+                                fine_alt.reset()
                                 trim_mode_active = False
                                 hold_active = False
                                 hold_exit_count = 0

@@ -18,11 +18,10 @@ TRACKER_MAX_SPOT_JUMP_PX = 45.0
 # A calibracao manual mede escalas menores e maiores para conferir a linearidade.
 FINE_CALIBRATION_RADII_DEG = (0.004, 0.008, 0.016)
 
-# Zona de repouso com histerese. A caracterizacao passiva de 8 h indicou que a
-# media de 2 s e estavel o bastante para buscar alinhamento mais fino. O mount
-# para abaixo de 1,5 px e volta a corrigir apos tres medidas acima de 2,5 px.
-HOLD_ENTER_RADIUS_PX = 1.5
-HOLD_EXIT_RADIUS_PX = 2.5
+# Zona de repouso com histerese. A malha busca erro menor ou igual a 1 px e so
+# acorda novamente apos tres medias consecutivas acima de 2 px.
+HOLD_ENTER_RADIUS_PX = 1.0
+HOLD_EXIT_RADIUS_PX = 2.0
 HOLD_EXIT_CONFIRM_FRAMES = 3
 
 # AUTOTESTE TEMPORARIO: desloca a ilha depois de salvar o alvo e verifica se o
@@ -31,7 +30,7 @@ PREFLIGHT_SHIFT_X_PX = 8.0
 PREFLIGHT_SHIFT_Y_PX = 6.0
 PREFLIGHT_MIN_CONFIRMED_ERROR_PX = 5.0
 PREFLIGHT_RECOVERY_CONFIRM_FRAMES = 3
-PREFLIGHT_RECOVERY_TIMEOUT_SECONDS = 30.0
+PREFLIGHT_RECOVERY_TIMEOUT_SECONDS = 60.0
 PREFLIGHT_MAX_AXIS_STEP_DEG = 0.02
 PREFLIGHT_MAX_RATE_DEG_S = 0.02
 

@@ -3,6 +3,63 @@
 import numpy as np
 
 
+class FinePulseAxis:
+    """Produz micropulsos separados pelo tempo de resposta da media temporal."""
+
+    def __init__(
+        self,
+        min_rate,
+        *,
+        correction_fraction=0.35,
+        min_pulse_s=0.02,
+        max_pulse_s=0.12,
+        settle_s=2.0,
+    ):
+        self.min_rate = abs(float(min_rate))
+        self.correction_fraction = float(correction_fraction)
+        self.min_pulse_s = float(min_pulse_s)
+        self.max_pulse_s = float(max_pulse_s)
+        self.settle_s = float(settle_s)
+        if self.min_rate <= 0.0:
+            raise ValueError("A velocidade minima do micropulso deve ser positiva.")
+        if not (0.0 < self.correction_fraction <= 1.0):
+            raise ValueError("A fracao de correcao deve estar entre 0 e 1.")
+        if not (0.0 < self.min_pulse_s <= self.max_pulse_s):
+            raise ValueError("Os limites de duracao do micropulso sao invalidos.")
+        if self.settle_s < 0.0:
+            raise ValueError("O tempo de acomodacao nao pode ser negativo.")
+        self.reset()
+
+    def reset(self):
+        self._pulse_rate = 0.0
+        self._pulse_until = 0.0
+        self._settle_until = 0.0
+
+    def command(self, now, error_deg, enabled=True):
+        """Retorna velocidade minima durante o pulso e zero na acomodacao."""
+        now = float(now)
+        error_deg = float(error_deg)
+        if not enabled or not np.isfinite(error_deg) or abs(error_deg) < 1e-12:
+            self.reset()
+            return 0.0
+        if now < self._pulse_until:
+            return self._pulse_rate
+        if now < self._settle_until:
+            return 0.0
+
+        duration = float(
+            np.clip(
+                abs(error_deg) * self.correction_fraction / self.min_rate,
+                self.min_pulse_s,
+                self.max_pulse_s,
+            )
+        )
+        self._pulse_rate = float(np.sign(error_deg) * self.min_rate)
+        self._pulse_until = now + duration
+        self._settle_until = self._pulse_until + self.settle_s
+        return self._pulse_rate
+
+
 class MeasurementPDTrim:
     """PD rapido com correcao lenta de vies persistente perto do centro."""
 

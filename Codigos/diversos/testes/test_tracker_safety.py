@@ -17,6 +17,7 @@ import modulos.controle.tracker_loop as tracker_loop
 import modulos.controle.tracker_qualidade as tracker_qualidade
 import modulos.controle.tracker_seguranca as tracker_seguranca
 from modulos.controle.tracker_estado import TrackerState
+from modulos.controle.tracker_controle import FinePulseAxis
 from modulos.controle.tracker_medicao import TemporalFrameEstimator
 from modulos.controle.tracker_telemetria import TrackerCsvLogger
 from modulos.visao import detector_ilhas
@@ -49,17 +50,31 @@ class TrackerSafetyTests(unittest.TestCase):
         }
 
     def test_hold_zone_uses_three_frame_hysteresis(self):
-        self.assertEqual(tracker_loop.HOLD_ENTER_RADIUS_PX, 1.5)
-        self.assertEqual(tracker_loop.HOLD_EXIT_RADIUS_PX, 2.5)
-        active, count = tracker_loop.atualizar_zona_de_reposo(False, 0, 1.4)
+        self.assertEqual(tracker_loop.HOLD_ENTER_RADIUS_PX, 1.0)
+        self.assertEqual(tracker_loop.HOLD_EXIT_RADIUS_PX, 2.0)
+        active, count = tracker_loop.atualizar_zona_de_reposo(False, 0, 0.9)
         self.assertTrue(active)
-        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 2.6)
+        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 2.1)
         self.assertTrue(active)
-        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 2.6)
+        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 2.1)
         self.assertTrue(active)
-        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 2.6)
+        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 2.1)
         self.assertFalse(active)
         self.assertEqual(count, 0)
+
+    def test_fine_pulse_uses_minimum_rate_then_waits_for_settling(self):
+        pulse = FinePulseAxis(
+            1.0,
+            correction_fraction=0.5,
+            min_pulse_s=0.1,
+            max_pulse_s=0.2,
+            settle_s=0.5,
+        )
+        self.assertEqual(pulse.command(0.0, 1.0), 1.0)
+        self.assertEqual(pulse.command(0.1, 1.0), 1.0)
+        self.assertEqual(pulse.command(0.21, 1.0), 0.0)
+        self.assertEqual(pulse.command(0.69, 1.0), 0.0)
+        self.assertEqual(pulse.command(0.71, -1.0), -1.0)
 
     def test_preflight_mount_delta_uses_calibration(self):
         matrix = np.array([[0.001, 0.0], [0.0, 0.002]])
