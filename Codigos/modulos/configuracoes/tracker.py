@@ -18,11 +18,11 @@ TRACKER_MAX_SPOT_JUMP_PX = 45.0
 # A calibracao manual mede escalas menores e maiores para conferir a linearidade.
 FINE_CALIBRATION_RADII_DEG = (0.004, 0.008, 0.016)
 
-# Zona de repouso com histerese. Na caracterizacao passiva de 8 h, 99,726% das
-# medias de 2 s ficaram dentro de 2 px. O mount para abaixo de 2 px e so volta a
-# corrigir depois de tres medidas consecutivas acima de 4 px.
-HOLD_ENTER_RADIUS_PX = 2.0
-HOLD_EXIT_RADIUS_PX = 4.0
+# Zona de repouso com histerese. A caracterizacao passiva de 8 h indicou que a
+# media de 2 s e estavel o bastante para buscar alinhamento mais fino. O mount
+# para abaixo de 1,5 px e volta a corrigir apos tres medidas acima de 2,5 px.
+HOLD_ENTER_RADIUS_PX = 1.5
+HOLD_EXIT_RADIUS_PX = 2.5
 HOLD_EXIT_CONFIRM_FRAMES = 3
 
 # AUTOTESTE TEMPORARIO: desloca a ilha depois de salvar o alvo e verifica se o

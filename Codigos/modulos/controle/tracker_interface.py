@@ -99,7 +99,7 @@ class TrackerDisplay:
             ),
             (
                 "Detector: ilha travada | Calibracao: continua | "
-                f"zona parada={HOLD_ENTER_RADIUS_PX:.0f}/{HOLD_EXIT_RADIUS_PX:.0f} px",
+                f"zona parada={HOLD_ENTER_RADIUS_PX:g}/{HOLD_EXIT_RADIUS_PX:g} px",
                 (0, 255, 255),
             ),
             (

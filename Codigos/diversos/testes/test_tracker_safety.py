@@ -49,13 +49,15 @@ class TrackerSafetyTests(unittest.TestCase):
         }
 
     def test_hold_zone_uses_three_frame_hysteresis(self):
-        active, count = tracker_loop.atualizar_zona_de_reposo(False, 0, 1.5)
+        self.assertEqual(tracker_loop.HOLD_ENTER_RADIUS_PX, 1.5)
+        self.assertEqual(tracker_loop.HOLD_EXIT_RADIUS_PX, 2.5)
+        active, count = tracker_loop.atualizar_zona_de_reposo(False, 0, 1.4)
         self.assertTrue(active)
-        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 4.5)
+        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 2.6)
         self.assertTrue(active)
-        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 4.5)
+        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 2.6)
         self.assertTrue(active)
-        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 4.5)
+        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 2.6)
         self.assertFalse(active)
         self.assertEqual(count, 0)
 

@@ -32,7 +32,7 @@ tambem geram imagens de evento.
 Antes da sessao, o tracker oferece um autoteste opcional, desativado por
 padrao. Depois que o operador trava a ilha, `tracker_autoteste.py` desloca o
 mount o equivalente a cerca de 10 px sem alterar o alvo salvo. A sessao normal
-so continua quando a malha confirma o deslocamento e recupera a zona de 2 px;
+so continua quando a malha confirma o deslocamento e recupera a zona de 1,5 px;
 falha ou timeout param o mount e acionam o retorno seguro.
 
 Esse modulo e temporario. Para remove-lo depois dos testes, retire o prompt e
