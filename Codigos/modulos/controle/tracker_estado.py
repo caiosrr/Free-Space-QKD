@@ -39,6 +39,8 @@ class TrackerState:
     offset_alt_deg: float = 0.0
     safety_stop_reason: str | None = None
     watchdog_error: str | None = None
+    preflight_active: bool = False
+    preflight_passed: bool = False
 
     def snapshot(self) -> dict:
         """Copia atomica usada pela tela e pela telemetria."""

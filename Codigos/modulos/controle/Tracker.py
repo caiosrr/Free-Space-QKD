@@ -35,6 +35,10 @@ from modulos.controle.mount_control import (
     stop_axes_safely,
 )
 from modulos.controle.tracker_aquisicao import executar_aquisicao, medir_laser
+from modulos.controle.tracker_autoteste import (
+    aplicar_deslocamento_autoteste,
+    monitorar_recuperacao,
+)
 from modulos.controle.tracker_camera import (
     EXPOSURE_SECONDS,
     IDS_MATRIX_PREFIX,
@@ -95,6 +99,15 @@ def _ler_tempo_sessao() -> float:
     return hours
 
 
+def _ler_autoteste_temporario() -> bool:
+    choice = input(
+        "Executar autoteste TEMPORARIO de recuperacao antes da sessao? (s/N): "
+    ).strip().lower()
+    if choice not in {"", "s", "sim", "n", "nao", "não"}:
+        raise ValueError("Responda 's' para executar ou 'n' para ignorar o autoteste.")
+    return choice in {"s", "sim"}
+
+
 def main() -> None:
     """Seleciona uma ilha e a mantem no alvo ate o fim da sessao."""
     logger = None
@@ -116,6 +129,7 @@ def main() -> None:
         target = escolher_referencia_tracker()
         if target.focus_signature is None:
             raise RuntimeError("A selecao manual nao produziu uma assinatura da ilha.")
+        executar_autoteste = _ler_autoteste_temporario()
 
         state = TrackerState(exposure_us=EXPOSURE_SECONDS * 1e6)
         initial_az, initial_alt = read_altaz()
@@ -162,6 +176,11 @@ def main() -> None:
             DISPLAY_HEIGHT_PX,
         )
 
+        if executar_autoteste:
+            with state.lock:
+                state.preflight_active = True
+            aplicar_deslocamento_autoteste(state, A_inv)
+
         control_thread = threading.Thread(
             target=executar_loop_controle,
             args=(state, A_inv),
@@ -180,6 +199,13 @@ def main() -> None:
         )
         control_thread.start()
         watchdog_thread.start()
+        if executar_autoteste:
+            autoteste_thread = threading.Thread(
+                target=monitorar_recuperacao,
+                args=(state,),
+                daemon=True,
+            )
+            autoteste_thread.start()
 
         # 3. Adquire frames e publica uma medida temporal para o controle.
         result = executar_aquisicao(
@@ -203,12 +229,21 @@ def main() -> None:
         # 4. Para threads/mount antes de retornar, salvar e desconectar.
         safety_reason = None
         if state is not None:
-            state.request_stop()
+            state_values = state.snapshot()
+            if (
+                state_values["preflight_active"]
+                and state_values["safety_stop_reason"] is None
+            ):
+                state.request_stop("autoteste_interrompido")
+            else:
+                state.request_stop()
             safety_reason = state.snapshot()["safety_stop_reason"]
             if "control_thread" in locals() and control_thread.is_alive():
                 control_thread.join(timeout=2.0)
             if "watchdog_thread" in locals() and watchdog_thread.is_alive():
                 watchdog_thread.join(timeout=2.0)
+            if "autoteste_thread" in locals() and autoteste_thread.is_alive():
+                autoteste_thread.join(timeout=2.0)
 
         stop_axes_safely()
 

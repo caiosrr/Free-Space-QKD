@@ -18,11 +18,22 @@ TRACKER_MAX_SPOT_JUMP_PX = 45.0
 # A calibracao manual mede escalas menores e maiores para conferir a linearidade.
 FINE_CALIBRATION_RADII_DEG = (0.004, 0.008, 0.016)
 
-# Zona de repouso com histerese. Dentro de 4 px o mount para; ele so volta a
-# corrigir depois de tres medidas consecutivas acima de 6 px.
-HOLD_ENTER_RADIUS_PX = 4.0
-HOLD_EXIT_RADIUS_PX = 6.0
+# Zona de repouso com histerese. Na caracterizacao passiva de 8 h, 99,726% das
+# medias de 2 s ficaram dentro de 2 px. O mount para abaixo de 2 px e so volta a
+# corrigir depois de tres medidas consecutivas acima de 4 px.
+HOLD_ENTER_RADIUS_PX = 2.0
+HOLD_EXIT_RADIUS_PX = 4.0
 HOLD_EXIT_CONFIRM_FRAMES = 3
+
+# AUTOTESTE TEMPORARIO: desloca a ilha depois de salvar o alvo e verifica se o
+# tracker a recupera. A opcao continua desativada por padrao no prompt inicial.
+PREFLIGHT_SHIFT_X_PX = 8.0
+PREFLIGHT_SHIFT_Y_PX = 6.0
+PREFLIGHT_MIN_CONFIRMED_ERROR_PX = 5.0
+PREFLIGHT_RECOVERY_CONFIRM_FRAMES = 3
+PREFLIGHT_RECOVERY_TIMEOUT_SECONDS = 30.0
+PREFLIGHT_MAX_AXIS_STEP_DEG = 0.02
+PREFLIGHT_MAX_RATE_DEG_S = 0.02
 
 # Uma medicao cortada pela borda nao pode comandar o mount. Tres ocorrencias
 # seguidas encerram a sessao; na perda completa, o mount para e aguarda a mesma
@@ -79,6 +90,19 @@ if ASI_ROI_SIZE_PX < 200 or IDS_ROI_SIZE_PX < 128:
     raise ValueError("A ROI do tracker ficou pequena demais para operacao segura.")
 if not 0 < HOLD_ENTER_RADIUS_PX < HOLD_EXIT_RADIUS_PX:
     raise ValueError("A zona de repouso precisa satisfazer 0 < entrada < saida.")
+if (
+    PREFLIGHT_MIN_CONFIRMED_ERROR_PX <= HOLD_EXIT_RADIUS_PX
+    or (PREFLIGHT_SHIFT_X_PX**2 + PREFLIGHT_SHIFT_Y_PX**2) ** 0.5
+    <= PREFLIGHT_MIN_CONFIRMED_ERROR_PX
+):
+    raise ValueError("O autoteste precisa sair claramente da zona de repouso.")
+if (
+    PREFLIGHT_RECOVERY_CONFIRM_FRAMES < 1
+    or PREFLIGHT_RECOVERY_TIMEOUT_SECONDS <= 0
+    or PREFLIGHT_MAX_AXIS_STEP_DEG <= 0
+    or PREFLIGHT_MAX_RATE_DEG_S <= 0
+):
+    raise ValueError("Os limites do autoteste precisam ser positivos.")
 if MAX_SESSION_HOURS <= 0:
     raise ValueError("MAX_SESSION_HOURS precisa ser positivo.")
 if MAX_OFFSET_AZ_DEG <= 0 or MAX_OFFSET_ALT_DEG <= 0:

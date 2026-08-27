@@ -11,6 +11,7 @@ import numpy as np
 import modulos.controle.Tracker as tracker
 import modulos.controle.mount_control as mount_control
 import modulos.controle.tracker_aquisicao as tracker_aquisicao
+import modulos.controle.tracker_autoteste as tracker_autoteste
 import modulos.controle.tracker_camera as tracker_camera
 import modulos.controle.tracker_loop as tracker_loop
 import modulos.controle.tracker_seguranca as tracker_seguranca
@@ -29,15 +30,33 @@ class TrackerSafetyTests(unittest.TestCase):
         return np.clip(spot * 255.0, 0, 255).astype(np.uint8)
 
     def test_hold_zone_uses_three_frame_hysteresis(self):
-        active, count = tracker_loop.atualizar_zona_de_reposo(False, 0, 3.0)
+        active, count = tracker_loop.atualizar_zona_de_reposo(False, 0, 1.5)
         self.assertTrue(active)
-        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 7.0)
+        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 4.5)
         self.assertTrue(active)
-        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 7.0)
+        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 4.5)
         self.assertTrue(active)
-        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 7.0)
+        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 4.5)
         self.assertFalse(active)
         self.assertEqual(count, 0)
+
+    def test_preflight_mount_delta_uses_calibration(self):
+        matrix = np.array([[0.001, 0.0], [0.0, 0.002]])
+        delta_az, delta_alt = tracker_autoteste.calcular_deslocamento_mount(matrix)
+        self.assertAlmostEqual(delta_az, 0.008)
+        self.assertAlmostEqual(delta_alt, 0.012)
+
+    def test_preflight_recovery_requires_displacement_then_three_frames(self):
+        checker = tracker_autoteste.VerificadorRecuperacao()
+        self.assertFalse(checker.observar(True, 1.0, 0.0))
+        self.assertFalse(checker.observar(True, 6.0, 0.0))
+        self.assertFalse(checker.observar(True, 1.0, 0.0))
+        self.assertFalse(checker.observar(True, 1.0, 0.0))
+        self.assertTrue(checker.observar(True, 1.0, 0.0))
+
+    def test_preflight_rejects_excessive_angular_step(self):
+        with self.assertRaises(ValueError):
+            tracker_autoteste.calcular_deslocamento_mount(np.eye(2))
 
     def test_shared_state_preserves_first_safety_reason(self):
         state = TrackerState()

@@ -43,7 +43,8 @@ class TrackerCsvLogger:
         "altitude_absoluta_deg", "deslocamento_az_desde_inicio_deg",
         "deslocamento_alt_desde_inicio_deg", "loop_medicao_hz", "loop_controle_hz",
         "calibracao", "zona_parada_ativa", "correcao_lenta_ativa",
-        "freio_ativo", "ilha_tocando_borda", "evento_seguranca",
+        "freio_ativo", "autoteste_ativo", "autoteste_aprovado",
+        "ilha_tocando_borda", "evento_seguranca",
     ]
 
     def __init__(self, output_dir, session_started, initial_az, initial_alt, max_hours):
@@ -135,6 +136,8 @@ class TrackerCsvLogger:
             "zona_parada_ativa": int(bool(state_values["hold_active"])),
             "correcao_lenta_ativa": int(bool(state_values["trim_mode_active"])),
             "freio_ativo": int(bool(state_values["brake_active"])),
+            "autoteste_ativo": int(bool(state_values["preflight_active"])),
+            "autoteste_aprovado": int(bool(state_values["preflight_passed"])),
             "ilha_tocando_borda": int(bool(state_values["spot_touches_border"])),
             "evento_seguranca": event,
         }

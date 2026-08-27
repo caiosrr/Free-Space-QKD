@@ -14,6 +14,18 @@ algoritmos.
 6. `tracker_telemetria.py` grava CSV, resumo e imagens dos eventos.
 7. `tracker_interface.py` desenha a janela sem interferir no controle.
 
+## Autoteste temporario
+
+Antes da sessao, o tracker oferece um autoteste opcional, desativado por
+padrao. Depois que o operador trava a ilha, `tracker_autoteste.py` desloca o
+mount o equivalente a cerca de 10 px sem alterar o alvo salvo. A sessao normal
+so continua quando a malha confirma o deslocamento e recupera a zona de 2 px;
+falha ou timeout param o mount e acionam o retorno seguro.
+
+Esse modulo e temporario. Para remove-lo depois dos testes, retire o prompt e
+as chamadas em `Tracker.py`, os campos `preflight_*` de `tracker_estado.py` e as
+constantes `PREFLIGHT_*` da configuracao.
+
 ## Arquivos auxiliares
 
 - `tracker_controle.py`: matematica do controlador PD e do trim lento.

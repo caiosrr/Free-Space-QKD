@@ -31,6 +31,8 @@ def tracking_status(
         return "SEM SINAL - AGUARDANDO", (0, 0, 255)
     if not measurement_valid:
         return "FORMANDO MEDIA / CONFIRMANDO SINAL", (0, 165, 255)
+    if state["preflight_active"]:
+        return "AUTOTESTE - RECUPERANDO", (255, 200, 0)
     if state["brake_active"]:
         return "FREIO DE SEGURANCA", (0, 0, 255)
     if state["hold_active"]:
