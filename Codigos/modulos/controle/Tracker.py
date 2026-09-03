@@ -115,6 +115,7 @@ def main() -> None:
     finish_reason = "encerramento_normal"
     initial_position = None
     state = None
+    display = None
 
     try:
         # 1. Prepara mount, camera, calibracao e alvo.
@@ -275,7 +276,10 @@ def main() -> None:
             disconnect_camera()
         except Exception:
             pass
-        TrackerDisplay.close()
+        if display is not None:
+            display.close()
+        else:
+            TrackerDisplay.close_all()
         print("Tracker encerrado com o mount parado.")
 
 

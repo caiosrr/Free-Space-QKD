@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tracker · Free-space QKD</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="identity">
+        <div class="project-mark" aria-hidden="true"><span></span><i></i></div>
+        <div><p class="eyebrow">Free-space QKD</p><h1>Apontamento e rastreio</h1></div>
+      </div>
+      <div class="link-label">
+        <span>UFF</span><b></b><span>CBPF</span>
+        <small>enlace experimental · 7 km</small>
+      </div>
+      <div class="session-summary">
+        <div><span class="field-label">Sessão</span><strong id="session-time">00:00:00</strong></div>
+        <div><span class="field-label">Registro</span><strong class="recording"><i></i> ativo</strong></div>
+        <div><span class="field-label">Sistema</span><strong id="system-state">conectando</strong></div>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="viewer instrument-panel" aria-labelledby="viewer-title">
+        <div class="section-head">
+          <div><p class="section-index">01 · VISOR</p><h2 id="viewer-title">Frame atual do beacon</h2></div>
+          <div class="viewer-meta">
+            <span id="roi-size">ROI —</span><span id="window-time">média —</span><span id="frame-count">— frames</span>
+          </div>
+        </div>
+        <div class="canvas-wrap">
+          <img id="live-frame" alt="Frame atual da ROI da câmera IDS">
+          <canvas id="beacon-overlay" aria-hidden="true"></canvas>
+          <div class="canvas-corner top-left">IDS · ROI de rastreio</div>
+          <div class="canvas-corner top-right"><span class="live-dot"></span> imagem real</div>
+          <div class="canvas-corner bottom-left">alvo e centro da média sobrepostos</div>
+          <div class="canvas-corner bottom-right" id="camera-rate">— Hz</div>
+        </div>
+        <div class="coordinate-strip">
+          <div><span class="field-label">Centro medido · X→ Y↑</span><strong id="coordinates">aguardando</strong></div>
+          <div><span class="field-label">Janela temporal</span><strong id="window-detail">aguardando</strong></div>
+          <div><span class="field-label">Referência</span><strong>ilha travada manualmente</strong></div>
+          <div><span class="field-label">Calibração</span><strong id="calibration">contínua · IDS</strong></div>
+        </div>
+      </section>
+
+      <aside class="readouts instrument-panel" aria-labelledby="readouts-title">
+        <div class="section-head compact">
+          <div><p class="section-index">02 · ESTADO</p><h2 id="readouts-title">Controle do alinhamento</h2></div>
+          <div class="state-flag" id="state-flag"><i></i><span id="state-label">Conectando</span></div>
+        </div>
+        <div class="primary-reading">
+          <div><span class="field-label">Erro radial da média</span><strong><span id="radial-error">—</span><small>px</small></strong></div>
+          <div class="reference-scale">
+            <div class="scale-track"><i id="error-marker"></i></div>
+            <div class="scale-labels"><span>0</span><span id="hold-enter">repouso 1</span><span id="hold-exit">retoma 2</span><span>3 px</span></div>
+          </div>
+          <div class="component-bars">
+            <div class="signed-row"><span>X</span><div class="signed-track"><em></em><i id="error-x-bar"></i></div><b id="error-x-value">—</b></div>
+            <div class="signed-row"><span>Y↑</span><div class="signed-track"><em></em><i id="error-y-bar"></i></div><b id="error-y-value">—</b></div>
+          </div>
+        </div>
+        <div class="readout-grid">
+          <div><span class="field-label">Erro angular</span><strong id="angular-error">—</strong></div>
+          <div><span class="field-label">Atuação</span><strong id="actuation">aguardando</strong></div>
+          <div><span class="field-label">Comando atual</span><strong id="mount-command">—</strong></div>
+          <div><span class="field-label">Deslocamento acumulado</span><strong id="mount-offset">—</strong></div>
+        </div>
+        <div class="quality-block">
+          <div class="subhead"><span>Qualidade óptica</span><strong id="quality-label">aguardando</strong></div>
+          <div class="quality-row"><span>Intensidade relativa</span><div class="meter"><i id="intensity-meter"></i></div><b id="intensity-value">—</b></div>
+          <div class="quality-row"><span>Área relativa</span><div class="meter"><i id="area-meter"></i></div><b id="area-value">—</b></div>
+          <div class="quality-row"><span>Sinal aceito</span><div class="meter"><i id="valid-meter"></i></div><b id="valid-value">—</b></div>
+        </div>
+        <div class="event-line"><span class="field-label">Estado mais recente</span><div><time id="event-time">00:00:00</time><strong id="event-text">aguardando telemetria</strong></div></div>
+      </aside>
+
+      <section class="trend instrument-panel" aria-labelledby="trend-title">
+        <div class="section-head compact">
+          <div><p class="section-index">03 · HISTÓRICO RECENTE</p><h2 id="trend-title">Erro nos últimos 120 segundos</h2></div>
+          <div class="legend"><span class="x-line">X→</span><span class="y-line">Y↑</span><span class="r-line">radial</span></div>
+        </div>
+        <div class="chart-wrap"><canvas id="trend-canvas" aria-label="Histórico recente do erro"></canvas></div>
+        <div class="trend-footer">
+          <span><i class="normal-mark"></i>medição aceita</span><span><i class="warning-mark"></i>correção fina</span><span><i class="fault-mark"></i>frame rejeitado</span>
+          <strong id="control-rate">controle — Hz</strong>
+        </div>
+      </section>
+    </main>
+
+    <footer class="simulator-bar live-bar">
+      <div><span class="prototype-tag">Painel local</span><p>Somente leitura: este painel não envia comandos ao mount.</p></div>
+      <div class="footer-stat"><span class="field-label">Exposição</span><strong id="exposure">— µs</strong></div>
+      <div class="footer-stat"><span class="field-label">Sem sinal</span><strong id="signal-lost">0,0 s</strong></div>
+    </footer>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

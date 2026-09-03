@@ -10,6 +10,7 @@ from modulos.configuracoes.tracker import (
     HOLD_EXIT_RADIUS_PX,
     TEMPORAL_RECOVERY_VALID_FRAMES,
 )
+from modulos.controle.tracker_dashboard import TrackerDashboard
 
 
 def tracking_status(
@@ -57,6 +58,17 @@ class TrackerDisplay:
         self.scale_y = self.display_h / roi_h
         self.target_x = int(target_x * self.scale_x)
         self.target_y = int(target_y * self.scale_y)
+        self.roi_w = int(roi_w)
+        self.roi_h = int(roi_h)
+        self.target_x_raw = float(target_x)
+        self.target_y_raw = float(target_y)
+        self.dashboard = None
+        try:
+            self.dashboard = TrackerDashboard()
+            print(f"Painel web do tracker: {self.dashboard.url}")
+            print("A janela OpenCV continua ativa como redundancia.\n")
+        except Exception as exc:
+            print(f"Aviso: painel web indisponivel ({exc}); usando janela OpenCV.")
         cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
         cv2.setWindowProperty(
             self.window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN
@@ -79,6 +91,38 @@ class TrackerDisplay:
         def ratio_text(value):
             return "--" if value is None else f"{value:.2f}x"
 
+        radial_error = (dx * dx + dy * dy) ** 0.5
+        if self.dashboard is not None:
+            try:
+                self.dashboard.update(
+                    frame,
+                    {
+                        **state,
+                        "status": status,
+                        "elapsed_hours": elapsed_hours,
+                        "session_hours": session_hours,
+                        "roi_width_px": self.roi_w,
+                        "roi_height_px": self.roi_h,
+                        "target_x_px": self.target_x_raw,
+                        "target_y_px": self.target_y_raw,
+                        "x_cm_px": x_cm if state["has_signal"] else None,
+                        "y_cm_px": y_cm if state["has_signal"] else None,
+                        "dx_px": dx if state["has_signal"] else None,
+                        # O painel usa Y cartesiano; processamento e CSV mantem
+                        # a convencao de imagem, positiva para baixo.
+                        "dy_up_px": -dy if state["has_signal"] else None,
+                        "radial_error_px": (
+                            radial_error if state["has_signal"] else None
+                        ),
+                        "hold_enter_radius_px": HOLD_ENTER_RADIUS_PX,
+                        "hold_exit_radius_px": HOLD_EXIT_RADIUS_PX,
+                    },
+                )
+            except Exception as exc:
+                print(f"Aviso: painel web foi desativado ({exc}).")
+                self.dashboard.close()
+                self.dashboard = None
+
         image = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
         image = cv2.resize(
             image,
@@ -93,7 +137,7 @@ class TrackerDisplay:
 
         lines = [
             (
-                f"Erro: {(dx * dx + dy * dy) ** 0.5:.1f} px | "
+                f"Erro: {radial_error:.1f} px | "
                 f"X={dx:+.1f} px | Y={dy:+.1f} px",
                 (0, 255, 0),
             ),
@@ -172,6 +216,12 @@ class TrackerDisplay:
             cv2.getWindowProperty(self.window_name, cv2.WND_PROP_VISIBLE) < 1
         )
 
+    def close(self) -> None:
+        if self.dashboard is not None:
+            self.dashboard.close()
+        cv2.destroyAllWindows()
+
     @staticmethod
-    def close() -> None:
+    def close_all() -> None:
+        """Fecha janelas criadas antes de a interface ficar pronta."""
         cv2.destroyAllWindows()
