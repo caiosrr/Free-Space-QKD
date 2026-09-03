@@ -149,6 +149,9 @@ class TemporalFrameEstimator:
         return {
             "x_px": float(x0 + ((xx * weights).sum() / total)),
             "y_px": float(y0 + ((yy * weights).sum() / total)),
+            # Usada apenas pelo display. O controle continua consumindo somente
+            # o centro calculado acima.
+            "mean_frame": mean_frame,
             "frame_count": self.frame_count,
             "window_span_s": span_s,
             "centroid_std_x_px": float(np.std(centers[:, 0])),

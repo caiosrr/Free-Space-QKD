@@ -238,8 +238,13 @@ def executar_aquisicao(
             return ResultadoAquisicao(reason, last_frame)
 
         if last_display_t == 0.0 or now - last_display_t >= display_interval_s:
+            display_frame = frame
+            if measurement_valid:
+                display_frame = np.clip(
+                    temporal_estimate["mean_frame"], 0, 255
+                ).astype(np.uint8)
             display.show(
-                frame,
+                display_frame,
                 x_cm=x_cm,
                 y_cm=y_cm,
                 dx=dx,

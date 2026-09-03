@@ -34,7 +34,7 @@ class TrackerDashboardTests(unittest.TestCase):
             self.assertTrue(state["connected"])
             self.assertEqual(state["dx_px"], 1.25)
             self.assertGreater(len(frame), 100)
-            self.assertIn("Somente leitura", html)
+            self.assertIn("SOMENTE LEITURA", html)
         finally:
             dashboard.close()
 

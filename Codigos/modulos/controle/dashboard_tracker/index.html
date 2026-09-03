@@ -9,93 +9,65 @@
 <body>
   <div class="shell">
     <header class="topbar">
-      <div class="identity">
-        <div class="project-mark" aria-hidden="true"><span></span><i></i></div>
-        <div><p class="eyebrow">Free-space QKD</p><h1>Apontamento e rastreio</h1></div>
+      <div class="brand">
+        <div class="mark" aria-hidden="true"></div>
+        <div><span>FREE-SPACE QKD</span><strong>Apontamento e rastreio</strong></div>
       </div>
-      <div class="link-label">
-        <span>UFF</span><b></b><span>CBPF</span>
-        <small>enlace experimental · 7 km</small>
-      </div>
-      <div class="session-summary">
-        <div><span class="field-label">Sessão</span><strong id="session-time">00:00:00</strong></div>
-        <div><span class="field-label">Registro</span><strong class="recording"><i></i> ativo</strong></div>
-        <div><span class="field-label">Sistema</span><strong id="system-state">conectando</strong></div>
+      <div class="link"><span>UFF</span><i></i><span>CBPF</span><small>7 km</small></div>
+      <div class="session">
+        <div><span>SESSÃO</span><strong id="session-time">00:00:00</strong></div>
+        <div><span>REGISTRO</span><strong class="ok">● ATIVO</strong></div>
+        <div><span>SISTEMA</span><strong id="system-state">CONECTANDO</strong></div>
       </div>
     </header>
 
-    <main class="workspace">
-      <section class="viewer instrument-panel" aria-labelledby="viewer-title">
-        <div class="section-head">
-          <div><p class="section-index">01 · VISOR</p><h2 id="viewer-title">Frame atual do beacon</h2></div>
-          <div class="viewer-meta">
-            <span id="roi-size">ROI —</span><span id="window-time">média —</span><span id="frame-count">— frames</span>
-          </div>
-        </div>
-        <div class="canvas-wrap">
-          <img id="live-frame" alt="Frame atual da ROI da câmera IDS">
-          <canvas id="beacon-overlay" aria-hidden="true"></canvas>
-          <div class="canvas-corner top-left">IDS · ROI de rastreio</div>
-          <div class="canvas-corner top-right"><span class="live-dot"></span> imagem real</div>
-          <div class="canvas-corner bottom-left">alvo e centro da média sobrepostos</div>
-          <div class="canvas-corner bottom-right" id="camera-rate">— Hz</div>
-        </div>
-        <div class="coordinate-strip">
-          <div><span class="field-label">Centro medido · X→ Y↑</span><strong id="coordinates">aguardando</strong></div>
-          <div><span class="field-label">Janela temporal</span><strong id="window-detail">aguardando</strong></div>
-          <div><span class="field-label">Referência</span><strong>ilha travada manualmente</strong></div>
-          <div><span class="field-label">Calibração</span><strong id="calibration">contínua · IDS</strong></div>
-        </div>
+    <main>
+      <section class="metrics" aria-label="Resumo da sessão">
+        <article><span>ESTADO</span><strong id="state-label">Aguardando</strong><small id="state-detail">sem telemetria</small></article>
+        <article><span>ERRO RADIAL</span><strong><b id="radial-error">—</b> px</strong><small>média temporal</small></article>
+        <article><span>COMPONENTES</span><strong class="components"><b id="error-x">X —</b><b id="error-y">Y↑ —</b></strong><small>coordenadas cartesianas</small></article>
+        <article><span>JANELA</span><strong><b id="frame-count">—</b> frames</strong><small id="window-time">— s acumulados</small></article>
+        <article><span>EXPOSIÇÃO</span><strong><b id="exposure">—</b> µs</strong><small>configuração atual</small></article>
+        <article><span>LOOPS</span><strong><b id="measurement-rate">—</b> Hz</strong><small id="control-rate">controle — Hz</small></article>
       </section>
 
-      <aside class="readouts instrument-panel" aria-labelledby="readouts-title">
-        <div class="section-head compact">
-          <div><p class="section-index">02 · ESTADO</p><h2 id="readouts-title">Controle do alinhamento</h2></div>
-          <div class="state-flag" id="state-flag"><i></i><span id="state-label">Conectando</span></div>
-        </div>
-        <div class="primary-reading">
-          <div><span class="field-label">Erro radial da média</span><strong><span id="radial-error">—</span><small>px</small></strong></div>
-          <div class="reference-scale">
-            <div class="scale-track"><i id="error-marker"></i></div>
-            <div class="scale-labels"><span>0</span><span id="hold-enter">repouso 1</span><span id="hold-exit">retoma 2</span><span>3 px</span></div>
+      <section class="workarea">
+        <article class="panel viewer">
+          <header><div><span>01 · VISOR</span><strong>Média temporal do beacon</strong></div><small id="roi-size">ROI —</small></header>
+          <div class="image-wrap">
+            <img id="live-frame" alt="Média temporal da ROI da câmera IDS">
+            <canvas id="beacon-overlay" aria-hidden="true"></canvas>
+            <span class="image-label top-left">IDS · MÉDIA DE 2 s</span>
+            <span class="image-label top-right"><i></i> AO VIVO</span>
+            <span class="image-label bottom-left">ALVO NO CRUZAMENTO DOS EIXOS</span>
           </div>
-          <div class="component-bars">
-            <div class="signed-row"><span>X</span><div class="signed-track"><em></em><i id="error-x-bar"></i></div><b id="error-x-value">—</b></div>
-            <div class="signed-row"><span>Y↑</span><div class="signed-track"><em></em><i id="error-y-bar"></i></div><b id="error-y-value">—</b></div>
-          </div>
-        </div>
-        <div class="readout-grid">
-          <div><span class="field-label">Erro angular</span><strong id="angular-error">—</strong></div>
-          <div><span class="field-label">Atuação</span><strong id="actuation">aguardando</strong></div>
-          <div><span class="field-label">Comando atual</span><strong id="mount-command">—</strong></div>
-          <div><span class="field-label">Deslocamento acumulado</span><strong id="mount-offset">—</strong></div>
-        </div>
-        <div class="quality-block">
-          <div class="subhead"><span>Qualidade óptica</span><strong id="quality-label">aguardando</strong></div>
-          <div class="quality-row"><span>Intensidade relativa</span><div class="meter"><i id="intensity-meter"></i></div><b id="intensity-value">—</b></div>
-          <div class="quality-row"><span>Área relativa</span><div class="meter"><i id="area-meter"></i></div><b id="area-value">—</b></div>
-          <div class="quality-row"><span>Sinal aceito</span><div class="meter"><i id="valid-meter"></i></div><b id="valid-value">—</b></div>
-        </div>
-        <div class="event-line"><span class="field-label">Estado mais recente</span><div><time id="event-time">00:00:00</time><strong id="event-text">aguardando telemetria</strong></div></div>
-      </aside>
+          <footer><span>Referência manual</span><strong id="coordinates">sem medição válida</strong></footer>
+        </article>
 
-      <section class="trend instrument-panel" aria-labelledby="trend-title">
-        <div class="section-head compact">
-          <div><p class="section-index">03 · HISTÓRICO RECENTE</p><h2 id="trend-title">Erro nos últimos 120 segundos</h2></div>
-          <div class="legend"><span class="x-line">X→</span><span class="y-line">Y↑</span><span class="r-line">radial</span></div>
-        </div>
-        <div class="chart-wrap"><canvas id="trend-canvas" aria-label="Histórico recente do erro"></canvas></div>
-        <div class="trend-footer">
-          <span><i class="normal-mark"></i>medição aceita</span><span><i class="warning-mark"></i>correção fina</span><span><i class="fault-mark"></i>frame rejeitado</span>
-          <strong id="control-rate">controle — Hz</strong>
-        </div>
+        <article class="panel history">
+          <header>
+            <div><span>02 · HISTÓRICO</span><strong>Erro da média temporal · últimos 120 s</strong></div>
+            <div class="legend"><span class="x">X</span><span class="y">Y↑</span><span class="r">radial</span></div>
+          </header>
+          <div class="chart-wrap"><canvas id="trend-canvas" aria-label="Histórico do erro"></canvas></div>
+          <footer><span>linhas tracejadas: entrada 1 px · retomada 2 px</span><strong id="history-status">aguardando dados</strong></footer>
+        </article>
+      </section>
+
+      <section class="details" aria-label="Detalhes técnicos">
+        <div><span>ATUAÇÃO</span><strong id="actuation">aguardando</strong></div>
+        <div><span>ERRO ANGULAR</span><strong id="angular-error">—</strong></div>
+        <div><span>COMANDO ATUAL</span><strong id="mount-command">—</strong></div>
+        <div><span>DESLOCAMENTO</span><strong id="mount-offset">—</strong></div>
+        <div><span>QUALIDADE ÓPTICA</span><strong id="quality">aguardando</strong></div>
+        <div><span>SEM SINAL</span><strong id="signal-lost">0,0 s</strong></div>
       </section>
     </main>
 
-    <footer class="simulator-bar live-bar">
-      <div><span class="prototype-tag">Painel local</span><p>Somente leitura: este painel não envia comandos ao mount.</p></div>
-      <div class="footer-stat"><span class="field-label">Exposição</span><strong id="exposure">— µs</strong></div>
-      <div class="footer-stat"><span class="field-label">Sem sinal</span><strong id="signal-lost">0,0 s</strong></div>
+    <footer class="page-footer">
+      <span>PAINEL LOCAL · SOMENTE LEITURA</span>
+      <p>O controle do mount permanece independente desta interface.</p>
+      <strong id="last-update">aguardando atualização</strong>
     </footer>
   </div>
   <script src="app.js"></script>

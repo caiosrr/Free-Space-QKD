@@ -28,7 +28,7 @@ CONTENT_TYPES = {
 class TrackerDashboard:
     """Publica a visualizacao ao vivo em um servidor restrito ao computador."""
 
-    def __init__(self, *, frame_hz: float = 4.0, open_browser: bool = True):
+    def __init__(self, *, frame_hz: float = 1.0, open_browser: bool = True):
         self._lock = threading.Lock()
         self._state: dict = {"connected": False}
         self._frame_jpeg: bytes | None = None

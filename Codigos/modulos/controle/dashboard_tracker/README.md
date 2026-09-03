@@ -1,8 +1,9 @@
 # Painel local do tracker
 
 O tracker inicia este painel automaticamente em `http://127.0.0.1:8765`.
-Ele mostra o frame real da ROI, o estado compartilhado do controle e um histórico
-de 120 segundos construído no navegador.
+Ele mostra a média temporal da ROI, um resumo estável do estado compartilhado e
+um histórico de 120 segundos construído no navegador. A imagem e os números são
+atualizados apenas uma vez por segundo; somente o gráfico corre continuamente.
 
 O painel é deliberadamente somente leitura: não mede a ilha, não modifica a
 calibração e não envia comandos ao mount. A janela OpenCV antiga permanece ativa
