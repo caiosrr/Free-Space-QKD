@@ -41,6 +41,8 @@ class TrackerState:
     optical_height_ratio: float | None = None
     control_loop_hz: float = 0.0
     spot_touches_border: bool = False
+    border_candidate_plausible: bool = False
+    border_persistence_s: float = 0.0
     mount_az_deg: float | None = None
     mount_alt_deg: float | None = None
     offset_az_deg: float = 0.0

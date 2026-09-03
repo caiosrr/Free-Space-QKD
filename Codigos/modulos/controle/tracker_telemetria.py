@@ -5,12 +5,16 @@ import json
 from collections import deque
 from datetime import datetime
 from pathlib import Path
+import time
 
 import cv2
 import numpy as np
 
 from modulos.artefatos import display_path
 from modulos.configuracoes.tracker import (
+    BORDER_CONFIRM_SECONDS,
+    BORDER_MIN_PEAK_RATIO,
+    BORDER_MIN_SIGNATURE_SIMILARITY,
     CSV_FLUSH_SECONDS,
     CSV_LOG_HZ,
     HOLD_ENTER_RADIUS_PX,
@@ -29,6 +33,7 @@ from modulos.configuracoes.tracker import (
     TEMPORAL_WARMUP_SECONDS,
     TEMPORAL_WINDOW_SECONDS,
     TRACKER_EVENT_IMAGE_LIMIT,
+    TRACKER_EVENT_IMAGE_MIN_INTERVAL_SECONDS,
     VARIANCE_WINDOW_SECONDS,
     roi_size_for_backend,
 )
@@ -55,7 +60,8 @@ class TrackerCsvLogger:
         "qualidade_optica", "motivo_anomalia_optica",
         "razao_intensidade", "razao_area", "razao_largura", "razao_altura",
         "tempo_estavel_optico_s",
-        "ilha_tocando_borda", "evento_seguranca",
+        "ilha_tocando_borda", "borda_compativel", "tempo_borda_s",
+        "evento_seguranca",
     ]
 
     def __init__(self, output_dir, session_started, initial_az, initial_alt, max_hours):
@@ -72,6 +78,9 @@ class TrackerCsvLogger:
         self._last_flush_t = session_started
         self._samples = deque()
         self._event_frame_count = 0
+        self._event_frames_suppressed = 0
+        self._last_event_frame_t = float("-inf")
+        self._terminal_frame_path = None
         self._summary = {
             "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "initial_azimuth_deg": initial_az,
@@ -86,6 +95,9 @@ class TrackerCsvLogger:
             "temporal_warmup_seconds": TEMPORAL_WARMUP_SECONDS,
             "temporal_recovery_valid_frames": TEMPORAL_RECOVERY_VALID_FRAMES,
             "signal_loss_limit_seconds": SIGNAL_LOSS_LIMIT_SECONDS,
+            "border_confirmation_seconds": BORDER_CONFIRM_SECONDS,
+            "border_min_peak_ratio": BORDER_MIN_PEAK_RATIO,
+            "border_min_signature_similarity": BORDER_MIN_SIGNATURE_SIMILARITY,
             "optical_quality_gate": "rolling_median_intensity_area_shape",
             "optical_recovery_stable_seconds": OPTICAL_RECOVERY_STABLE_SECONDS,
             "optical_intensity_ratio_range": [
@@ -101,6 +113,10 @@ class TrackerCsvLogger:
                 OPTICAL_LINEAR_SIZE_RATIO_HIGH,
             ],
             "detector": "locked_island",
+            "event_image_limit": TRACKER_EVENT_IMAGE_LIMIT,
+            "event_image_min_interval_seconds": (
+                TRACKER_EVENT_IMAGE_MIN_INTERVAL_SECONDS
+            ),
             "csv_path": display_path(self.csv_path),
         }
 
@@ -174,6 +190,10 @@ class TrackerCsvLogger:
             "razao_altura": number(state_values["optical_height_ratio"], 3),
             "tempo_estavel_optico_s": number(state_values["optical_stable_s"], 3),
             "ilha_tocando_borda": int(bool(state_values["spot_touches_border"])),
+            "borda_compativel": int(
+                bool(state_values["border_candidate_plausible"])
+            ),
+            "tempo_borda_s": number(state_values["border_persistence_s"], 3),
             "evento_seguranca": event,
         }
         self._writer.writerow(row)
@@ -182,16 +202,37 @@ class TrackerCsvLogger:
             self._fp.flush()
             self._last_flush_t = now
 
-    def save_event_frame(self, frame, event):
-        if frame is None or self._event_frame_count >= TRACKER_EVENT_IMAGE_LIMIT:
+    def save_event_frame(self, frame, event, *, critical=False):
+        """Salva amostras espaçadas; eventos terminais sempre têm uma reserva."""
+        if frame is None:
             return None
-        self._event_frame_count += 1
         safe_event = "".join(c if c.isalnum() else "_" for c in event).strip("_")
         timestamp = datetime.now().strftime("%H-%M-%S-%f")[:-3]
-        path = self.session_dir / (
-            f"evento_{self._event_frame_count:03d}_{timestamp}_{safe_event or 'seguranca'}.png"
-        )
-        cv2.imwrite(str(path), frame)
+        if critical:
+            path = self.session_dir / (
+                f"evento_terminal_{timestamp}_{safe_event or 'seguranca'}.png"
+            )
+        else:
+            now = time.monotonic()
+            if (
+                self._event_frame_count >= TRACKER_EVENT_IMAGE_LIMIT
+                or now - self._last_event_frame_t
+                < TRACKER_EVENT_IMAGE_MIN_INTERVAL_SECONDS
+            ):
+                self._event_frames_suppressed += 1
+                return None
+            path = self.session_dir / (
+                f"evento_{self._event_frame_count + 1:03d}_{timestamp}_"
+                f"{safe_event or 'seguranca'}.png"
+            )
+
+        if not cv2.imwrite(str(path), frame):
+            return None
+        if critical:
+            self._terminal_frame_path = display_path(path)
+        else:
+            self._event_frame_count += 1
+            self._last_event_frame_t = time.monotonic()
         return path
 
     def close(self, *, reason, return_result=None):
@@ -199,6 +240,9 @@ class TrackerCsvLogger:
             "finished_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "finish_reason": reason,
             "return_to_start": return_result,
+            "event_images_saved": self._event_frame_count,
+            "event_images_suppressed": self._event_frames_suppressed,
+            "terminal_event_frame": self._terminal_frame_path,
         })
         self.summary_path.write_text(
             json.dumps(self._summary, indent=2, ensure_ascii=False), encoding="utf-8"

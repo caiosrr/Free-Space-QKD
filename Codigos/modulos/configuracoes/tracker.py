@@ -34,10 +34,12 @@ PREFLIGHT_RECOVERY_TIMEOUT_SECONDS = 60.0
 PREFLIGHT_MAX_AXIS_STEP_DEG = 0.02
 PREFLIGHT_MAX_RATE_DEG_S = 0.02
 
-# Uma medicao cortada pela borda nao pode comandar o mount. Tres ocorrencias
-# seguidas encerram a sessao; na perda completa, o mount para e aguarda a mesma
-# luz reaparecer. O encerramento so ocorre apos 75 s sem recuperacao confirmada.
-BORDER_CONFIRM_FRAMES = 3
+# Uma medicao cortada pela borda nunca comanda o mount. Para evitar que ruido
+# fraco encerre uma sessao a 50 Hz, a parada definitiva exige que uma ilha
+# compativel com a assinatura permaneça na borda por um intervalo real.
+BORDER_CONFIRM_SECONDS = 1.0
+BORDER_MIN_PEAK_RATIO = 0.25
+BORDER_MIN_SIGNATURE_SIMILARITY = 0.35
 SIGNAL_LOSS_LIMIT_SECONDS = 75.0
 
 # Estimador temporal robusto. Os frames aceitos pela trava de identidade sao
@@ -95,8 +97,10 @@ RETURN_ATTEMPTS = 2
 CSV_LOG_HZ = 5.0
 VARIANCE_WINDOW_SECONDS = 2.0
 CSV_FLUSH_SECONDS = 1.0
-# Um PNG pequeno no inicio e na recuperacao das oclusoes, com teto por sessao.
-TRACKER_EVENT_IMAGE_LIMIT = 100
+# Imagens de eventos sao amostradas para cobrir a sessao toda sem lotar o disco.
+# O frame terminal possui uma reserva separada e ignora estes dois limites.
+TRACKER_EVENT_IMAGE_LIMIT = 200
+TRACKER_EVENT_IMAGE_MIN_INTERVAL_SECONDS = 30.0
 
 
 def roi_size_for_backend(backend: str) -> int:
@@ -124,6 +128,12 @@ if MAX_SESSION_HOURS <= 0:
     raise ValueError("MAX_SESSION_HOURS precisa ser positivo.")
 if MAX_OFFSET_AZ_DEG <= 0 or MAX_OFFSET_ALT_DEG <= 0:
     raise ValueError("Os limites absolutos dos eixos precisam ser positivos.")
+if (
+    BORDER_CONFIRM_SECONDS <= 0
+    or not 0 < BORDER_MIN_PEAK_RATIO <= 1
+    or not 0 < BORDER_MIN_SIGNATURE_SIMILARITY <= 1
+):
+    raise ValueError("A confirmacao de borda precisa de limites positivos.")
 if POSITION_WATCHDOG_HZ <= 0 or CSV_LOG_HZ <= 0:
     raise ValueError("As frequencias de watchdog e CSV precisam ser positivas.")
 if not 0 < TEMPORAL_WARMUP_SECONDS <= TEMPORAL_WINDOW_SECONDS:

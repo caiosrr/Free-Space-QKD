@@ -1,5 +1,6 @@
 import csv
 import inspect
+import json
 import tempfile
 import time
 import unittest
@@ -16,6 +17,7 @@ import modulos.controle.tracker_camera as tracker_camera
 import modulos.controle.tracker_loop as tracker_loop
 import modulos.controle.tracker_qualidade as tracker_qualidade
 import modulos.controle.tracker_seguranca as tracker_seguranca
+import modulos.controle.tracker_telemetria as tracker_telemetria
 from modulos.controle.tracker_estado import TrackerState
 from modulos.controle.tracker_controle import FinePulseAxis
 from modulos.controle.tracker_medicao import TemporalFrameEstimator
@@ -193,6 +195,41 @@ class TrackerSafetyTests(unittest.TestCase):
         self.assertFalse(state.request_stop("segundo_motivo"))
         self.assertEqual(state.snapshot()["safety_stop_reason"], "primeiro_motivo")
 
+    def test_weak_or_dissimilar_border_candidate_is_not_confirmed(self):
+        signature = {"primary": {"raw_peak": 90.0}}
+        weak = {
+            "toca_borda": True,
+            "raw_peak": 7.0,
+            "similarity_primary": 0.9,
+        }
+        dissimilar = {
+            "toca_borda": True,
+            "raw_peak": 80.0,
+            "similarity_primary": 0.2,
+        }
+        plausible = {
+            "toca_borda": True,
+            "raw_peak": 80.0,
+            "similarity_primary": 0.8,
+        }
+        self.assertFalse(
+            tracker_aquisicao.candidato_borda_compativel(weak, signature)
+        )
+        self.assertFalse(
+            tracker_aquisicao.candidato_borda_compativel(dissimilar, signature)
+        )
+        self.assertTrue(
+            tracker_aquisicao.candidato_borda_compativel(plausible, signature)
+        )
+
+    def test_border_confirmation_uses_elapsed_time_and_resets(self):
+        guard = tracker_aquisicao.ConfirmacaoBorda(confirm_seconds=1.0)
+        self.assertEqual(guard.observe(10.0, True), 0.0)
+        self.assertAlmostEqual(guard.observe(10.8, True), 0.8)
+        self.assertEqual(guard.observe(10.9, False), 0.0)
+        self.assertEqual(guard.observe(11.0, True), 0.0)
+        self.assertAlmostEqual(guard.observe(12.0, True), 1.0)
+
     def test_acquisition_returns_when_display_is_closed(self):
         class FakeLogger:
             def __init__(self):
@@ -289,6 +326,34 @@ class TrackerSafetyTests(unittest.TestCase):
             self.assertEqual(len(rows), 2)
             self.assertEqual(rows[-1]["evento_seguranca"], "teste")
             self.assertTrue(logger.summary_path.exists())
+
+    def test_terminal_event_frame_bypasses_routine_limits(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            tracker_telemetria, "TRACKER_EVENT_IMAGE_LIMIT", 1
+        ), patch.object(
+            tracker_telemetria,
+            "TRACKER_EVENT_IMAGE_MIN_INTERVAL_SECONDS",
+            3600.0,
+        ):
+            logger = TrackerCsvLogger(Path(tmp), time.perf_counter(), 0.0, 0.0, 2.0)
+            frame = np.zeros((32, 32), dtype=np.uint8)
+            first = logger.save_event_frame(frame, "anomalia")
+            suppressed = logger.save_event_frame(frame, "outra_anomalia")
+            terminal = logger.save_event_frame(
+                frame,
+                "ilha_tocou_a_borda_da_roi",
+                critical=True,
+            )
+            logger.close(reason="teste")
+
+            self.assertIsNotNone(first)
+            self.assertIsNone(suppressed)
+            self.assertIsNotNone(terminal)
+            self.assertTrue(Path(terminal).exists())
+            summary = json.loads(logger.summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(summary["event_images_saved"], 1)
+            self.assertEqual(summary["event_images_suppressed"], 1)
+            self.assertIn("evento_terminal_", summary["terminal_event_frame"])
 
     def test_multiscale_fit_uses_every_radius(self):
         expected = np.array([[2000.0, 2500.0], [2600.0, -2000.0]])

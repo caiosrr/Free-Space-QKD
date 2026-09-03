@@ -7,7 +7,9 @@ import numpy as np
 
 from modulos.artefatos import display_path
 from modulos.configuracoes.tracker import (
-    BORDER_CONFIRM_FRAMES,
+    BORDER_CONFIRM_SECONDS,
+    BORDER_MIN_PEAK_RATIO,
+    BORDER_MIN_SIGNATURE_SIMILARITY,
     SIGNAL_LOSS_LIMIT_SECONDS,
     TEMPORAL_RECOVERY_VALID_FRAMES,
     TEMPORAL_RESET_AFTER_LOSS_SECONDS,
@@ -31,6 +33,42 @@ class ResultadoAquisicao:
 
     motivo: str
     ultimo_frame: np.ndarray | None
+
+
+class ConfirmacaoBorda:
+    """Confirma por tempo uma ilha plausivel continuamente cortada pela ROI."""
+
+    def __init__(self, confirm_seconds: float = BORDER_CONFIRM_SECONDS):
+        self.confirm_seconds = float(confirm_seconds)
+        self.started_at: float | None = None
+
+    def observe(self, now: float, plausible: bool) -> float:
+        if not plausible:
+            self.started_at = None
+            return 0.0
+        if self.started_at is None:
+            self.started_at = float(now)
+        return max(0.0, float(now) - self.started_at)
+
+
+def candidato_borda_compativel(selected: dict, focus_signature: dict) -> bool:
+    """Rejeita ruido de borda fraco ou incompatível com a ilha travada."""
+    if not selected.get("toca_borda", False):
+        return False
+    primary = focus_signature.get("primary") or {}
+    try:
+        raw_peak = float(selected["raw_peak"])
+        reference_peak = float(primary["raw_peak"])
+        similarity = float(selected["similarity_primary"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if not all(np.isfinite(value) for value in (raw_peak, reference_peak, similarity)):
+        return False
+    return bool(
+        reference_peak > 0.0
+        and raw_peak >= reference_peak * BORDER_MIN_PEAK_RATIO
+        and similarity >= BORDER_MIN_SIGNATURE_SIMILARITY
+    )
 
 
 def medir_laser(frame: np.ndarray) -> tuple[float, float] | None:
@@ -60,7 +98,7 @@ def executar_aquisicao(
     measurement_hz = 0.0
     last_display_t = 0.0
     display_interval_s = 1.0 / DISPLAY_HZ
-    border_frames = 0
+    border_guard = ConfirmacaoBorda()
     signal_lost_since = None
     estimator_cleared_for_loss = False
     recovery_valid_frames = 0
@@ -88,6 +126,8 @@ def executar_aquisicao(
         target_raw_peak = selected.get("raw_peak")
         target_raw_total = selected.get("raw_total")
         candidate_valid = instant_center is not None and not touches_border
+        plausible_border = candidato_borda_compativel(selected, focus_signature)
+        border_persistence_s = border_guard.observe(now, plausible_border)
         quality = quality_gate.observe(now, selected if candidate_valid else None)
         instant_valid = candidate_valid and quality.accepted
         if candidate_valid:
@@ -97,8 +137,6 @@ def executar_aquisicao(
                 # O detector atualiza sua ancora a cada candidato proximo. Um
                 # frame rejeitado nao pode arrastar essa ancora para a anomalia.
                 foco.set_focus_expected_position(*last_trusted_center)
-        border_frames = border_frames + 1 if touches_border else 0
-
         temporal_outlier = False
         temporal_estimate = None
         if instant_valid:
@@ -152,6 +190,8 @@ def executar_aquisicao(
             signal_was_locked = state.has_signal
             state.has_signal = measurement_valid
             state.spot_touches_border = touches_border
+            state.border_candidate_plausible = plausible_border
+            state.border_persistence_s = border_persistence_s
             state.measurement_seq += 1
             state.measurement_ts = now
             state.measurement_hz = measurement_hz
@@ -177,7 +217,7 @@ def executar_aquisicao(
             state.optical_width_ratio = quality.ratios.get("largura")
             state.optical_height_ratio = quality.ratios.get("altura")
 
-        if border_frames >= BORDER_CONFIRM_FRAMES:
+        if border_persistence_s >= BORDER_CONFIRM_SECONDS:
             solicitar_parada(state, "ilha_tocou_a_borda_da_roi")
         if signal_lost_s >= SIGNAL_LOSS_LIMIT_SECONDS:
             solicitar_parada(state, "sinal_perdido_por_tempo_excessivo")
@@ -193,7 +233,8 @@ def executar_aquisicao(
 
         event = values["safety_stop_reason"] or quality.event
         if quality.event:
-            logger.save_event_frame(frame, quality.event)
+            if quality.event != "anomalia_optica_recuperada":
+                logger.save_event_frame(frame, quality.event)
             if quality.event.startswith("anomalia_optica_") and not quality.event.endswith(
                 "recuperada"
             ):
@@ -212,8 +253,6 @@ def executar_aquisicao(
             logger.save_event_frame(frame, event)
         elif not event and measurement_valid and not signal_was_locked:
             event = "sinal_recuperado" if ever_locked else "sinal_inicial_confirmado"
-            if ever_locked:
-                logger.save_event_frame(frame, event)
             ever_locked = True
 
         logger.write(
@@ -231,7 +270,7 @@ def executar_aquisicao(
 
         if values["safety_stop_reason"]:
             reason = values["safety_stop_reason"]
-            event_path = logger.save_event_frame(last_frame, reason)
+            event_path = logger.save_event_frame(last_frame, reason, critical=True)
             if event_path is not None:
                 print(f"Frame do evento: {display_path(event_path)}")
             print(f"\nPARADA DE SEGURANCA: {reason}")
