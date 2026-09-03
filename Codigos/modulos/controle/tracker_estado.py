@@ -22,7 +22,14 @@ class TrackerState:
     brake_active: bool = False
     calibration_name: str = "continua"
     trim_mode_active: bool = False
-    hold_active: bool = False
+    hold_active: bool = True
+    control_dx_px: float = 0.0
+    control_dy_px: float = 0.0
+    control_radius_px: float = 0.0
+    slow_bias_window_s: float = 0.0
+    slow_bias_ready: bool = False
+    correction_persistence_s: float = 0.0
+    control_error_source: str = "repouso"
     measurement_hz: float = 0.0
     temporal_frame_count: int = 0
     temporal_window_s: float = 0.0

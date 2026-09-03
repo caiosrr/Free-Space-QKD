@@ -42,6 +42,10 @@ def tracking_status(
         return "AUTOTESTE - RECUPERANDO", (255, 200, 0)
     if state["brake_active"]:
         return "FREIO DE SEGURANCA", (0, 0, 255)
+    if state.get("control_error_source") == "aguardando_vies":
+        return "DERIVA POSSIVEL - CONFIRMANDO", (0, 165, 255)
+    if state["hold_active"] and not state.get("slow_bias_ready", False):
+        return "FORMANDO REFERENCIA LENTA", (0, 165, 255)
     if state["hold_active"]:
         return "CENTRALIZADO - REPOUSO", (0, 255, 0)
     return "RASTREANDO", (0, 255, 255)

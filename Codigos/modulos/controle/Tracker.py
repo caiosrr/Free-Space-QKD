@@ -18,11 +18,15 @@ if str(ROOT_DIR) not in sys.path:
 
 from modulos.artefatos import display_path, matrix_candidates
 from modulos.configuracoes.tracker import (
+    FAST_CORRECTION_RADIUS_PX,
+    HOLD_EXIT_RADIUS_PX,
     MAX_OFFSET_ALT_DEG,
     MAX_OFFSET_AZ_DEG,
     MAX_SESSION_HOURS,
     RETURN_TO_START_ON_LIMIT,
     SIGNAL_LOSS_LIMIT_SECONDS,
+    SLOW_BIAS_WINDOW_SECONDS,
+    SLOW_CORRECTION_PERSISTENCE_SECONDS,
     TEMPORAL_WINDOW_SECONDS,
     roi_size_for_backend,
 )
@@ -148,7 +152,14 @@ def main() -> None:
             session_hours,
         )
         print(
-            f"\nTracker iniciado | ilha travada | media={TEMPORAL_WINDOW_SECONDS:.1f}s"
+            f"\nTracker iniciado | ilha travada | media="
+            f"{TEMPORAL_WINDOW_SECONDS:.1f}s | vies="
+            f"{SLOW_BIAS_WINDOW_SECONDS:.1f}s"
+        )
+        print(
+            f"Controle: deriva >={HOLD_EXIT_RADIUS_PX:g} px por "
+            f"{SLOW_CORRECTION_PERSISTENCE_SECONDS:.1f}s | resposta rapida >="
+            f"{FAST_CORRECTION_RADIUS_PX:g} px"
         )
         print(f"Calibracao continua: {matrix_path}")
         print(f"Posicao inicial: Az={initial_az:.6f} deg | Alt={initial_alt:.6f} deg")

@@ -46,7 +46,12 @@
     if (!s.has_signal || label.includes("ANOMALIA") || label.includes("REJEITADO")) {
       return { label, detail: s.optical_anomaly_reason || "mount parado", css: "state-fault", system: "MOUNT PARADO" };
     }
-    if (s.hold_active) return { label, detail: "dentro da zona de repouso", css: "state-stable", system: "NORMAL" };
+    if (s.hold_active) {
+      const waiting = s.control_error_source === "aguardando_vies";
+      const warming = !s.slow_bias_ready;
+      const detail = waiting ? "confirmando deriva persistente" : warming ? "formando mediana lenta" : "dentro da zona de repouso";
+      return { label, detail, css: waiting || warming ? "state-active" : "state-stable", system: waiting || warming ? "AVALIANDO" : "NORMAL" };
+    }
     return { label, detail: s.trim_mode_active ? "micropulso fino" : "correção ativa", css: "state-active", system: "ATUANDO" };
   }
 
@@ -68,7 +73,7 @@
     ui.controlRate.textContent = `controle ${fmt(s.control_loop_hz, 1)} Hz`;
     ui.roiSize.textContent = `ROI ${s.roi_width_px || "—"} × ${s.roi_height_px || "—"}`;
     ui.coordinates.textContent = s.has_signal ? `X ${signed(s.dx_px)} px · Y↑ ${signed(s.dy_up_px)} px` : "sem medição válida";
-    ui.actuation.textContent = s.trim_mode_active ? "correção fina ativa" : s.hold_active ? "repouso" : "controle normal";
+    ui.actuation.textContent = s.trim_mode_active ? "micropulso por viés lento" : s.control_error_source === "aguardando_vies" ? "confirmando deriva" : s.hold_active ? "repouso" : "correção rápida";
     ui.angularError.textContent = `Az ${signed(s.err_az_deg, 5)} · Alt ${signed(s.err_alt_deg, 5)} deg`;
     ui.mountCommand.textContent = `Az ${signed(s.cmd_az_deg_s, 4)} · Alt ${signed(s.cmd_alt_deg_s, 4)} °/s`;
     ui.mountOffset.textContent = `Az ${signed((s.offset_az_deg || 0) * 3600, 1)} · Alt ${signed((s.offset_alt_deg || 0) * 3600, 1)} arcsec`;

@@ -19,7 +19,11 @@ import modulos.controle.tracker_qualidade as tracker_qualidade
 import modulos.controle.tracker_seguranca as tracker_seguranca
 import modulos.controle.tracker_telemetria as tracker_telemetria
 from modulos.controle.tracker_estado import TrackerState
-from modulos.controle.tracker_controle import FinePulseAxis
+from modulos.controle.tracker_controle import (
+    FinePulseAxis,
+    SlowBiasEstimator,
+    SlowCorrectionGate,
+)
 from modulos.controle.tracker_medicao import TemporalFrameEstimator
 from modulos.controle.tracker_telemetria import TrackerCsvLogger
 from modulos.visao import detector_ilhas
@@ -51,18 +55,55 @@ class TrackerSafetyTests(unittest.TestCase):
             "similarity_primary": similarity,
         }
 
-    def test_hold_zone_uses_three_frame_hysteresis(self):
-        self.assertEqual(tracker_loop.HOLD_ENTER_RADIUS_PX, 1.0)
-        self.assertEqual(tracker_loop.HOLD_EXIT_RADIUS_PX, 2.0)
-        active, count = tracker_loop.atualizar_zona_de_reposo(False, 0, 0.9)
-        self.assertTrue(active)
-        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 2.1)
-        self.assertTrue(active)
-        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 2.1)
-        self.assertTrue(active)
-        active, count = tracker_loop.atualizar_zona_de_reposo(active, count, 2.1)
-        self.assertFalse(active)
-        self.assertEqual(count, 0)
+    def test_slow_bias_estimator_uses_a_robust_time_window(self):
+        estimator = SlowBiasEstimator(window_s=4.0, warmup_s=2.0, min_samples=3)
+        self.assertFalse(estimator.observe(0.0, 2.0, 0.0).ready)
+        self.assertFalse(estimator.observe(1.0, 20.0, 0.0).ready)
+        estimate = estimator.observe(2.0, 2.2, 0.0)
+        self.assertTrue(estimate.ready)
+        self.assertAlmostEqual(estimate.dx_px, 2.2)
+        self.assertAlmostEqual(estimate.span_s, 2.0)
+
+        estimate = estimator.observe(5.0, 1.8, 0.0)
+        self.assertEqual(estimate.span_s, 4.0)
+        self.assertAlmostEqual(estimate.dx_px, 2.2)
+
+    def test_slow_gate_requires_time_but_large_error_is_immediate(self):
+        gate = SlowCorrectionGate(
+            enter_radius_px=1.0,
+            exit_radius_px=2.0,
+            persistence_s=1.5,
+            fast_radius_px=5.0,
+        )
+        decision = gate.update(
+            0.0, fast_radius_px=2.3, slow_radius_px=2.2, slow_ready=True
+        )
+        self.assertTrue(decision.hold_active)
+        self.assertEqual(decision.source, "aguardando_vies")
+        self.assertTrue(
+            gate.update(
+                1.4, fast_radius_px=2.4, slow_radius_px=2.2, slow_ready=True
+            ).hold_active
+        )
+        decision = gate.update(
+            1.5, fast_radius_px=2.4, slow_radius_px=2.2, slow_ready=True
+        )
+        self.assertFalse(decision.hold_active)
+        self.assertEqual(decision.source, "vies_lento")
+
+        self.assertFalse(
+            gate.update(
+                2.0, fast_radius_px=1.4, slow_radius_px=1.2, slow_ready=True
+            ).hold_active
+        )
+        self.assertTrue(
+            gate.update(
+                2.1, fast_radius_px=1.0, slow_radius_px=0.9, slow_ready=True
+            ).hold_active
+        )
+        decision = gate.update(3.0, fast_radius_px=5.1, slow_ready=False)
+        self.assertFalse(decision.hold_active)
+        self.assertEqual(decision.source, "erro_grande")
 
     def test_fine_pulse_uses_minimum_rate_then_waits_for_settling(self):
         pulse = FinePulseAxis(

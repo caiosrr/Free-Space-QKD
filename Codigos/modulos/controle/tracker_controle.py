@@ -1,6 +1,139 @@
 """Controlador matematico do tracker, sem camera ou interface grafica."""
 
+from collections import deque
+from dataclasses import dataclass
+
 import numpy as np
+
+
+@dataclass(frozen=True)
+class SlowBiasEstimate:
+    dx_px: float
+    dy_px: float
+    span_s: float
+    ready: bool
+
+    @property
+    def radius_px(self) -> float:
+        return float(np.hypot(self.dx_px, self.dy_px))
+
+
+class SlowBiasEstimator:
+    """Mediana temporal longa usada apenas para decidir correcoes finas."""
+
+    def __init__(self, window_s=8.0, warmup_s=4.0, min_samples=5):
+        self.window_s = float(window_s)
+        self.warmup_s = float(warmup_s)
+        self.min_samples = int(min_samples)
+        if not (0.0 < self.warmup_s <= self.window_s):
+            raise ValueError("O aquecimento do vies precisa caber na janela.")
+        if self.min_samples < 2:
+            raise ValueError("O estimador lento precisa de pelo menos duas amostras.")
+        self.reset()
+
+    def reset(self):
+        self._samples = deque()
+
+    def observe(self, timestamp, dx_px, dy_px) -> SlowBiasEstimate:
+        timestamp = float(timestamp)
+        values = np.asarray([dx_px, dy_px], dtype=float)
+        if not np.all(np.isfinite(values)):
+            self.reset()
+            return SlowBiasEstimate(0.0, 0.0, 0.0, False)
+
+        self._samples.append((timestamp, float(values[0]), float(values[1])))
+        cutoff = timestamp - self.window_s
+        while self._samples and self._samples[0][0] < cutoff:
+            self._samples.popleft()
+
+        samples = np.asarray([(item[1], item[2]) for item in self._samples])
+        span_s = max(0.0, timestamp - self._samples[0][0])
+        median = np.median(samples, axis=0)
+        ready = len(self._samples) >= self.min_samples and span_s >= self.warmup_s
+        return SlowBiasEstimate(
+            float(median[0]),
+            float(median[1]),
+            span_s,
+            bool(ready),
+        )
+
+
+@dataclass(frozen=True)
+class CorrectionDecision:
+    hold_active: bool
+    source: str
+    persistence_s: float
+
+
+class SlowCorrectionGate:
+    """Atua em vies persistente e preserva resposta imediata a erros grandes."""
+
+    def __init__(
+        self,
+        enter_radius_px=1.0,
+        exit_radius_px=2.0,
+        persistence_s=1.5,
+        fast_radius_px=5.0,
+    ):
+        self.enter_radius_px = float(enter_radius_px)
+        self.exit_radius_px = float(exit_radius_px)
+        self.persistence_s = float(persistence_s)
+        self.fast_radius_px = float(fast_radius_px)
+        if not (
+            0.0 < self.enter_radius_px < self.exit_radius_px < self.fast_radius_px
+            and self.persistence_s > 0.0
+        ):
+            raise ValueError("Parametros invalidos para a porta de correcao lenta.")
+        self.reset()
+
+    def reset(self):
+        self._correction_active = False
+        self._above_since = None
+
+    def update(
+        self,
+        timestamp,
+        *,
+        fast_radius_px,
+        slow_radius_px=None,
+        slow_ready=False,
+    ) -> CorrectionDecision:
+        timestamp = float(timestamp)
+        fast_radius_px = float(fast_radius_px)
+        slow_ready = bool(slow_ready and slow_radius_px is not None)
+        slow_radius_px = float(slow_radius_px) if slow_ready else None
+
+        if not np.isfinite(fast_radius_px) or (
+            slow_ready and not np.isfinite(slow_radius_px)
+        ):
+            self.reset()
+            return CorrectionDecision(True, "repouso", 0.0)
+
+        if fast_radius_px >= self.fast_radius_px:
+            self._correction_active = True
+            self._above_since = None
+            return CorrectionDecision(False, "erro_grande", 0.0)
+
+        if self._correction_active:
+            control_radius = slow_radius_px if slow_ready else fast_radius_px
+            if control_radius <= self.enter_radius_px:
+                self.reset()
+                return CorrectionDecision(True, "repouso", 0.0)
+            source = "vies_lento" if slow_ready else "erro_grande"
+            return CorrectionDecision(False, source, 0.0)
+
+        if not slow_ready or slow_radius_px < self.exit_radius_px:
+            self._above_since = None
+            return CorrectionDecision(True, "repouso", 0.0)
+
+        if self._above_since is None:
+            self._above_since = timestamp
+        elapsed = max(0.0, timestamp - self._above_since)
+        if elapsed >= self.persistence_s:
+            self._correction_active = True
+            self._above_since = None
+            return CorrectionDecision(False, "vies_lento", elapsed)
+        return CorrectionDecision(True, "aguardando_vies", elapsed)
 
 
 class FinePulseAxis:

@@ -7,12 +7,14 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 from modulos.configuracoes.tracker import (
+    FAST_CORRECTION_RADIUS_PX,
     HOLD_ENTER_RADIUS_PX,
-    HOLD_EXIT_CONFIRM_FRAMES,
     HOLD_EXIT_RADIUS_PX,
     MAX_TRACKING_RATE_DEG_S,
+    SLOW_BIAS_WARMUP_SECONDS,
+    SLOW_BIAS_WINDOW_SECONDS,
+    SLOW_CORRECTION_PERSISTENCE_SECONDS,
     TEMPORAL_CONTROL_GAIN_SCALE,
-    TEMPORAL_WINDOW_SECONDS,
 )
 from modulos.controle.cameras.backend import backend_name
 from modulos.controle.mount_control import (
@@ -24,6 +26,8 @@ from modulos.controle.mount_control import (
 from modulos.controle.tracker_controle import (
     FinePulseAxis,
     MeasurementPDTrim,
+    SlowBiasEstimator,
+    SlowCorrectionGate,
     pixel_error_to_mount_error,
 )
 from modulos.controle.tracker_estado import TrackerState
@@ -60,7 +64,9 @@ FINE_PULSE_RADIUS_PX = 3.0
 FINE_PULSE_CORRECTION_FRACTION = 0.35
 FINE_PULSE_MIN_S = 1.0 / CONTROL_HZ
 FINE_PULSE_MAX_S = 0.12
-FINE_PULSE_SETTLE_S = TEMPORAL_WINDOW_SECONDS
+# A mediana lenta leva aproximadamente metade de sua janela para refletir um
+# movimento. Um novo pulso antes disso poderia corrigir varias vezes o mesmo erro.
+FINE_PULSE_SETTLE_S = SLOW_BIAS_WARMUP_SECONDS
 
 # Freios contra salto manual e erro crescente.
 TOLERANCIA_PX = HOLD_ENTER_RADIUS_PX
@@ -99,24 +105,6 @@ def aplicar_velocidade_minima(cmd: float) -> float:
     return float(cmd)
 
 
-def atualizar_zona_de_reposo(
-    hold_active: bool,
-    exit_count: int,
-    radius_px: float,
-) -> tuple[bool, int]:
-    """Aplica histerese na zona central para evitar liga/desliga rapido."""
-    if hold_active:
-        if radius_px >= HOLD_EXIT_RADIUS_PX:
-            exit_count += 1
-            if exit_count >= HOLD_EXIT_CONFIRM_FRAMES:
-                return False, 0
-            return True, exit_count
-        return True, 0
-    if radius_px <= HOLD_ENTER_RADIUS_PX:
-        return True, 0
-    return False, 0
-
-
 def limitar_variacao(current: float, target: float, max_delta: float) -> float:
     delta = target - current
     if abs(delta) <= max_delta:
@@ -142,6 +130,16 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
         max_pulse_s=FINE_PULSE_MAX_S,
         settle_s=FINE_PULSE_SETTLE_S,
     )
+    slow_bias = SlowBiasEstimator(
+        window_s=SLOW_BIAS_WINDOW_SECONDS,
+        warmup_s=SLOW_BIAS_WARMUP_SECONDS,
+    )
+    correction_gate = SlowCorrectionGate(
+        enter_radius_px=HOLD_ENTER_RADIUS_PX,
+        exit_radius_px=HOLD_EXIT_RADIUS_PX,
+        persistence_s=SLOW_CORRECTION_PERSISTENCE_SECONDS,
+        fast_radius_px=FAST_CORRECTION_RADIUS_PX,
+    )
 
     dt_target = 1.0 / CONTROL_HZ
     last_loop_t = time.perf_counter()
@@ -160,8 +158,12 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
     brake_until = 0.0
     last_runaway_log_t = 0.0
     trim_mode_active = False
-    hold_active = False
-    hold_exit_count = 0
+    hold_active = True
+    control_dx_px = control_dy_px = control_radius_px = 0.0
+    slow_dx_px = slow_dy_px = slow_radius_px = 0.0
+    slow_span_s = correction_persistence_s = 0.0
+    slow_ready = False
+    control_error_source = "repouso"
     control_loop_hz = 0.0
 
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -204,16 +206,42 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     prev_dy_filt_px = None
                     runaway_count = 0
                     trim_mode_active = False
-                    hold_active = False
-                    hold_exit_count = 0
+                    hold_active = True
+                    slow_bias.reset()
+                    correction_gate.reset()
+                    control_dx_px = control_dy_px = control_radius_px = 0.0
+                    slow_dx_px = slow_dy_px = slow_radius_px = 0.0
+                    slow_span_s = correction_persistence_s = 0.0
+                    slow_ready = False
+                    control_error_source = "sem_sinal"
                 elif seq != last_seq:
                     last_seq = seq
-                    radius_px = float(np.hypot(dx_filt, dy_filt))
+                    fast_radius_px = float(np.hypot(dx_filt, dy_filt))
+                    bias = slow_bias.observe(measurement_ts, dx_filt, dy_filt)
+                    slow_dx_px = bias.dx_px
+                    slow_dy_px = bias.dy_px
+                    slow_radius_px = bias.radius_px
+                    slow_span_s = bias.span_s
+                    slow_ready = bias.ready
+
+                    decision = correction_gate.update(
+                        measurement_ts,
+                        fast_radius_px=fast_radius_px,
+                        slow_radius_px=slow_radius_px,
+                        slow_ready=slow_ready,
+                    )
                     previous_hold_active = hold_active
-                    hold_active, hold_exit_count = atualizar_zona_de_reposo(
-                        hold_active,
-                        hold_exit_count,
-                        radius_px,
+                    hold_active = decision.hold_active
+                    correction_persistence_s = decision.persistence_s
+                    control_error_source = decision.source
+                    if decision.source == "erro_grande":
+                        control_dx_px, control_dy_px = dx_filt, dy_filt
+                    elif slow_ready:
+                        control_dx_px, control_dy_px = slow_dx_px, slow_dy_px
+                    else:
+                        control_dx_px, control_dy_px = dx_filt, dy_filt
+                    control_radius_px = float(
+                        np.hypot(control_dx_px, control_dy_px)
                     )
                     if hold_active != previous_hold_active:
                         ctrl_az.reset()
@@ -235,7 +263,7 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                         )
                         manual_jump = (
                             jump_px >= MANUAL_JUMP_PX
-                            and radius_px > (2.0 * TOLERANCIA_PX)
+                            and fast_radius_px > (2.0 * TOLERANCIA_PX)
                         )
 
                     prev_dx_filt_px = dx_filt
@@ -249,8 +277,14 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                         fine_az.reset()
                         fine_alt.reset()
                         trim_mode_active = False
-                        hold_active = False
-                        hold_exit_count = 0
+                        hold_active = True
+                        slow_bias.reset()
+                        correction_gate.reset()
+                        control_dx_px = control_dy_px = control_radius_px = 0.0
+                        slow_dx_px = slow_dy_px = slow_radius_px = 0.0
+                        slow_span_s = correction_persistence_s = 0.0
+                        slow_ready = False
+                        control_error_source = "freio_movimento_manual"
                         brake_until = loop_t0 + MANUAL_JUMP_HOLD_S
                         runaway_count = 0
                         if (loop_t0 - last_runaway_log_t) >= RUNAWAY_LOG_COOLDOWN_S:
@@ -262,7 +296,10 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     else:
                         fine_mode = (
                             not hold_active
-                            and radius_px <= FINE_PULSE_RADIUS_PX
+                            and (
+                                control_error_source == "vies_lento"
+                                or control_radius_px <= FINE_PULSE_RADIUS_PX
+                            )
                         )
                         if hold_active:
                             trim_mode_active = False
@@ -278,7 +315,7 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                             target_cmd_az = target_cmd_alt = 0.0
                         else:
                             err_az, err_alt = pixel_error_to_mount_error(
-                                dx_filt, dy_filt, A_inv
+                                control_dx_px, control_dy_px, A_inv
                             )
                             if fine_mode:
                                 ctrl_az.reset()
@@ -305,14 +342,15 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                             if (
                                 prev_radius_px is not None
                                 and cmd_norm >= VEL_MIN_LIMITE
-                                and radius_px > (prev_radius_px + RUNAWAY_MARGIN_PX)
-                                and radius_px > (2.0 * TOLERANCIA_PX)
+                                and control_radius_px
+                                > (prev_radius_px + RUNAWAY_MARGIN_PX)
+                                and control_radius_px > (2.0 * TOLERANCIA_PX)
                             ):
                                 runaway_count += 1
                             else:
                                 runaway_count = 0
 
-                            prev_radius_px = radius_px
+                            prev_radius_px = control_radius_px
                             if runaway_count >= RUNAWAY_FRAMES:
                                 if (
                                     loop_t0 - last_runaway_log_t
@@ -330,8 +368,14 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                                 fine_az.reset()
                                 fine_alt.reset()
                                 trim_mode_active = False
-                                hold_active = False
-                                hold_exit_count = 0
+                                hold_active = True
+                                slow_bias.reset()
+                                correction_gate.reset()
+                                control_dx_px = control_dy_px = control_radius_px = 0.0
+                                slow_dx_px = slow_dy_px = slow_radius_px = 0.0
+                                slow_span_s = correction_persistence_s = 0.0
+                                slow_ready = False
+                                control_error_source = "freio_erro_crescente"
                                 brake_until = loop_t0 + RUNAWAY_HOLD_S
                                 runaway_count = 0
 
@@ -394,6 +438,13 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     state.brake_active = loop_t0 < brake_until
                     state.trim_mode_active = trim_mode_active
                     state.hold_active = hold_active
+                    state.control_dx_px = control_dx_px
+                    state.control_dy_px = control_dy_px
+                    state.control_radius_px = control_radius_px
+                    state.slow_bias_window_s = slow_span_s
+                    state.slow_bias_ready = slow_ready
+                    state.correction_persistence_s = correction_persistence_s
+                    state.control_error_source = control_error_source
                     state.control_loop_hz = control_loop_hz
 
                 elapsed = time.perf_counter() - loop_t0

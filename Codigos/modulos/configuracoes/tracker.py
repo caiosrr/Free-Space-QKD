@@ -19,10 +19,17 @@ TRACKER_MAX_SPOT_JUMP_PX = 45.0
 FINE_CALIBRATION_RADII_DEG = (0.004, 0.008, 0.016)
 
 # Zona de repouso com histerese. A malha busca erro menor ou igual a 1 px e so
-# acorda novamente apos tres medias consecutivas acima de 2 px.
+# acorda por uma deriva lenta persistente acima de 2 px ou por um erro grande.
 HOLD_ENTER_RADIUS_PX = 1.0
 HOLD_EXIT_RADIUS_PX = 2.0
-HOLD_EXIT_CONFIRM_FRAMES = 3
+
+# A media de imagem de 2 s continua responsavel pela deteccao e pela seguranca.
+# Para comandar o mount, uma mediana adicional separa vies persistente de
+# oscilacoes atmosfericas aproximadamente simetricas.
+SLOW_BIAS_WINDOW_SECONDS = 8.0
+SLOW_BIAS_WARMUP_SECONDS = 4.0
+SLOW_CORRECTION_PERSISTENCE_SECONDS = 1.5
+FAST_CORRECTION_RADIUS_PX = 5.0
 
 # AUTOTESTE TEMPORARIO: desloca a ilha depois de salvar o alvo e verifica se o
 # tracker a recupera. A opcao continua desativada por padrao no prompt inicial.
@@ -111,6 +118,12 @@ if ASI_ROI_SIZE_PX < 200 or IDS_ROI_SIZE_PX < 128:
     raise ValueError("A ROI do tracker ficou pequena demais para operacao segura.")
 if not 0 < HOLD_ENTER_RADIUS_PX < HOLD_EXIT_RADIUS_PX:
     raise ValueError("A zona de repouso precisa satisfazer 0 < entrada < saida.")
+if not (
+    HOLD_EXIT_RADIUS_PX < FAST_CORRECTION_RADIUS_PX
+    and 0 < SLOW_BIAS_WARMUP_SECONDS <= SLOW_BIAS_WINDOW_SECONDS
+    and SLOW_CORRECTION_PERSISTENCE_SECONDS > 0
+):
+    raise ValueError("Os tempos e raios do controle em duas escalas sao invalidos.")
 if (
     PREFLIGHT_MIN_CONFIRMED_ERROR_PX <= HOLD_EXIT_RADIUS_PX
     or (PREFLIGHT_SHIFT_X_PX**2 + PREFLIGHT_SHIFT_Y_PX**2) ** 0.5
