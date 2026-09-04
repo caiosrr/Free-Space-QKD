@@ -22,6 +22,7 @@ from modulos.controle.tracker_estado import TrackerState
 from modulos.controle.tracker_exposicao import (
     AutoExposureController,
     border_background_metrics,
+    exposure_metrics,
 )
 from modulos.controle.tracker_controle import (
     DirectionalErrorEstimator,
@@ -65,16 +66,32 @@ class TrackerSafetyTests(unittest.TestCase):
         }
 
     @staticmethod
-    def _feed_exposure(controller, frame, peak, trusted=True):
+    def _feed_exposure(
+        controller,
+        frame,
+        *,
+        trusted=True,
+        present=True,
+        timestamps=(0.0, 0.5, 1.0, 1.5, 2.0),
+    ):
         decision = None
-        for timestamp in (0.0, 0.5, 1.0, 1.5, 2.0):
+        for timestamp in timestamps:
             decision = controller.observe(
                 timestamp,
                 frame,
-                target_peak=peak,
+                target_center=(16.0, 16.0) if present else None,
+                target_diameter_px=8.0 if present else None,
                 trusted_target=trusted,
+                target_present=present,
             )
         return decision
+
+    @staticmethod
+    def _contrast_frame(target_level, background=20, size=32):
+        yy, xx = np.indices((size, size))
+        frame = (background + ((xx + yy) % 3) - 1).astype(np.uint8)
+        frame[(xx - 16) ** 2 + (yy - 16) ** 2 <= 4**2] = target_level
+        return frame
 
     def test_auto_exposure_ignores_central_beacon_in_background(self):
         frame = np.full((64, 64), 10, dtype=np.uint8)
@@ -83,31 +100,44 @@ class TrackerSafetyTests(unittest.TestCase):
         self.assertEqual(background, 10.0)
         self.assertEqual(saturated, 0.0)
 
-    def test_auto_exposure_changes_slowly_toward_target(self):
-        frame = np.full((32, 32), 10, dtype=np.uint8)
+        metrics = exposure_metrics(
+            frame,
+            target_center=(32.0, 32.0),
+            target_diameter_px=12.0,
+        )
+        self.assertEqual(metrics.background_percentile, 10.0)
+        self.assertGreater(metrics.cnr, 100.0)
+
+    def test_auto_exposure_changes_slowly_toward_cnr_band(self):
+        low_frame = self._contrast_frame(26)
         low = AutoExposureController(
             10000,
+            cnr_low=8.0,
+            cnr_high=16.0,
             update_seconds=2.0,
             history_seconds=2.0,
             min_samples=3,
             started_at=0.0,
         )
-        decision = self._feed_exposure(low, frame, 100.0)
+        decision = self._feed_exposure(low, low_frame)
         self.assertTrue(decision.changed)
         self.assertEqual(decision.exposure_us, 11000.0)
-        self.assertEqual(decision.reason, "aumento_sinal_baixo")
+        self.assertEqual(decision.reason, "aumento_cnr_baixo")
 
+        high_frame = self._contrast_frame(200)
         high = AutoExposureController(
             10000,
+            cnr_low=8.0,
+            cnr_high=16.0,
             update_seconds=2.0,
             history_seconds=2.0,
             min_samples=3,
             started_at=0.0,
         )
-        decision = self._feed_exposure(high, frame, 220.0)
+        decision = self._feed_exposure(high, high_frame)
         self.assertTrue(decision.changed)
-        self.assertEqual(decision.exposure_us, 9000.0)
-        self.assertEqual(decision.reason, "reducao_sinal_alto")
+        self.assertEqual(decision.exposure_us, 9500.0)
+        self.assertEqual(decision.reason, "reducao_cnr_com_folga")
 
     def test_auto_exposure_freezes_without_target_but_protects_background(self):
         dark = np.full((32, 32), 10, dtype=np.uint8)
@@ -118,29 +148,112 @@ class TrackerSafetyTests(unittest.TestCase):
             min_samples=3,
             started_at=0.0,
         )
-        decision = self._feed_exposure(controller, dark, 50.0, trusted=False)
+        decision = self._feed_exposure(
+            controller,
+            dark,
+            trusted=False,
+            present=False,
+        )
         self.assertFalse(decision.changed)
         self.assertEqual(decision.exposure_us, 10000.0)
-        self.assertEqual(decision.reason, "congelada_sem_alvo_confiavel")
+        self.assertEqual(decision.reason, "congelada_alvo_ausente")
 
-        bright = np.full((32, 32), 210, dtype=np.uint8)
+        bright = np.full((32, 32), 252, dtype=np.uint8)
         safety = AutoExposureController(
             10000,
             update_seconds=5.0,
             history_seconds=2.0,
             min_samples=3,
+            safety_update_s=1.0,
             started_at=0.0,
         )
-        for timestamp in (0.0, 0.5, 1.0):
-            decision = safety.observe(
-                timestamp,
-                bright,
-                target_peak=None,
-                trusted_target=False,
-            )
+        decision = self._feed_exposure(
+            safety,
+            bright,
+            trusted=False,
+            present=False,
+            timestamps=(0.0, 0.5, 1.0),
+        )
         self.assertTrue(decision.changed)
         self.assertEqual(decision.exposure_us, 9000.0)
-        self.assertEqual(decision.reason, "reducao_fundo_saturando")
+        self.assertEqual(decision.reason, "reducao_emergencial_cena_saturando")
+
+        decision = self._feed_exposure(
+            safety,
+            bright,
+            trusted=False,
+            present=False,
+            timestamps=(1.5, 2.0, 2.5, 3.0),
+        )
+        self.assertFalse(decision.changed)
+        self.assertEqual(decision.exposure_us, 9000.0)
+
+    def test_auto_exposure_freezes_optical_anomaly(self):
+        controller = AutoExposureController(10000, started_at=0.0)
+        frame = self._contrast_frame(200)
+        decision = self._feed_exposure(
+            controller,
+            frame,
+            trusted=False,
+            present=True,
+        )
+        self.assertFalse(decision.changed)
+        self.assertEqual(decision.reason, "congelada_anomalia_optica")
+
+    def test_auto_exposure_holds_adequate_cnr_and_background_limited_signal(self):
+        adequate = AutoExposureController(
+            10000,
+            update_seconds=2.0,
+            history_seconds=2.0,
+            min_samples=3,
+            started_at=0.0,
+        )
+        decision = self._feed_exposure(adequate, self._contrast_frame(35))
+        self.assertFalse(decision.changed)
+        self.assertEqual(decision.reason, "faixa_cnr_adequada")
+
+        limited = AutoExposureController(
+            10000,
+            update_seconds=2.0,
+            history_seconds=2.0,
+            min_samples=3,
+            started_at=0.0,
+        )
+        decision = self._feed_exposure(
+            limited,
+            self._contrast_frame(226, background=220),
+        )
+        self.assertFalse(decision.changed)
+        self.assertEqual(decision.reason, "cnr_baixo_limitada_pelo_fundo")
+
+    def test_auto_exposure_rolls_back_change_followed_by_signal_loss(self):
+        controller = AutoExposureController(
+            10000,
+            cnr_low=8.0,
+            cnr_high=16.0,
+            update_seconds=2.0,
+            history_seconds=2.0,
+            min_samples=3,
+            rollback_window_s=3.0,
+            rollback_loss_s=0.5,
+            started_at=0.0,
+        )
+        bright = self._contrast_frame(200)
+        decision = self._feed_exposure(controller, bright)
+        self.assertEqual(decision.exposure_us, 9500.0)
+
+        dark = np.full((32, 32), 10, dtype=np.uint8)
+        decision = self._feed_exposure(
+            controller,
+            dark,
+            trusted=False,
+            present=False,
+            timestamps=(2.1, 2.7),
+        )
+        self.assertTrue(decision.changed)
+        self.assertTrue(decision.rollback)
+        self.assertEqual(decision.exposure_us, 10000.0)
+        self.assertEqual(decision.reason, "reversao_ajuste_sem_sinal")
 
     def test_slow_bias_estimator_uses_a_robust_time_window(self):
         estimator = SlowBiasEstimator(window_s=4.0, warmup_s=2.0, min_samples=3)

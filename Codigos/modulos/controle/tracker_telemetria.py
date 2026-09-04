@@ -14,15 +14,19 @@ from modulos.artefatos import display_path
 from modulos.configuracoes.tracker import (
     AUTO_EXPOSURE_BACKGROUND_HIGH,
     AUTO_EXPOSURE_BACKGROUND_INCREASE_LIMIT,
+    AUTO_EXPOSURE_CNR_HIGH,
+    AUTO_EXPOSURE_CNR_LOW,
     AUTO_EXPOSURE_ENABLED,
     AUTO_EXPOSURE_HISTORY_SECONDS,
     AUTO_EXPOSURE_MAX_STEP_FRACTION,
     AUTO_EXPOSURE_MAX_US,
+    AUTO_EXPOSURE_MIN_TRUSTED_FRACTION,
     AUTO_EXPOSURE_MIN_US,
+    AUTO_EXPOSURE_REDUCTION_STEP_FRACTION,
+    AUTO_EXPOSURE_ROLLBACK_LOSS_SECONDS,
+    AUTO_EXPOSURE_ROLLBACK_WINDOW_SECONDS,
+    AUTO_EXPOSURE_SAFETY_UPDATE_SECONDS,
     AUTO_EXPOSURE_SATURATION_FRACTION,
-    AUTO_EXPOSURE_TARGET_CENTER,
-    AUTO_EXPOSURE_TARGET_HIGH,
-    AUTO_EXPOSURE_TARGET_LOW,
     AUTO_EXPOSURE_UPDATE_SECONDS,
     BORDER_CONFIRM_SECONDS,
     BORDER_MIN_PEAK_RATIO,
@@ -82,6 +86,9 @@ class TrackerCsvLogger:
         "exposicao_us", "auto_exposicao_ativa",
         "motivo_autoexposicao", "pico_mediano_autoexposicao",
         "fundo_percentil_autoexposicao", "fracao_saturada_autoexposicao",
+        "fundo_local_autoexposicao", "ruido_local_autoexposicao",
+        "cnr_autoexposicao", "fracao_alvo_confiavel_autoexposicao",
+        "fracao_saturada_alvo_autoexposicao", "reversao_autoexposicao",
         "ajustes_autoexposicao", "pico_bruto_alvo",
         "intensidade_integrada_alvo",
         "outlier_temporal", "frame_optico_transitorio_rejeitado",
@@ -163,20 +170,39 @@ class TrackerCsvLogger:
                 AUTO_EXPOSURE_MIN_US,
                 AUTO_EXPOSURE_MAX_US,
             ],
-            "auto_exposure_target_peak_range": [
-                AUTO_EXPOSURE_TARGET_LOW,
-                AUTO_EXPOSURE_TARGET_HIGH,
+            "auto_exposure_strategy": "minimum_exposure_with_local_cnr",
+            "auto_exposure_cnr_definition": (
+                "(target_aperture_p98-local_annulus_median)/"
+                "local_annulus_robust_noise"
+            ),
+            "auto_exposure_cnr_range": [
+                AUTO_EXPOSURE_CNR_LOW,
+                AUTO_EXPOSURE_CNR_HIGH,
             ],
-            "auto_exposure_target_peak_center": AUTO_EXPOSURE_TARGET_CENTER,
+            "auto_exposure_min_trusted_fraction": (
+                AUTO_EXPOSURE_MIN_TRUSTED_FRACTION
+            ),
             "auto_exposure_update_seconds": AUTO_EXPOSURE_UPDATE_SECONDS,
             "auto_exposure_history_seconds": AUTO_EXPOSURE_HISTORY_SECONDS,
             "auto_exposure_max_step_fraction": AUTO_EXPOSURE_MAX_STEP_FRACTION,
+            "auto_exposure_reduction_step_fraction": (
+                AUTO_EXPOSURE_REDUCTION_STEP_FRACTION
+            ),
             "auto_exposure_background_high": AUTO_EXPOSURE_BACKGROUND_HIGH,
             "auto_exposure_background_increase_limit": (
                 AUTO_EXPOSURE_BACKGROUND_INCREASE_LIMIT
             ),
             "auto_exposure_saturation_fraction": (
                 AUTO_EXPOSURE_SATURATION_FRACTION
+            ),
+            "auto_exposure_rollback_window_seconds": (
+                AUTO_EXPOSURE_ROLLBACK_WINDOW_SECONDS
+            ),
+            "auto_exposure_rollback_loss_seconds": (
+                AUTO_EXPOSURE_ROLLBACK_LOSS_SECONDS
+            ),
+            "auto_exposure_safety_update_seconds": (
+                AUTO_EXPOSURE_SAFETY_UPDATE_SECONDS
             ),
             "temporal_window_seconds": TEMPORAL_WINDOW_SECONDS,
             "temporal_warmup_seconds": TEMPORAL_WARMUP_SECONDS,
@@ -285,6 +311,24 @@ class TrackerCsvLogger:
             ),
             "fracao_saturada_autoexposicao": number(
                 state_values["auto_exposure_saturation_fraction"], 6
+            ),
+            "fundo_local_autoexposicao": number(
+                state_values["auto_exposure_local_background"], 2
+            ),
+            "ruido_local_autoexposicao": number(
+                state_values["auto_exposure_local_noise"], 3
+            ),
+            "cnr_autoexposicao": number(
+                state_values["auto_exposure_cnr"], 3
+            ),
+            "fracao_alvo_confiavel_autoexposicao": number(
+                state_values["auto_exposure_trusted_fraction"], 4
+            ),
+            "fracao_saturada_alvo_autoexposicao": number(
+                state_values["auto_exposure_target_saturation_fraction"], 6
+            ),
+            "reversao_autoexposicao": int(
+                bool(state_values["auto_exposure_rollback"])
             ),
             "ajustes_autoexposicao": int(
                 state_values["auto_exposure_adjustments"]

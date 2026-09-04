@@ -76,24 +76,28 @@ TEMPORAL_MEAN_THRESHOLD_PERCENT = 0.20
 # o mount ultrapasse o alvo enquanto o erro medio ainda reflete o passado.
 TEMPORAL_CONTROL_GAIN_SCALE = 0.35
 
-# Autoexposicao conservadora. O ganho permanece fixo; a exposicao muda devagar
-# usando apenas a ilha travada. O fundo da borda da ROI pode forcar uma reducao
-# mesmo durante perda de sinal, evitando saturacao no amanhecer.
+# Autoexposicao orientada a contraste. O ganho permanece fixo e a camera usa a
+# menor exposicao que ainda fornece CNR confortavel para a ilha travada. Isso
+# preserva FPS e deixa a integracao para a media temporal de varios frames.
 AUTO_EXPOSURE_ENABLED = True
 AUTO_EXPOSURE_MIN_US = 1000.0
 AUTO_EXPOSURE_MAX_US = 18000.0
-AUTO_EXPOSURE_TARGET_LOW = 120.0
-AUTO_EXPOSURE_TARGET_HIGH = 190.0
-AUTO_EXPOSURE_TARGET_CENTER = 155.0
+AUTO_EXPOSURE_CNR_LOW = 8.0
+AUTO_EXPOSURE_CNR_HIGH = 16.0
+AUTO_EXPOSURE_MIN_TRUSTED_FRACTION = 0.95
 AUTO_EXPOSURE_UPDATE_SECONDS = 5.0
 AUTO_EXPOSURE_HISTORY_SECONDS = 2.0
 AUTO_EXPOSURE_MIN_SAMPLES = 8
 AUTO_EXPOSURE_MAX_STEP_FRACTION = 0.10
+AUTO_EXPOSURE_REDUCTION_STEP_FRACTION = 0.05
 AUTO_EXPOSURE_BACKGROUND_PERCENTILE = 99.0
-AUTO_EXPOSURE_BACKGROUND_HIGH = 200.0
-AUTO_EXPOSURE_BACKGROUND_INCREASE_LIMIT = 160.0
+AUTO_EXPOSURE_BACKGROUND_HIGH = 235.0
+AUTO_EXPOSURE_BACKGROUND_INCREASE_LIMIT = 210.0
 AUTO_EXPOSURE_SATURATION_LEVEL = 250
 AUTO_EXPOSURE_SATURATION_FRACTION = 0.002
+AUTO_EXPOSURE_ROLLBACK_WINDOW_SECONDS = 3.0
+AUTO_EXPOSURE_ROLLBACK_LOSS_SECONDS = 0.5
+AUTO_EXPOSURE_SAFETY_UPDATE_SECONDS = 5.0
 
 # Trava de qualidade optica. Antes de entrar na media temporal, cada ilha e
 # comparada com a mediana recente dos periodos estaveis. Mudancas graduais
@@ -208,18 +212,22 @@ if not 0 < TEMPORAL_CONTROL_GAIN_SCALE <= 1:
     raise ValueError("A escala de ganho temporal deve estar em (0, 1].")
 if not (
     0 < AUTO_EXPOSURE_MIN_US < AUTO_EXPOSURE_MAX_US
-    and 0 < AUTO_EXPOSURE_TARGET_LOW
-    < AUTO_EXPOSURE_TARGET_CENTER
-    < AUTO_EXPOSURE_TARGET_HIGH
-    < 255
+    and 0 < AUTO_EXPOSURE_CNR_LOW < AUTO_EXPOSURE_CNR_HIGH
+    and 0.5 < AUTO_EXPOSURE_MIN_TRUSTED_FRACTION <= 1.0
     and AUTO_EXPOSURE_UPDATE_SECONDS >= AUTO_EXPOSURE_HISTORY_SECONDS > 0
     and AUTO_EXPOSURE_MIN_SAMPLES >= 2
     and 0 < AUTO_EXPOSURE_MAX_STEP_FRACTION < 1
+    and 0 < AUTO_EXPOSURE_REDUCTION_STEP_FRACTION
+    <= AUTO_EXPOSURE_MAX_STEP_FRACTION
     and 0 < AUTO_EXPOSURE_BACKGROUND_INCREASE_LIMIT
     < AUTO_EXPOSURE_BACKGROUND_HIGH
     < 255
     and 0 < AUTO_EXPOSURE_SATURATION_LEVEL <= 255
     and 0 < AUTO_EXPOSURE_SATURATION_FRACTION < 1
+    and AUTO_EXPOSURE_ROLLBACK_WINDOW_SECONDS
+    > AUTO_EXPOSURE_ROLLBACK_LOSS_SECONDS
+    > 0
+    and AUTO_EXPOSURE_SAFETY_UPDATE_SECONDS > 0
 ):
     raise ValueError("Os limites da autoexposicao sao invalidos.")
 if not 0 < OPTICAL_INITIAL_STABLE_SECONDS <= OPTICAL_BASELINE_WINDOW_SECONDS:

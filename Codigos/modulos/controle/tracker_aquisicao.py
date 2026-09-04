@@ -189,7 +189,12 @@ def executar_aquisicao(
         touches_border = bool(selected.get("toca_borda", False))
         target_raw_peak = selected.get("raw_peak")
         target_raw_total = selected.get("raw_total")
-        candidate_valid = instant_center is not None and not touches_border
+        target_diameter_px = max(
+            float(selected.get("bbox_w") or 0.0),
+            float(selected.get("bbox_h") or 0.0),
+        ) or None
+        target_present_for_exposure = instant_center is not None
+        candidate_valid = target_present_for_exposure and not touches_border
         plausible_border = candidato_borda_compativel(selected, focus_signature)
         border_persistence_s = border_guard.observe(now, plausible_border)
         quality = quality_gate.observe(now, selected if candidate_valid else None)
@@ -198,8 +203,10 @@ def executar_aquisicao(
         exposure_decision = exposure_controller.observe(
             now,
             raw_exposure_frame if raw_exposure_frame is not None else frame,
-            target_peak=target_raw_peak,
+            target_center=instant_center,
+            target_diameter_px=target_diameter_px,
             trusted_target=frame_accepted,
+            target_present=target_present_for_exposure,
         )
         exposure_event = ""
         if exposure_decision.changed:
@@ -210,7 +217,7 @@ def executar_aquisicao(
             print(
                 f"\nAutoexposicao: {previous_exposure_us:.0f} -> "
                 f"{current_exposure_us:.0f} us | "
-                f"pico={exposure_decision.peak_median or 0.0:.1f} | "
+                f"CNR={exposure_decision.cnr_median or 0.0:.1f} | "
                 f"fundo={exposure_decision.background_percentile:.1f}"
             )
         if candidate_valid:
@@ -310,6 +317,18 @@ def executar_aquisicao(
             state.auto_exposure_saturation_fraction = (
                 exposure_decision.saturation_fraction
             )
+            state.auto_exposure_local_background = (
+                exposure_decision.local_background_median
+            )
+            state.auto_exposure_local_noise = exposure_decision.local_noise_median
+            state.auto_exposure_cnr = exposure_decision.cnr_median
+            state.auto_exposure_trusted_fraction = (
+                exposure_decision.trusted_fraction
+            )
+            state.auto_exposure_target_saturation_fraction = (
+                exposure_decision.target_saturation_fraction
+            )
+            state.auto_exposure_rollback = exposure_decision.rollback
             state.auto_exposure_adjustments = exposure_adjustments
             state.target_raw_peak = (
                 None if target_raw_peak is None else float(target_raw_peak)

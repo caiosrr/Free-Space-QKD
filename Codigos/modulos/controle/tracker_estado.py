@@ -47,6 +47,12 @@ class TrackerState:
     auto_exposure_peak_median: float | None = None
     auto_exposure_background: float = 0.0
     auto_exposure_saturation_fraction: float = 0.0
+    auto_exposure_local_background: float | None = None
+    auto_exposure_local_noise: float | None = None
+    auto_exposure_cnr: float | None = None
+    auto_exposure_trusted_fraction: float = 0.0
+    auto_exposure_target_saturation_fraction: float = 0.0
+    auto_exposure_rollback: bool = False
     auto_exposure_adjustments: int = 0
     target_raw_peak: float | None = None
     target_raw_total: float | None = None
