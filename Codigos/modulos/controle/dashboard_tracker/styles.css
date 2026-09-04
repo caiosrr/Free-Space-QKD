@@ -74,8 +74,7 @@ main { min-height: 0; display: grid; grid-template-rows: 92px minmax(0, 1fr) 58p
 .legend { display: flex; gap: 14px; font: 9px var(--mono); }
 .legend span::before { content: ""; display: inline-block; width: 13px; height: 2px; margin: 0 5px 3px 0; background: currentColor; }
 .legend .x { color: var(--cyan); }
-.legend .y { color: var(--blue); }
-.legend .r { color: var(--amber); }
+.legend .y { color: var(--amber); }
 .chart-wrap { min-height: 0; padding: 8px 10px 3px; }
 #trend-canvas { width: 100%; height: 100%; display: block; }
 

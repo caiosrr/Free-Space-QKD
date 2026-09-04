@@ -132,15 +132,8 @@
       trendCtx.fillStyle = "rgba(129,144,147,.75)";
       trendCtx.fillText(String(value).replace("-", "−"), 7 * ratio, y + 3 * ratio);
     });
-    [1, 2].forEach((value, index) => {
-      trendCtx.setLineDash([5 * ratio, 5 * ratio]);
-      trendCtx.strokeStyle = index ? "rgba(211,160,76,.38)" : "rgba(101,180,136,.35)";
-      trendCtx.beginPath(); trendCtx.moveTo(pad.left, toY(value)); trendCtx.lineTo(width - pad.right, toY(value)); trendCtx.stroke();
-    });
-    trendCtx.setLineDash([]);
-
     const now = Date.now();
-    const draw = (key, color, lineWidth) => {
+    const trace = (key) => {
       trendCtx.beginPath();
       let started = false;
       history.forEach((item) => {
@@ -150,13 +143,21 @@
         const y = toY(value);
         if (!started) { trendCtx.moveTo(x, y); started = true; } else trendCtx.lineTo(x, y);
       });
+    };
+    const draw = (key, color, glow) => {
+      trendCtx.lineCap = "round";
+      trendCtx.lineJoin = "round";
+      trace(key);
+      trendCtx.strokeStyle = glow;
+      trendCtx.lineWidth = 4.5 * ratio;
+      trendCtx.stroke();
+      trace(key);
       trendCtx.strokeStyle = color;
-      trendCtx.lineWidth = lineWidth * ratio;
+      trendCtx.lineWidth = 2 * ratio;
       trendCtx.stroke();
     };
-    draw("x", "rgba(105,183,195,.92)", 1);
-    draw("y", "rgba(111,145,204,.9)", 1);
-    draw("r", "rgba(211,160,76,.98)", 1.35);
+    draw("x", "rgba(112,204,216,.98)", "rgba(105,183,195,.16)");
+    draw("y", "rgba(225,173,83,.98)", "rgba(211,160,76,.15)");
     trendCtx.fillStyle = "rgba(129,144,147,.7)";
     trendCtx.fillText("−120 s", pad.left, height - 6 * ratio);
     trendCtx.fillText("agora", width - pad.right - 30 * ratio, height - 6 * ratio);
@@ -170,7 +171,7 @@
       latest = state;
       if (state.updated_unix_s !== lastServerTimestamp) {
         lastServerTimestamp = state.updated_unix_s;
-        history.push({ t: Date.now(), x: state.dx_px, y: state.dy_up_px, r: state.radial_error_px });
+        history.push({ t: Date.now(), x: state.dx_px, y: state.dy_up_px });
         const cutoff = Date.now() - 120000;
         while (history.length && history[0].t < cutoff) history.shift();
         drawTrend();
