@@ -13,7 +13,12 @@ from pathlib import Path
 import numpy as np
 
 from modulos.artefatos import display_path
-from modulos.configuracoes.tracker import TRACKER_MAX_SPOT_JUMP_PX, roi_size_for_backend
+from modulos.configuracoes.tracker import (
+    TEMPORAL_APERTURE_RADIUS_PX,
+    TEMPORAL_MEAN_THRESHOLD_PERCENT,
+    TRACKER_MAX_SPOT_JUMP_PX,
+    roi_size_for_backend,
+)
 from modulos.controle.alvo_alinhamento import TARGET_FILENAME, roi_incluindo_alvo, salvar_alvo
 from modulos.controle.cameras.backend import backend_name, connect_camera, direct_camera, disconnect_camera, set_gain
 from modulos.controle.mount_control import (
@@ -31,9 +36,19 @@ SWEEP_HALF_RANGE_DEG = LOCAL_HALF_RANGE_DEG
 OTHER_AXIS_LIMIT_DEG = 0.004
 RETURN_MAX_RATE_DEG_S = 0.02
 RETURN_ATTEMPTS = 2
-BASELINE_VALID_FRAMES = 10
+BASELINE_VALID_FRAMES = 20
+BASELINE_WINDOW_SECONDS = 0.5
 SIGNAL_LOSS_TIMEOUT_S = 1.5
 MIN_VALID_SWEEP_SAMPLES = 20
+ANGLE_BIN_WIDTH_DEG = 0.00025
+MIN_FRAMES_PER_ANGLE_BIN = 3
+# O ASCOM pode repetir a mesma coordenada por varios frames e atualizar a
+# posicao em degraus. Oito bins preservam apenas estados angulares independentes
+# sem confundir taxa da camera com taxa de telemetria do mount.
+MIN_VALID_SWEEP_BINS = 8
+MAX_MEDIAN_BIN_SPREAD_PX = 5.0
+MAX_P90_BIN_SPREAD_PX = 10.0
+MIN_CALIBRATION_SIMILARITY = 0.25
 HUBER_K = 1.5
 ROBUST_ITERS = 10
 
@@ -71,6 +86,9 @@ class SweepSample:
     half_range_deg: float = LOCAL_HALF_RANGE_DEG
     capture_duration_s: float = 0.0
     capture_mid_epoch: float = 0.0
+    frames_combined: int = 1
+    centroid_spread_px: float = 0.0
+    quality_weight: float = 1.0
 
 
 def _four_sweeps(role: str, amplitude: float, order: tuple[tuple[int, int], ...]):
@@ -142,7 +160,78 @@ def _return_to_absolute_start(initial_az: float, initial_alt: float) -> dict:
 
 def _capture_valid_cm():
     frame = foco.capture_frame(foco.EXPOSURE_SECONDS, light=True)
-    return frame, foco.centro_massa(frame)
+    cm = foco.centro_massa(frame)
+    selected = (foco.get_focus_debug().get("selected") or {}).copy()
+    return frame, cm, selected
+
+
+def _frame_quality(selected: dict) -> float:
+    """Peso da identidade da ilha; zero descarta um candidato duvidoso."""
+    similarity = selected.get("similarity_primary")
+    if similarity is None:
+        return 1.0
+    try:
+        similarity = float(similarity)
+    except (TypeError, ValueError):
+        return 0.0
+    if not np.isfinite(similarity) or similarity < MIN_CALIBRATION_SIMILARITY:
+        return 0.0
+    return float(np.clip(similarity, MIN_CALIBRATION_SIMILARITY, 1.0))
+
+
+def _centroid_from_stacked_frames(
+    frames: list[np.ndarray],
+    centers: np.ndarray,
+    frame_weights: np.ndarray | None = None,
+) -> tuple[float, float]:
+    """Mede o CM da soma curta sem misturar regioes distantes da ROI."""
+    if not frames or centers.shape != (len(frames), 2):
+        raise ValueError("Frames e centros invalidos para integracao curta.")
+    shape = frames[0].shape
+    if len(shape) != 2 or any(frame.shape != shape for frame in frames):
+        raise ValueError("Todos os frames combinados precisam ter o mesmo tamanho.")
+
+    if frame_weights is None:
+        frame_weights = np.ones(len(frames), dtype=float)
+    frame_weights = np.asarray(frame_weights, dtype=float)
+    if frame_weights.shape != (len(frames),) or not np.all(np.isfinite(frame_weights)):
+        raise ValueError("Pesos invalidos para integracao curta.")
+    frame_weights = np.clip(frame_weights, 0.05, 1.0)
+
+    stacked = np.zeros(shape, dtype=np.float32)
+    for frame, weight in zip(frames, frame_weights):
+        stacked += np.asarray(frame, dtype=np.float32) * float(weight)
+    stacked /= float(np.sum(frame_weights))
+
+    expected_x, expected_y = np.median(centers, axis=0)
+    height, width = shape
+    radius = int(TEMPORAL_APERTURE_RADIUS_PX)
+    x0 = max(0, int(np.floor(expected_x - radius)))
+    x1 = min(width, int(np.ceil(expected_x + radius + 1)))
+    y0 = max(0, int(np.floor(expected_y - radius)))
+    y1 = min(height, int(np.ceil(expected_y + radius + 1)))
+    local = stacked[y0:y1, x0:x1].copy()
+    if local.size == 0:
+        raise RuntimeError("Integracao curta produziu uma janela vazia.")
+
+    yy, xx = np.indices(local.shape, dtype=np.float32)
+    local_x = expected_x - x0
+    local_y = expected_y - y0
+    aperture = ((xx - local_x) ** 2 + (yy - local_y) ** 2) <= radius**2
+    pedestal = float(np.median(local[aperture])) if np.any(aperture) else 0.0
+    weights = np.clip(local - pedestal, 0.0, None)
+    weights[~aperture] = 0.0
+    peak = float(weights.max())
+    if peak <= 0.0:
+        raise RuntimeError("Sinal insuficiente na integracao curta.")
+    weights[weights < peak * TEMPORAL_MEAN_THRESHOLD_PERCENT] = 0.0
+    total = float(weights.sum())
+    if total <= 0.0:
+        raise RuntimeError("Centro de massa vazio na integracao curta.")
+    return (
+        float(x0 + (xx * weights).sum() / total),
+        float(y0 + (yy * weights).sum() / total),
+    )
 
 
 def _baseline_anchor(signature: dict, expected_x: float, expected_y: float):
@@ -151,23 +240,136 @@ def _baseline_anchor(signature: dict, expected_x: float, expected_y: float):
         max_jump_px=TRACKER_MAX_SPOT_JUMP_PX,
     ):
         raise RuntimeError("Nao consegui inicializar a assinatura da luz.")
-    xs, ys = [], []
+    frames, centers, weights = [], [], []
+    first_valid_t = None
     deadline = time.perf_counter() + 5.0
-    while len(xs) < BASELINE_VALID_FRAMES and time.perf_counter() < deadline:
-        _, cm = _capture_valid_cm()
-        if cm is not None and not cm[3]:
-            xs.append(float(cm[0]))
-            ys.append(float(cm[1]))
-    if len(xs) < BASELINE_VALID_FRAMES:
-        raise RuntimeError(f"Baseline insuficiente: {len(xs)}/{BASELINE_VALID_FRAMES} frames validos.")
-    anchor = float(np.median(xs)), float(np.median(ys))
+    while time.perf_counter() < deadline:
+        frame, cm, selected = _capture_valid_cm()
+        quality = _frame_quality(selected)
+        if cm is not None and not cm[3] and quality > 0.0:
+            now = time.perf_counter()
+            first_valid_t = now if first_valid_t is None else first_valid_t
+            frames.append(np.ascontiguousarray(frame, dtype=np.uint8).copy())
+            centers.append((float(cm[0]), float(cm[1])))
+            weights.append(quality)
+            if (
+                len(frames) >= BASELINE_VALID_FRAMES
+                and now - first_valid_t >= BASELINE_WINDOW_SECONDS
+            ):
+                break
+    if len(frames) < BASELINE_VALID_FRAMES:
+        raise RuntimeError(
+            f"Baseline insuficiente: {len(frames)}/{BASELINE_VALID_FRAMES} "
+            "frames validos."
+        )
+    anchor = _centroid_from_stacked_frames(
+        frames,
+        np.asarray(centers, dtype=float),
+        np.asarray(weights, dtype=float),
+    )
     foco.set_focus_expected_position(*anchor, max_jump_px=TRACKER_MAX_SPOT_JUMP_PX)
     return anchor
 
 
+def _aggregate_sweep_frames(
+    captures: list[tuple[SweepSample, np.ndarray, float]],
+) -> list[SweepSample]:
+    """Combina frames que representam praticamente o mesmo angulo do mount."""
+    if not captures:
+        return []
+    first_sample = captures[0][0]
+    active_values = np.asarray(
+        [
+            sample.delta_az_deg if sample.axis == 0 else sample.delta_alt_deg
+            for sample, _, _ in captures
+        ],
+        dtype=float,
+    )
+    origin = float(np.min(active_values))
+    bin_ids = np.floor(
+        (active_values - origin + 1e-12) / ANGLE_BIN_WIDTH_DEG
+    ).astype(int)
+
+    aggregated = []
+    for bin_id in np.unique(bin_ids):
+        indices = np.flatnonzero(bin_ids == bin_id)
+        if len(indices) < MIN_FRAMES_PER_ANGLE_BIN:
+            continue
+        group = [captures[int(index)] for index in indices]
+        samples = [item[0] for item in group]
+        frames = [item[1] for item in group]
+        frame_weights = np.asarray([item[2] for item in group], dtype=float)
+        centers = np.asarray([[sample.x_px, sample.y_px] for sample in samples])
+        x_px, y_px = _centroid_from_stacked_frames(
+            frames,
+            centers,
+            frame_weights,
+        )
+        robust_center = np.median(centers, axis=0)
+        radial = np.linalg.norm(centers - robust_center, axis=1)
+        spread = float(np.percentile(radial, 90.0))
+        frames_combined = len(samples)
+        quality_weight = float(
+            frames_combined / max(spread * spread, 0.25)
+        )
+
+        def median(field: str) -> float:
+            return float(np.median([getattr(sample, field) for sample in samples]))
+
+        aggregated.append(
+            SweepSample(
+                run=first_sample.run,
+                axis=first_sample.axis,
+                command_sign=first_sample.command_sign,
+                elapsed_s=median("elapsed_s"),
+                az_deg=median("az_deg"),
+                alt_deg=median("alt_deg"),
+                delta_az_deg=median("delta_az_deg"),
+                delta_alt_deg=median("delta_alt_deg"),
+                x_px=x_px,
+                y_px=y_px,
+                role=first_sample.role,
+                half_range_deg=first_sample.half_range_deg,
+                capture_duration_s=median("capture_duration_s"),
+                capture_mid_epoch=median("capture_mid_epoch"),
+                frames_combined=frames_combined,
+                centroid_spread_px=spread,
+                quality_weight=quality_weight,
+            )
+        )
+    return aggregated
+
+
+def _validate_sweep_aggregation(samples: list[SweepSample], run_name: str) -> dict:
+    if len(samples) < MIN_VALID_SWEEP_BINS:
+        raise RuntimeError(
+            f"{run_name}: somente {len(samples)} bins angulares validos; "
+            f"minimo={MIN_VALID_SWEEP_BINS}. Verifique FPS e sinal."
+        )
+    spreads = np.asarray([sample.centroid_spread_px for sample in samples])
+    median_spread = float(np.median(spreads))
+    p90_spread = float(np.percentile(spreads, 90.0))
+    if (
+        median_spread > MAX_MEDIAN_BIN_SPREAD_PX
+        or p90_spread > MAX_P90_BIN_SPREAD_PX
+    ):
+        raise RuntimeError(
+            f"{run_name}: dispersao optica excessiva nos bins "
+            f"(mediana={median_spread:.2f}px; p90={p90_spread:.2f}px)."
+        )
+    return {
+        "bin_count": len(samples),
+        "median_frames_per_bin": float(
+            np.median([sample.frames_combined for sample in samples])
+        ),
+        "median_centroid_spread_px": median_spread,
+        "p90_centroid_spread_px": p90_spread,
+    }
+
+
 def _run_one_sweep(*, spec: SweepSpec, initial_az: float, initial_alt: float, signature: dict, center_anchor):
     center_anchor = _baseline_anchor(signature, *center_anchor)
-    samples: list[SweepSample] = []
+    captures: list[tuple[SweepSample, np.ndarray, float]] = []
     started = time.perf_counter()
     started_epoch = time.time()
     last_valid, last_print = started, 0.0
@@ -185,7 +387,7 @@ def _run_one_sweep(*, spec: SweepSpec, initial_az: float, initial_alt: float, si
                 raise RuntimeError(f"Tempo limite na varredura {spec.name}.")
             az_before, alt_before = read_altaz()
             capture_started = time.perf_counter()
-            _, cm = _capture_valid_cm()
+            frame, cm, selected = _capture_valid_cm()
             capture_finished = time.perf_counter()
             az_after, alt_after = read_altaz()
             before = _offsets_from_start(initial_az, initial_alt, az_before, alt_before)
@@ -197,41 +399,57 @@ def _run_one_sweep(*, spec: SweepSpec, initial_az: float, initial_alt: float, si
                 raise RuntimeError(f"Watchdog: {spec.name} excedeu {hard_limit:.3f} deg.")
             if abs(other) > OTHER_AXIS_LIMIT_DEG:
                 raise RuntimeError(f"Watchdog: outro eixo derivou {other:+.4f} deg.")
-            if cm is not None and not cm[3]:
+            quality = _frame_quality(selected)
+            if cm is not None and not cm[3] and quality > 0.0:
                 last_valid = time.perf_counter()
                 capture_mid = 0.5 * (capture_started + capture_finished)
-                samples.append(SweepSample(
+                sample = SweepSample(
                     spec.name, spec.axis, spec.command_sign, capture_mid - started,
                     0.5 * (az_before + az_after), 0.5 * (alt_before + alt_after),
                     daz, dalt, float(cm[0]), float(cm[1]), spec.role,
                     spec.half_range_deg, capture_finished - capture_started,
                     started_epoch + capture_mid - started,
-                ))
+                )
+                captures.append(
+                    (
+                        sample,
+                        np.ascontiguousarray(frame, dtype=np.uint8).copy(),
+                        quality,
+                    )
+                )
             elif cm is not None and cm[3]:
                 raise RuntimeError(f"A luz tocou a borda durante {spec.name}.")
             if time.perf_counter() - last_valid > SIGNAL_LOSS_TIMEOUT_S:
                 raise RuntimeError(f"Luz perdida por mais de {SIGNAL_LOSS_TIMEOUT_S:.1f}s.")
             if loop_t - last_print >= 0.5:
                 cm_text = "sem sinal" if cm is None else f"CM=({cm[0]:.1f},{cm[1]:.1f})"
-                print(f"  offset={active:+.5f} deg | {cm_text} | validos={len(samples)}")
+                print(f"  offset={active:+.5f} deg | {cm_text} | validos={len(captures)}")
                 last_print = loop_t
             if abs(active) >= spec.half_range_deg:
                 break
     finally:
         stop_axes_safely()
     minimum = max(MIN_VALID_SWEEP_SAMPLES, int(spec.half_range_deg / SWEEP_RATE_DEG_S * 5))
-    if len(samples) < minimum:
-        raise RuntimeError(f"{spec.name}: somente {len(samples)} amostras; minimo={minimum}.")
+    if len(captures) < minimum:
+        raise RuntimeError(f"{spec.name}: somente {len(captures)} amostras; minimo={minimum}.")
+    raw_samples = [item[0] for item in captures]
+    samples = _aggregate_sweep_frames(captures)
+    aggregation = _validate_sweep_aggregation(samples, spec.name)
     values = np.array([s.delta_az_deg if spec.axis == 0 else s.delta_alt_deg for s in samples])
     span = float(np.ptp(values))
     if span < max(0.003, 0.65 * spec.half_range_deg):
         raise RuntimeError(f"{spec.name}: amplitude medida insuficiente ({span:.5f} deg).")
-    print(f"  concluida: {len(samples)} amostras, amplitude medida={span:.5f} deg.")
-    return samples, center_anchor
+    print(
+        f"  concluida: {len(raw_samples)} frames -> {len(samples)} bins | "
+        f"{aggregation['median_frames_per_bin']:.1f} frames/bin | "
+        f"dispersao mediana={aggregation['median_centroid_spread_px']:.2f}px | "
+        f"amplitude={span:.5f} deg."
+    )
+    return samples, center_anchor, raw_samples, aggregation
 
 
-def _center_runs(runs: list[list[SweepSample]]):
-    design_parts, pixel_parts = [], []
+def _center_runs(runs: list[list[SweepSample]], *, include_weights: bool = False):
+    design_parts, pixel_parts, weight_parts = [], [], []
     for samples in runs:
         if not samples:
             continue
@@ -239,23 +457,49 @@ def _center_runs(runs: list[list[SweepSample]]):
         pixels = np.array([[s.x_px, s.y_px] for s in samples], dtype=float)
         design_parts.append(design - np.median(design, axis=0))
         pixel_parts.append(pixels - np.median(pixels, axis=0))
+        weight_parts.append(
+            np.asarray([max(float(s.quality_weight), 1e-6) for s in samples])
+        )
     if not design_parts:
         raise RuntimeError("Nenhuma varredura valida para o ajuste.")
-    return np.vstack(design_parts), np.vstack(pixel_parts)
+    result = np.vstack(design_parts), np.vstack(pixel_parts)
+    if include_weights:
+        return *result, np.concatenate(weight_parts)
+    return result
 
 
-def _robust_fit(design: np.ndarray, pixels: np.ndarray) -> dict:
+def _robust_fit(
+    design: np.ndarray,
+    pixels: np.ndarray,
+    base_weights: np.ndarray | None = None,
+) -> dict:
     if design.ndim != 2 or design.shape[1] != 2 or pixels.shape != design.shape:
         raise ValueError("Dados do ajuste precisam ter formato Nx2.")
-    weights = np.ones(design.shape[0])
-    beta = np.linalg.lstsq(design, pixels, rcond=None)[0]
+    if base_weights is None:
+        base_weights = np.ones(design.shape[0])
+    base_weights = np.asarray(base_weights, dtype=float)
+    if base_weights.shape != (design.shape[0],) or not np.all(np.isfinite(base_weights)):
+        raise ValueError("Pesos de qualidade invalidos para o ajuste.")
+    positive = base_weights[base_weights > 0]
+    if positive.size == 0:
+        raise ValueError("O ajuste nao recebeu pesos de qualidade positivos.")
+    base_weights = base_weights / float(np.median(positive))
+    base_weights = np.clip(base_weights, 0.1, 10.0)
+    weights = base_weights.copy()
+    root_w = np.sqrt(weights)[:, None]
+    beta = np.linalg.lstsq(design * root_w, pixels * root_w, rcond=None)[0]
     for _ in range(ROBUST_ITERS):
         root_w = np.sqrt(np.clip(weights, 1e-6, None))[:, None]
         beta = np.linalg.lstsq(design * root_w, pixels * root_w, rcond=None)[0]
         residual = np.linalg.norm(pixels - design @ beta, axis=1)
         scale = max(1.4826 * float(np.median(np.abs(residual - np.median(residual)))), 0.25)
         cutoff = HUBER_K * scale
-        weights = np.where(residual <= cutoff, 1.0, cutoff / np.maximum(residual, 1e-9))
+        robust_weights = np.where(
+            residual <= cutoff,
+            1.0,
+            cutoff / np.maximum(residual, 1e-9),
+        )
+        weights = base_weights * robust_weights
     residual = np.linalg.norm(pixels - design @ beta, axis=1)
     A = beta.T
     condition = float(np.linalg.cond(A))
@@ -276,12 +520,23 @@ def _direction_slope(samples: list[SweepSample], axis: int) -> np.ndarray:
     denom = float(d @ d)
     if denom <= 1e-10:
         raise RuntimeError("Trajetoria sem variacao angular suficiente.")
-    slope = (d[:, None] * p).sum(axis=0) / denom
+    base_weights = np.asarray(
+        [max(float(sample.quality_weight), 1e-6) for sample in samples]
+    )
+    base_weights /= float(np.median(base_weights))
+    base_weights = np.clip(base_weights, 0.1, 10.0)
+    slope = np.sum((base_weights * d)[:, None] * p, axis=0) / float(
+        np.sum(base_weights * d * d)
+    )
     for _ in range(6):
         residual = np.linalg.norm(p - d[:, None] * slope, axis=1)
         scale = max(1.4826 * float(np.median(np.abs(residual - np.median(residual)))), 0.25)
         cutoff = HUBER_K * scale
-        weights = np.where(residual <= cutoff, 1.0, cutoff / np.maximum(residual, 1e-9))
+        weights = base_weights * np.where(
+            residual <= cutoff,
+            1.0,
+            cutoff / np.maximum(residual, 1e-9),
+        )
         slope = np.sum((weights * d)[:, None] * p, axis=0) / float(np.sum(weights * d * d))
     return slope
 
@@ -413,7 +668,7 @@ def main(profile_name: str | None = None) -> None:
     matrix_dir.mkdir(parents=True, exist_ok=True)
     initial_position = None
     connected = promoted = False
-    all_runs, failed_optional = [], []
+    all_runs, all_frame_runs, aggregation_stats, failed_optional = [], [], [], []
     summary = {"started_epoch": time.time(), "status": "iniciado", "run_dir": display_path(run_dir),
                "backend": backend_name(), "profile": profile.name,
                "profile_description": profile.description, "trajectory": [asdict(s) for s in profile.specs]}
@@ -440,7 +695,10 @@ def main(profile_name: str | None = None) -> None:
                        target_full_px=[selection["x_px"], selection["y_px"]],
                        target_local_px=list(target_local), sweep_rate_deg_s=SWEEP_RATE_DEG_S,
                        local_half_range_deg=LOCAL_HALF_RANGE_DEG, wide_half_range_deg=WIDE_HALF_RANGE_DEG,
-                       exposure_seconds=foco.EXPOSURE_SECONDS, gain=foco.CAMERA_GAIN)
+                       exposure_seconds=foco.EXPOSURE_SECONDS, gain=foco.CAMERA_GAIN,
+                       exposure_strategy="fixed_during_calibration",
+                       baseline_valid_frames=BASELINE_VALID_FRAMES,
+                       baseline_window_seconds=BASELINE_WINDOW_SECONDS)
         print(f"\nCalibracao continua {profile.name} | camera={backend_name()} | ROI={actual_w}x{actual_h}")
         print(profile.description)
         print("Ctrl+C para parar os eixos e retornar a posicao absoluta inicial.")
@@ -450,11 +708,13 @@ def main(profile_name: str | None = None) -> None:
             if not returned["success"]:
                 raise RuntimeError(f"Retorno antes de {spec.name} falhou: {returned}")
             try:
-                samples, center_anchor = _run_one_sweep(
+                samples, center_anchor, raw_samples, aggregation = _run_one_sweep(
                     spec=spec, initial_az=initial_az, initial_alt=initial_alt,
                     signature=selection["signature"], center_anchor=center_anchor,
                 )
                 all_runs.append(samples)
+                all_frame_runs.append(raw_samples)
+                aggregation_stats.append({"run": spec.name, **aggregation})
             except Exception as exc:
                 if spec.role != "holdout_amplo":
                     raise
@@ -467,21 +727,46 @@ def main(profile_name: str | None = None) -> None:
         fit_runs = [r for r in all_runs if r[0].role == "fit"]
         local_runs = [r for r in all_runs if r[0].role == "holdout_local"]
         wide_runs = [r for r in all_runs if r[0].role == "holdout_amplo"]
-        fit = _robust_fit(*_center_runs(fit_runs))
+        fit = _robust_fit(*_center_runs(fit_runs, include_weights=True))
         fit_validation = _validate_fit(fit_runs, fit)
         local_validation = (_validate_holdout(local_runs, fit, label="holdout_local")
                             if profile.requires_holdout else {"ok": True, "not_independent": True})
         wide_validation = _validate_holdout(wide_runs, fit, label="holdout_amplo")
         activation_ok = bool(fit_validation["ok"] and local_validation["ok"])
         capture_times = np.array(
-            [sample.capture_duration_s for run in all_runs for sample in run],
+            [sample.capture_duration_s for run in all_frame_runs for sample in run],
             dtype=float,
         )
+        frame_rates = []
+        for run in all_frame_runs:
+            if len(run) >= 2:
+                duration = run[-1].elapsed_s - run[0].elapsed_s
+                if duration > 0:
+                    frame_rates.append((len(run) - 1) / duration)
+        spreads = np.asarray(
+            [sample.centroid_spread_px for run in all_runs for sample in run],
+            dtype=float,
+        )
+        frames_per_bin = np.asarray(
+            [sample.frames_combined for run in all_runs for sample in run],
+            dtype=float,
+        )
+        _write_csv(run_dir / "amostras_frames.csv", all_frame_runs)
         _write_csv(run_dir / "amostras.csv", all_runs)
         np.save(run_dir / "A_continua.npy", fit["A"])
         np.save(run_dir / "A_inv_continua.npy", fit["A_inv"])
         summary.update(status="validada" if activation_ok else "rejeitada", finished_epoch=time.time(),
                        sample_count=sum(map(len, all_runs)), fit_sample_count=sum(map(len, fit_runs)),
+                       raw_frame_sample_count=sum(map(len, all_frame_runs)),
+                       angular_aggregation={
+                           "bin_width_deg": ANGLE_BIN_WIDTH_DEG,
+                           "minimum_frames_per_bin": MIN_FRAMES_PER_ANGLE_BIN,
+                           "minimum_valid_bins_per_sweep": MIN_VALID_SWEEP_BINS,
+                           "median_frames_per_bin": float(np.median(frames_per_bin)),
+                           "median_centroid_spread_px": float(np.median(spreads)),
+                           "p90_centroid_spread_px": float(np.percentile(spreads, 90)),
+                           "sweeps": aggregation_stats,
+                       },
                        A=fit["A"].tolist(), A_inv=fit["A_inv"].tolist(),
                        rms_residual_px=fit["rms_residual_px"], median_residual_px=fit["median_residual_px"],
                        max_residual_px=fit["max_residual_px"], condition_number=fit["condition_number"],
@@ -490,12 +775,19 @@ def main(profile_name: str | None = None) -> None:
                        capture_mean_ms=float(1000.0 * np.mean(capture_times)),
                        capture_p95_ms=float(1000.0 * np.percentile(capture_times, 95)),
                        capture_rate_hz=float(1.0 / max(np.mean(capture_times), 1e-9)),
+                       sweep_sample_rate_hz=float(np.median(frame_rates)),
                        validated_half_range_deg=WIDE_HALF_RANGE_DEG if wide_validation.get("ok") else LOCAL_HALF_RANGE_DEG,
                        return_to_start=returned)
         print(f"\nA =\n{fit['A']}")
-        print(f"RMS ajuste={fit['rms_residual_px']:.2f}px | cond={fit['condition_number']:.2f} | amostras={summary['sample_count']}")
         print(
-            f"Captura={summary['capture_rate_hz']:.1f} Hz | "
+            f"RMS ajuste={fit['rms_residual_px']:.2f}px | "
+            f"cond={fit['condition_number']:.2f} | "
+            f"frames={summary['raw_frame_sample_count']} -> "
+            f"bins={summary['sample_count']}"
+        )
+        print(
+            f"Sweep={summary['sweep_sample_rate_hz']:.1f} Hz | "
+            f"captura isolada={summary['capture_rate_hz']:.1f} Hz | "
             f"media={summary['capture_mean_ms']:.1f} ms | p95={summary['capture_p95_ms']:.1f} ms"
         )
         if profile.requires_holdout:
@@ -530,6 +822,7 @@ def main(profile_name: str | None = None) -> None:
                         "fit_validation": fit_validation,
                         "local_holdout_validation": local_validation,
                         "wide_validation": wide_validation,
+                        "angular_aggregation": summary["angular_aggregation"],
                     },
                 )
                 summary.update(

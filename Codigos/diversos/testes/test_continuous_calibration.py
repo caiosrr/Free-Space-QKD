@@ -14,6 +14,14 @@ from modulos.calibracao import calibracao_continua_core as continuous
 
 class ContinuousCalibrationTests(unittest.TestCase):
     @staticmethod
+    def _spot_frame(x_px, y_px, size=96):
+        yy, xx = np.indices((size, size), dtype=np.float32)
+        spot = np.exp(
+            -((xx - x_px) ** 2 + (yy - y_px) ** 2) / (2.0 * 2.5**2)
+        )
+        return np.clip(spot * 255.0, 0, 255).astype(np.uint8)
+
+    @staticmethod
     def _synthetic_runs(A, noise=0.35, reverse_bad_axis=None):
         rng = np.random.default_rng(1234)
         runs = []
@@ -118,6 +126,68 @@ class ContinuousCalibrationTests(unittest.TestCase):
                 if spec.role == "holdout_amplo"
             )
         )
+
+    def test_angle_bins_stack_short_exposures_before_fitting(self):
+        captures = []
+        slope_px_per_deg = 5000.0
+        rng = np.random.default_rng(42)
+        for bin_index in range(20):
+            for frame_index in range(4):
+                active = (
+                    bin_index * continuous.ANGLE_BIN_WIDTH_DEG
+                    + frame_index * 1e-6
+                )
+                true_x = 32.0 + slope_px_per_deg * active
+                jitter_x, jitter_y = rng.normal(0.0, 0.8, size=2)
+                x_px = true_x + jitter_x
+                y_px = 40.0 + jitter_y
+                sample = continuous.SweepSample(
+                    run="az_pos",
+                    axis=0,
+                    command_sign=1,
+                    elapsed_s=len(captures) * 0.02,
+                    az_deg=10.0 + active,
+                    alt_deg=20.0,
+                    delta_az_deg=active,
+                    delta_alt_deg=0.0,
+                    x_px=x_px,
+                    y_px=y_px,
+                )
+                captures.append(
+                    (sample, self._spot_frame(x_px, y_px), 1.0)
+                )
+
+        aggregated = continuous._aggregate_sweep_frames(captures)
+        quality = continuous._validate_sweep_aggregation(aggregated, "az_pos")
+        angles = np.asarray([sample.delta_az_deg for sample in aggregated])
+        positions = np.asarray([sample.x_px for sample in aggregated])
+        recovered_slope = np.polyfit(angles, positions, 1)[0]
+
+        self.assertEqual(len(aggregated), 20)
+        self.assertEqual(quality["median_frames_per_bin"], 4.0)
+        self.assertLess(quality["median_centroid_spread_px"], 2.0)
+        self.assertAlmostEqual(recovered_slope, slope_px_per_deg, delta=120.0)
+
+    def test_excessive_within_bin_motion_rejects_sweep(self):
+        samples = [
+            continuous.SweepSample(
+                run="turbulento",
+                axis=0,
+                command_sign=1,
+                elapsed_s=index * 0.1,
+                az_deg=10.0,
+                alt_deg=20.0,
+                delta_az_deg=index * continuous.ANGLE_BIN_WIDTH_DEG,
+                delta_alt_deg=0.0,
+                x_px=40.0,
+                y_px=40.0,
+                frames_combined=4,
+                centroid_spread_px=6.0,
+            )
+            for index in range(continuous.MIN_VALID_SWEEP_BINS)
+        ]
+        with self.assertRaisesRegex(RuntimeError, "dispersao optica excessiva"):
+            continuous._validate_sweep_aggregation(samples, "turbulento")
 
 
 if __name__ == "__main__":
