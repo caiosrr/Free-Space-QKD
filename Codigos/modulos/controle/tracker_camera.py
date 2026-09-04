@@ -431,6 +431,11 @@ def capture_frame(exposure_seconds: float) -> np.ndarray:
     return norm
 
 
+def latest_raw_frame() -> np.ndarray | None:
+    """Retorna o frame bruto sincronizado com a ultima imagem normalizada."""
+    return LAST_RAW_TRACKER_FRAME
+
+
 
 def current_roi_size(default_size: int) -> tuple[int, int]:
     """Retorna o tamanho realmente aplicado, inclusive alinhamento da IDS."""

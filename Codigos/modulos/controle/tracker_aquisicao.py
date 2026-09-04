@@ -7,6 +7,7 @@ import numpy as np
 
 from modulos.artefatos import display_path
 from modulos.configuracoes.tracker import (
+    AUTO_EXPOSURE_ENABLED,
     BORDER_CONFIRM_SECONDS,
     BORDER_MIN_PEAK_RATIO,
     BORDER_MIN_SIGNATURE_SIMILARITY,
@@ -14,8 +15,14 @@ from modulos.configuracoes.tracker import (
     TEMPORAL_RECOVERY_VALID_FRAMES,
     TEMPORAL_RESET_AFTER_LOSS_SECONDS,
 )
-from modulos.controle.tracker_camera import EXPOSURE_SECONDS, capture_frame
+from modulos.controle.cameras.backend import backend_name
+from modulos.controle.tracker_camera import (
+    EXPOSURE_SECONDS,
+    capture_frame,
+    latest_raw_frame,
+)
 from modulos.controle.tracker_estado import TrackerState
+from modulos.controle.tracker_exposicao import AutoExposureController
 from modulos.controle.tracker_interface import TrackerDisplay, tracking_status
 from modulos.controle.tracker_medicao import TemporalFrameEstimator, measurement_quality
 from modulos.controle.tracker_qualidade import OpticalQualityGate
@@ -93,6 +100,13 @@ def executar_aquisicao(
     estimator = TemporalFrameEstimator()
     focus_signature = foco.get_focus_signature() or {}
     quality_gate = OpticalQualityGate(focus_signature.get("primary"))
+    exposure_controller = AutoExposureController(
+        EXPOSURE_SECONDS * 1e6,
+        enabled=AUTO_EXPOSURE_ENABLED and backend_name() == "ids",
+        started_at=session_started,
+    )
+    current_exposure_us = exposure_controller.current_exposure_us
+    exposure_adjustments = 0
     last_trusted_center = (float(target_x), float(target_y))
     last_measurement_t = 0.0
     measurement_hz = 0.0
@@ -106,7 +120,7 @@ def executar_aquisicao(
     last_frame = None
 
     while True:
-        frame = capture_frame(EXPOSURE_SECONDS)
+        frame = capture_frame(current_exposure_us * 1e-6)
         last_frame = frame
         now = time.perf_counter()
 
@@ -130,6 +144,25 @@ def executar_aquisicao(
         border_persistence_s = border_guard.observe(now, plausible_border)
         quality = quality_gate.observe(now, selected if candidate_valid else None)
         instant_valid = candidate_valid and quality.accepted
+        raw_exposure_frame = latest_raw_frame()
+        exposure_decision = exposure_controller.observe(
+            now,
+            raw_exposure_frame if raw_exposure_frame is not None else frame,
+            target_peak=target_raw_peak,
+            trusted_target=instant_valid,
+        )
+        exposure_event = ""
+        if exposure_decision.changed:
+            previous_exposure_us = current_exposure_us
+            current_exposure_us = exposure_decision.exposure_us
+            exposure_adjustments += 1
+            exposure_event = f"autoexposicao_{exposure_decision.reason}"
+            print(
+                f"\nAutoexposicao: {previous_exposure_us:.0f} -> "
+                f"{current_exposure_us:.0f} us | "
+                f"pico={exposure_decision.peak_median or 0.0:.1f} | "
+                f"fundo={exposure_decision.background_percentile:.1f}"
+            )
         if candidate_valid:
             if quality.accepted:
                 last_trusted_center = (float(instant_center[0]), float(instant_center[1]))
@@ -202,6 +235,17 @@ def executar_aquisicao(
             state.temporal_window_s = estimator.window_span_s
             state.recovery_valid_frames = recovery_valid_frames
             state.signal_lost_s = signal_lost_s
+            state.exposure_us = current_exposure_us
+            state.auto_exposure_enabled = exposure_controller.enabled
+            state.auto_exposure_reason = exposure_decision.reason
+            state.auto_exposure_peak_median = exposure_decision.peak_median
+            state.auto_exposure_background = (
+                exposure_decision.background_percentile
+            )
+            state.auto_exposure_saturation_fraction = (
+                exposure_decision.saturation_fraction
+            )
+            state.auto_exposure_adjustments = exposure_adjustments
             state.target_raw_peak = (
                 None if target_raw_peak is None else float(target_raw_peak)
             )
@@ -231,7 +275,7 @@ def executar_aquisicao(
             measurement_valid=measurement_valid,
         )
 
-        event = values["safety_stop_reason"] or quality.event
+        event = values["safety_stop_reason"] or quality.event or exposure_event
         if quality.event:
             if quality.event != "anomalia_optica_recuperada":
                 logger.save_event_frame(frame, quality.event)

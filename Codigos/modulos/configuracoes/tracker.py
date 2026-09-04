@@ -64,6 +64,25 @@ TEMPORAL_MEAN_THRESHOLD_PERCENT = 0.20
 # o mount ultrapasse o alvo enquanto o erro medio ainda reflete o passado.
 TEMPORAL_CONTROL_GAIN_SCALE = 0.35
 
+# Autoexposicao conservadora. O ganho permanece fixo; a exposicao muda devagar
+# usando apenas a ilha travada. O fundo da borda da ROI pode forcar uma reducao
+# mesmo durante perda de sinal, evitando saturacao no amanhecer.
+AUTO_EXPOSURE_ENABLED = True
+AUTO_EXPOSURE_MIN_US = 1000.0
+AUTO_EXPOSURE_MAX_US = 18000.0
+AUTO_EXPOSURE_TARGET_LOW = 120.0
+AUTO_EXPOSURE_TARGET_HIGH = 190.0
+AUTO_EXPOSURE_TARGET_CENTER = 155.0
+AUTO_EXPOSURE_UPDATE_SECONDS = 5.0
+AUTO_EXPOSURE_HISTORY_SECONDS = 2.0
+AUTO_EXPOSURE_MIN_SAMPLES = 8
+AUTO_EXPOSURE_MAX_STEP_FRACTION = 0.10
+AUTO_EXPOSURE_BACKGROUND_PERCENTILE = 99.0
+AUTO_EXPOSURE_BACKGROUND_HIGH = 200.0
+AUTO_EXPOSURE_BACKGROUND_INCREASE_LIMIT = 160.0
+AUTO_EXPOSURE_SATURATION_LEVEL = 250
+AUTO_EXPOSURE_SATURATION_FRACTION = 0.002
+
 # Trava de qualidade optica. Antes de entrar na media temporal, cada ilha e
 # comparada com a mediana recente dos periodos estaveis. Mudancas graduais
 # atualizam a referencia; saltos grandes de intensidade, area ou forma param o
@@ -155,6 +174,22 @@ if TEMPORAL_MIN_VALID_FRAMES < 2 or TEMPORAL_RECOVERY_VALID_FRAMES < 2:
     raise ValueError("A media e a recuperacao precisam de mais de um frame.")
 if not 0 < TEMPORAL_CONTROL_GAIN_SCALE <= 1:
     raise ValueError("A escala de ganho temporal deve estar em (0, 1].")
+if not (
+    0 < AUTO_EXPOSURE_MIN_US < AUTO_EXPOSURE_MAX_US
+    and 0 < AUTO_EXPOSURE_TARGET_LOW
+    < AUTO_EXPOSURE_TARGET_CENTER
+    < AUTO_EXPOSURE_TARGET_HIGH
+    < 255
+    and AUTO_EXPOSURE_UPDATE_SECONDS >= AUTO_EXPOSURE_HISTORY_SECONDS > 0
+    and AUTO_EXPOSURE_MIN_SAMPLES >= 2
+    and 0 < AUTO_EXPOSURE_MAX_STEP_FRACTION < 1
+    and 0 < AUTO_EXPOSURE_BACKGROUND_INCREASE_LIMIT
+    < AUTO_EXPOSURE_BACKGROUND_HIGH
+    < 255
+    and 0 < AUTO_EXPOSURE_SATURATION_LEVEL <= 255
+    and 0 < AUTO_EXPOSURE_SATURATION_FRACTION < 1
+):
+    raise ValueError("Os limites da autoexposicao sao invalidos.")
 if not 0 < OPTICAL_INITIAL_STABLE_SECONDS <= OPTICAL_BASELINE_WINDOW_SECONDS:
     raise ValueError("O aquecimento optico precisa caber na janela de referencia.")
 if OPTICAL_RECOVERY_STABLE_SECONDS < TEMPORAL_WINDOW_SECONDS:

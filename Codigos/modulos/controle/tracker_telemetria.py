@@ -12,6 +12,18 @@ import numpy as np
 
 from modulos.artefatos import display_path
 from modulos.configuracoes.tracker import (
+    AUTO_EXPOSURE_BACKGROUND_HIGH,
+    AUTO_EXPOSURE_BACKGROUND_INCREASE_LIMIT,
+    AUTO_EXPOSURE_ENABLED,
+    AUTO_EXPOSURE_HISTORY_SECONDS,
+    AUTO_EXPOSURE_MAX_STEP_FRACTION,
+    AUTO_EXPOSURE_MAX_US,
+    AUTO_EXPOSURE_MIN_US,
+    AUTO_EXPOSURE_SATURATION_FRACTION,
+    AUTO_EXPOSURE_TARGET_CENTER,
+    AUTO_EXPOSURE_TARGET_HIGH,
+    AUTO_EXPOSURE_TARGET_LOW,
+    AUTO_EXPOSURE_UPDATE_SECONDS,
     BORDER_CONFIRM_SECONDS,
     BORDER_MIN_PEAK_RATIO,
     BORDER_MIN_SIGNATURE_SIMILARITY,
@@ -52,7 +64,10 @@ class TrackerCsvLogger:
         "x_cm_px", "y_cm_px", "alvo_x_px", "alvo_y_px", "erro_x_px",
         "erro_y_px", "distancia_px", "erro_x_filtrado_px", "erro_y_filtrado_px",
         "frames_na_media", "janela_media_s", "frames_recuperacao",
-        "tempo_sem_sinal_s", "exposicao_us", "pico_bruto_alvo",
+        "tempo_sem_sinal_s", "exposicao_us", "auto_exposicao_ativa",
+        "motivo_autoexposicao", "pico_mediano_autoexposicao",
+        "fundo_percentil_autoexposicao", "fracao_saturada_autoexposicao",
+        "ajustes_autoexposicao", "pico_bruto_alvo",
         "intensidade_integrada_alvo",
         "outlier_temporal", "variancia_x_px2", "variancia_y_px2",
         "desvio_padrao_2d_px", "erro_az_deg", "erro_alt_deg",
@@ -88,6 +103,9 @@ class TrackerCsvLogger:
         self._event_frames_suppressed = 0
         self._last_event_frame_t = float("-inf")
         self._terminal_frame_path = None
+        self._exposure_min_us = float("inf")
+        self._exposure_max_us = float("-inf")
+        self._auto_exposure_adjustments = 0
         self._summary = {
             "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "initial_azimuth_deg": initial_az,
@@ -104,6 +122,28 @@ class TrackerCsvLogger:
                 SLOW_CORRECTION_PERSISTENCE_SECONDS
             ),
             "fast_correction_radius_px": FAST_CORRECTION_RADIUS_PX,
+            "auto_exposure_enabled": (
+                AUTO_EXPOSURE_ENABLED and backend_name() == "ids"
+            ),
+            "auto_exposure_range_us": [
+                AUTO_EXPOSURE_MIN_US,
+                AUTO_EXPOSURE_MAX_US,
+            ],
+            "auto_exposure_target_peak_range": [
+                AUTO_EXPOSURE_TARGET_LOW,
+                AUTO_EXPOSURE_TARGET_HIGH,
+            ],
+            "auto_exposure_target_peak_center": AUTO_EXPOSURE_TARGET_CENTER,
+            "auto_exposure_update_seconds": AUTO_EXPOSURE_UPDATE_SECONDS,
+            "auto_exposure_history_seconds": AUTO_EXPOSURE_HISTORY_SECONDS,
+            "auto_exposure_max_step_fraction": AUTO_EXPOSURE_MAX_STEP_FRACTION,
+            "auto_exposure_background_high": AUTO_EXPOSURE_BACKGROUND_HIGH,
+            "auto_exposure_background_increase_limit": (
+                AUTO_EXPOSURE_BACKGROUND_INCREASE_LIMIT
+            ),
+            "auto_exposure_saturation_fraction": (
+                AUTO_EXPOSURE_SATURATION_FRACTION
+            ),
             "temporal_window_seconds": TEMPORAL_WINDOW_SECONDS,
             "temporal_warmup_seconds": TEMPORAL_WARMUP_SECONDS,
             "temporal_recovery_valid_frames": TEMPORAL_RECOVERY_VALID_FRAMES,
@@ -171,6 +211,22 @@ class TrackerCsvLogger:
             "frames_recuperacao": int(state_values["recovery_valid_frames"]),
             "tempo_sem_sinal_s": number(state_values["signal_lost_s"], 3),
             "exposicao_us": number(state_values["exposure_us"], 1),
+            "auto_exposicao_ativa": int(
+                bool(state_values["auto_exposure_enabled"])
+            ),
+            "motivo_autoexposicao": state_values["auto_exposure_reason"],
+            "pico_mediano_autoexposicao": number(
+                state_values["auto_exposure_peak_median"], 2
+            ),
+            "fundo_percentil_autoexposicao": number(
+                state_values["auto_exposure_background"], 2
+            ),
+            "fracao_saturada_autoexposicao": number(
+                state_values["auto_exposure_saturation_fraction"], 6
+            ),
+            "ajustes_autoexposicao": int(
+                state_values["auto_exposure_adjustments"]
+            ),
             "pico_bruto_alvo": number(state_values["target_raw_peak"], 2),
             "intensidade_integrada_alvo": number(
                 state_values["target_raw_total"], 2
@@ -218,6 +274,14 @@ class TrackerCsvLogger:
             "tempo_borda_s": number(state_values["border_persistence_s"], 3),
             "evento_seguranca": event,
         }
+        exposure_us = state_values["exposure_us"]
+        if exposure_us is not None and np.isfinite(float(exposure_us)):
+            self._exposure_min_us = min(self._exposure_min_us, float(exposure_us))
+            self._exposure_max_us = max(self._exposure_max_us, float(exposure_us))
+        self._auto_exposure_adjustments = max(
+            self._auto_exposure_adjustments,
+            int(state_values["auto_exposure_adjustments"]),
+        )
         self._writer.writerow(row)
         self._last_write_t = now
         if event or (now - self._last_flush_t) >= CSV_FLUSH_SECONDS:
@@ -258,6 +322,12 @@ class TrackerCsvLogger:
         return path
 
     def close(self, *, reason, return_result=None):
+        exposure_range = None
+        if np.isfinite(self._exposure_min_us) and np.isfinite(self._exposure_max_us):
+            exposure_range = [
+                round(self._exposure_min_us, 1),
+                round(self._exposure_max_us, 1),
+            ]
         self._summary.update({
             "finished_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "finish_reason": reason,
@@ -265,6 +335,8 @@ class TrackerCsvLogger:
             "event_images_saved": self._event_frame_count,
             "event_images_suppressed": self._event_frames_suppressed,
             "terminal_event_frame": self._terminal_frame_path,
+            "auto_exposure_adjustments": self._auto_exposure_adjustments,
+            "exposure_used_range_us": exposure_range,
         })
         self.summary_path.write_text(
             json.dumps(self._summary, indent=2, ensure_ascii=False), encoding="utf-8"

@@ -18,6 +18,9 @@ if str(ROOT_DIR) not in sys.path:
 
 from modulos.artefatos import display_path, matrix_candidates
 from modulos.configuracoes.tracker import (
+    AUTO_EXPOSURE_ENABLED,
+    AUTO_EXPOSURE_MAX_US,
+    AUTO_EXPOSURE_MIN_US,
     FAST_CORRECTION_RADIUS_PX,
     HOLD_EXIT_RADIUS_PX,
     MAX_OFFSET_ALT_DEG,
@@ -160,6 +163,15 @@ def main() -> None:
             f"Controle: deriva >={HOLD_EXIT_RADIUS_PX:g} px por "
             f"{SLOW_CORRECTION_PERSISTENCE_SECONDS:.1f}s | resposta rapida >="
             f"{FAST_CORRECTION_RADIUS_PX:g} px"
+        )
+        print(
+            "Autoexposicao: "
+            + (
+                f"ativa ({AUTO_EXPOSURE_MIN_US:.0f}-"
+                f"{AUTO_EXPOSURE_MAX_US:.0f} us; ganho fixo)"
+                if AUTO_EXPOSURE_ENABLED and backend_name() == "ids"
+                else "desativada para este backend"
+            )
         )
         print(f"Calibracao continua: {matrix_path}")
         print(f"Posicao inicial: Az={initial_az:.6f} deg | Alt={initial_alt:.6f} deg")

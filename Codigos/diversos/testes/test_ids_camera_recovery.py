@@ -19,6 +19,7 @@ class IdsCameraRecoveryTests(unittest.TestCase):
         camera.acquisition_started = True
         camera.data_stream = object()
         camera.current_roi = (256, 256, 100, 200)
+        camera.current_exposure_us = 1000.0
         return camera
 
     def test_timeout_restarts_stream_and_returns_next_frame(self):

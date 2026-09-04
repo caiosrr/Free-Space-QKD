@@ -410,17 +410,19 @@ class IDSPeakCamera:
             raise RuntimeError("Camera IDS nao conectada.")
 
         requested_us = float(exposure_seconds) * 1e6
-        try:
-            exposure_changed = (
-                self.current_exposure_us is None
-                or abs(self.current_exposure_us - requested_us) > 0.5
-            )
-            if exposure_changed:
+        exposure_changed = (
+            self.current_exposure_us is None
+            or abs(self.current_exposure_us - requested_us) > 0.5
+        )
+        if exposure_changed:
+            try:
                 self.current_exposure_us = self._set_float(
                     self._node("ExposureTime"), requested_us
                 )
-        except Exception:
-            pass
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Nao foi possivel aplicar exposicao IDS de {requested_us:.0f} us."
+                ) from exc
 
         timeout_ms = self._frame_wait_timeout_ms()
         roi_before_failure = self._current_roi()

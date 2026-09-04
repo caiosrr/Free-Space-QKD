@@ -36,6 +36,12 @@ class TrackerState:
     recovery_valid_frames: int = 0
     signal_lost_s: float = 0.0
     exposure_us: float = 0.0
+    auto_exposure_enabled: bool = False
+    auto_exposure_reason: str = "desativada"
+    auto_exposure_peak_median: float | None = None
+    auto_exposure_background: float = 0.0
+    auto_exposure_saturation_fraction: float = 0.0
+    auto_exposure_adjustments: int = 0
     target_raw_peak: float | None = None
     target_raw_total: float | None = None
     temporal_outlier: bool = False
