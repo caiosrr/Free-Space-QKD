@@ -44,7 +44,11 @@
     const label = (s.status || "AGUARDANDO").replaceAll(" - ", " · ");
     if (s.safety_stop_reason) return { label, detail: s.safety_stop_reason, css: "state-fault", system: "PARADA" };
     if (!s.has_signal || label.includes("ANOMALIA") || label.includes("REJEITADO")) {
-      return { label, detail: s.optical_anomaly_reason || "mount parado", css: "state-fault", system: "MOUNT PARADO" };
+      const targetPresent = Boolean(s.target_present);
+      const detail = targetPresent
+        ? `beacon presente · aparência instável ${fmt(s.optical_unstable_s, 1)} s`
+        : s.optical_anomaly_reason || `beacon ausente ${fmt(s.signal_lost_s, 1)} s`;
+      return { label, detail, css: targetPresent ? "state-active" : "state-fault", system: "MOUNT PARADO" };
     }
     if (s.hold_active) {
       const waiting = s.control_error_source === "aguardando_vies";
@@ -78,8 +82,11 @@
     ui.mountCommand.textContent = `Az ${signed(s.cmd_az_deg_s, 4)} · Alt ${signed(s.cmd_alt_deg_s, 4)} °/s`;
     ui.mountOffset.textContent = `Az ${signed((s.offset_az_deg || 0) * 3600, 1)} · Alt ${signed((s.offset_alt_deg || 0) * 3600, 1)} arcsec`;
     const ratios = s.optical_intensity_ratio == null ? "" : ` · int ${fmt(s.optical_intensity_ratio)}× · área ${fmt(s.optical_area_ratio)}×`;
-    ui.quality.textContent = `${s.optical_quality_phase || "—"}${ratios}`;
-    ui.quality.className = s.optical_quality_phase === "normal" ? "state-stable" : "state-fault";
+    const consensus = s.optical_quality_phase === "recuperando" ? ` · consenso ${fmt((s.optical_recovery_fraction || 0) * 100, 0)}%` : "";
+    ui.quality.textContent = `${s.optical_quality_phase || "—"}${ratios}${consensus}`;
+    ui.quality.className = s.optical_quality_phase === "normal"
+      ? "state-stable"
+      : s.target_present ? "state-active" : "state-fault";
     ui.signalLost.textContent = `${fmt(s.signal_lost_s, 1)} s`;
     ui.historyStatus.textContent = s.has_signal ? "medição aceita" : "medição suspensa";
     ui.historyStatus.className = s.has_signal ? "state-stable" : "state-fault";

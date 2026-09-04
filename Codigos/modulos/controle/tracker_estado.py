@@ -34,7 +34,9 @@ class TrackerState:
     temporal_frame_count: int = 0
     temporal_window_s: float = 0.0
     recovery_valid_frames: int = 0
+    target_present: bool = False
     signal_lost_s: float = 0.0
+    optical_unstable_s: float = 0.0
     exposure_us: float = 0.0
     auto_exposure_enabled: bool = False
     auto_exposure_reason: str = "desativada"
@@ -48,6 +50,8 @@ class TrackerState:
     optical_quality_phase: str = "aquecendo"
     optical_anomaly_reason: str = ""
     optical_stable_s: float = 0.0
+    optical_recovery_fraction: float = 0.0
+    optical_position_spread_px: float | None = None
     optical_intensity_ratio: float | None = None
     optical_area_ratio: float | None = None
     optical_width_ratio: float | None = None

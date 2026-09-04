@@ -177,7 +177,7 @@ def main() -> None:
         print(f"Posicao inicial: Az={initial_az:.6f} deg | Alt={initial_alt:.6f} deg")
         print(
             f"Seguranca: limites Az/Alt=+/-{MAX_OFFSET_AZ_DEG:g}/"
-            f"+/-{MAX_OFFSET_ALT_DEG:g} deg | perda de sinal="
+            f"+/-{MAX_OFFSET_ALT_DEG:g} deg | ausencia real do alvo="
             f"{SIGNAL_LOSS_LIMIT_SECONDS:.0f}s"
         )
         print(f"Telemetria: {display_path(logger.csv_path)}")

@@ -18,7 +18,11 @@ from modulos.configuracoes.tracker import (
     OPTICAL_LINEAR_SIZE_RATIO_LOW,
     OPTICAL_MIN_BASELINE_FRAMES,
     OPTICAL_MIN_SIGNATURE_SIMILARITY,
+    OPTICAL_RECOVERY_ACCEPTED_FRACTION,
+    OPTICAL_RECOVERY_MIN_SAMPLES,
+    OPTICAL_RECOVERY_POSITION_P90_PX,
     OPTICAL_RECOVERY_STABLE_SECONDS,
+    OPTICAL_RECOVERY_WINDOW_SECONDS,
 )
 
 
@@ -61,6 +65,8 @@ class OpticalQualityDecision:
     reasons: tuple[str, ...]
     ratios: dict[str, float]
     stable_seconds: float
+    recovery_fraction: float = 0.0
+    position_spread_px: float | None = None
     event: str = ""
 
 
@@ -82,6 +88,16 @@ def _positive_metrics(candidate: dict | None) -> dict[str, float] | None:
     return metrics
 
 
+def _candidate_position(candidate: dict | None) -> tuple[float, float] | None:
+    if not isinstance(candidate, dict):
+        return None
+    try:
+        position = float(candidate["x_cm"]), float(candidate["y_cm"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return position if all(np.isfinite(value) for value in position) else None
+
+
 class OpticalQualityGate:
     """Mantem uma referencia robusta e congela o controle durante anomalias."""
 
@@ -92,16 +108,24 @@ class OpticalQualityGate:
         baseline_window_s: float = OPTICAL_BASELINE_WINDOW_SECONDS,
         initial_stable_s: float = OPTICAL_INITIAL_STABLE_SECONDS,
         recovery_stable_s: float = OPTICAL_RECOVERY_STABLE_SECONDS,
+        recovery_window_s: float = OPTICAL_RECOVERY_WINDOW_SECONDS,
+        recovery_accepted_fraction: float = OPTICAL_RECOVERY_ACCEPTED_FRACTION,
+        recovery_min_samples: int = OPTICAL_RECOVERY_MIN_SAMPLES,
+        recovery_position_p90_px: float = OPTICAL_RECOVERY_POSITION_P90_PX,
         min_baseline_frames: int = OPTICAL_MIN_BASELINE_FRAMES,
     ):
         self.baseline_window_s = float(baseline_window_s)
         self.initial_stable_s = float(initial_stable_s)
         self.recovery_stable_s = float(recovery_stable_s)
+        self.recovery_window_s = float(recovery_window_s)
+        self.recovery_accepted_fraction = float(recovery_accepted_fraction)
+        self.recovery_min_samples = int(recovery_min_samples)
+        self.recovery_position_p90_px = float(recovery_position_p90_px)
         self.min_baseline_frames = int(min_baseline_frames)
         self.phase = "aquecendo"
         self._entries = deque()
+        self._recovery_entries = deque()
         self._warmup_started = None
-        self._recovery_started = None
         self._anomaly_reported = False
         self._initial_reference = _positive_metrics(initial_reference)
 
@@ -130,6 +154,59 @@ class OpticalQualityGate:
     def _append(self, now: float, metrics: dict[str, float]) -> None:
         self._entries.append((float(now), metrics.copy()))
         self._prune(now)
+
+    def _clear_recovery(self) -> None:
+        self._recovery_entries.clear()
+
+    def _append_recovery(
+        self,
+        now: float,
+        *,
+        compatible: bool,
+        metrics: dict[str, float],
+        candidate: dict,
+    ) -> None:
+        self._recovery_entries.append(
+            (
+                float(now),
+                bool(compatible),
+                metrics.copy(),
+                _candidate_position(candidate),
+            )
+        )
+        cutoff = float(now) - self.recovery_window_s
+        while self._recovery_entries and self._recovery_entries[0][0] < cutoff:
+            self._recovery_entries.popleft()
+
+    def _recovery_consensus(self) -> tuple[bool, float, float, float | None]:
+        """Confirma maioria opticamente compativel e centro espacialmente estavel."""
+        if not self._recovery_entries:
+            return False, 0.0, 0.0, None
+        coverage_s = max(
+            0.0,
+            self._recovery_entries[-1][0] - self._recovery_entries[0][0],
+        )
+        compatible_fraction = float(
+            np.mean([entry[1] for entry in self._recovery_entries])
+        )
+        positions = [
+            entry[3] for entry in self._recovery_entries if entry[3] is not None
+        ]
+        position_spread = None
+        position_stable = True
+        if positions:
+            points = np.asarray(positions, dtype=float)
+            center = np.median(points, axis=0)
+            radial = np.hypot(points[:, 0] - center[0], points[:, 1] - center[1])
+            position_spread = float(np.percentile(radial, 90))
+            position_stable = position_spread <= self.recovery_position_p90_px
+        ready = bool(
+            len(self._recovery_entries) >= self.recovery_min_samples
+            and coverage_s >= self.recovery_stable_s
+            and compatible_fraction >= self.recovery_accepted_fraction
+            and position_stable
+        )
+        return ready, coverage_s, compatible_fraction, position_spread
 
     @staticmethod
     def _ratio(value: float, reference: float) -> float:
@@ -165,6 +242,8 @@ class OpticalQualityGate:
         reasons: tuple[str, ...] = (),
         ratios: dict[str, float] | None = None,
         stable_seconds: float = 0.0,
+        recovery_fraction: float = 0.0,
+        position_spread_px: float | None = None,
         event: str = "",
     ) -> OpticalQualityDecision:
         return OpticalQualityDecision(
@@ -173,6 +252,8 @@ class OpticalQualityGate:
             reasons=reasons,
             ratios={} if ratios is None else ratios,
             stable_seconds=float(stable_seconds),
+            recovery_fraction=float(recovery_fraction),
+            position_spread_px=position_spread_px,
             event=event,
         )
 
@@ -181,13 +262,13 @@ class OpticalQualityGate:
         now: float,
         candidate: dict | None,
     ) -> OpticalQualityDecision:
-        """Aceita apenas aparencia normal ou recuperada de forma persistente."""
+        """Aceita aparencia normal ou recuperada por consenso temporal."""
         now = float(now)
         metrics = _positive_metrics(candidate)
         if metrics is None:
             if self.phase != "aquecendo":
                 self.phase = "sem_sinal"
-            self._recovery_started = None
+            self._clear_recovery()
             return self._decision(False)
 
         reference = self._reference()
@@ -207,13 +288,20 @@ class OpticalQualityGate:
                 and len(self._entries) >= self.min_baseline_frames
             ):
                 self.phase = "normal"
+                self._clear_recovery()
                 return self._decision(True, ratios=ratios, stable_seconds=stable_s)
             return self._decision(False, ratios=ratios, stable_seconds=stable_s)
 
-        if reasons:
+        if self.phase == "normal" and reasons:
             first_anomaly = not self._anomaly_reported
             self.phase = "anomalia"
-            self._recovery_started = None
+            self._clear_recovery()
+            self._append_recovery(
+                now,
+                compatible=False,
+                metrics=metrics,
+                candidate=candidate,
+            )
             self._anomaly_reported = True
             event = ""
             if first_anomaly:
@@ -222,19 +310,45 @@ class OpticalQualityGate:
 
         if self.phase in {"anomalia", "recuperando", "sem_sinal"}:
             self.phase = "recuperando"
-            if self._recovery_started is None:
-                self._recovery_started = now
-            stable_s = now - self._recovery_started
-            if stable_s < self.recovery_stable_s:
-                return self._decision(False, ratios=ratios, stable_seconds=stable_s)
+            self._append_recovery(
+                now,
+                compatible=not reasons,
+                metrics=metrics,
+                candidate=candidate,
+            )
+            ready, coverage_s, fraction, position_spread = (
+                self._recovery_consensus()
+            )
+            if not ready:
+                return self._decision(
+                    False,
+                    reasons,
+                    ratios,
+                    stable_seconds=coverage_s,
+                    recovery_fraction=fraction,
+                    position_spread_px=position_spread,
+                )
 
             event = "anomalia_optica_recuperada" if self._anomaly_reported else ""
             self.phase = "normal"
-            self._recovery_started = None
             self._anomaly_reported = False
-            self._append(now, metrics)
-            return self._decision(True, ratios=ratios, stable_seconds=stable_s, event=event)
+            # A maioria confiavel da nova janela passa a ser a referencia. Isso
+            # permite acompanhar mudancas lentas sem aprender os frames extremos.
+            self._entries.clear()
+            for timestamp, compatible, accepted_metrics, _ in self._recovery_entries:
+                if compatible:
+                    self._entries.append((timestamp, accepted_metrics.copy()))
+            self._clear_recovery()
+            return self._decision(
+                True,
+                ratios=ratios,
+                stable_seconds=coverage_s,
+                recovery_fraction=fraction,
+                position_spread_px=position_spread,
+                event=event,
+            )
 
         self.phase = "normal"
+        self._clear_recovery()
         self._append(now, metrics)
         return self._decision(True, ratios=ratios)

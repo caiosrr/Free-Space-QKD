@@ -40,7 +40,11 @@ from modulos.configuracoes.tracker import (
     OPTICAL_INTENSITY_RATIO_LOW,
     OPTICAL_LINEAR_SIZE_RATIO_HIGH,
     OPTICAL_LINEAR_SIZE_RATIO_LOW,
+    OPTICAL_RECOVERY_ACCEPTED_FRACTION,
+    OPTICAL_RECOVERY_MIN_SAMPLES,
+    OPTICAL_RECOVERY_POSITION_P90_PX,
     OPTICAL_RECOVERY_STABLE_SECONDS,
+    OPTICAL_RECOVERY_WINDOW_SECONDS,
     SIGNAL_LOSS_LIMIT_SECONDS,
     SLOW_BIAS_WARMUP_SECONDS,
     SLOW_BIAS_WINDOW_SECONDS,
@@ -64,7 +68,8 @@ class TrackerCsvLogger:
         "x_cm_px", "y_cm_px", "alvo_x_px", "alvo_y_px", "erro_x_px",
         "erro_y_px", "distancia_px", "erro_x_filtrado_px", "erro_y_filtrado_px",
         "frames_na_media", "janela_media_s", "frames_recuperacao",
-        "tempo_sem_sinal_s", "exposicao_us", "auto_exposicao_ativa",
+        "alvo_detectado", "tempo_sem_sinal_s", "tempo_aparencia_instavel_s",
+        "exposicao_us", "auto_exposicao_ativa",
         "motivo_autoexposicao", "pico_mediano_autoexposicao",
         "fundo_percentil_autoexposicao", "fracao_saturada_autoexposicao",
         "ajustes_autoexposicao", "pico_bruto_alvo",
@@ -81,7 +86,8 @@ class TrackerCsvLogger:
         "freio_ativo", "autoteste_ativo", "autoteste_aprovado",
         "qualidade_optica", "motivo_anomalia_optica",
         "razao_intensidade", "razao_area", "razao_largura", "razao_altura",
-        "tempo_estavel_optico_s",
+        "tempo_estavel_optico_s", "fracao_consenso_recuperacao",
+        "dispersao_posicao_recuperacao_px",
         "ilha_tocando_borda", "borda_compativel", "tempo_borda_s",
         "evento_seguranca",
     ]
@@ -106,6 +112,10 @@ class TrackerCsvLogger:
         self._exposure_min_us = float("inf")
         self._exposure_max_us = float("-inf")
         self._auto_exposure_adjustments = 0
+        self._logged_rows = 0
+        self._target_present_rows = 0
+        self._max_target_absent_s = 0.0
+        self._max_optical_unstable_s = 0.0
         self._summary = {
             "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "initial_azimuth_deg": initial_az,
@@ -151,8 +161,19 @@ class TrackerCsvLogger:
             "border_confirmation_seconds": BORDER_CONFIRM_SECONDS,
             "border_min_peak_ratio": BORDER_MIN_PEAK_RATIO,
             "border_min_signature_similarity": BORDER_MIN_SIGNATURE_SIMILARITY,
-            "optical_quality_gate": "rolling_median_intensity_area_shape",
+            "optical_quality_gate": (
+                "rolling_median_intensity_area_shape_with_recovery_consensus"
+            ),
             "optical_recovery_stable_seconds": OPTICAL_RECOVERY_STABLE_SECONDS,
+            "optical_recovery_window_seconds": OPTICAL_RECOVERY_WINDOW_SECONDS,
+            "optical_recovery_accepted_fraction": (
+                OPTICAL_RECOVERY_ACCEPTED_FRACTION
+            ),
+            "optical_recovery_min_samples": OPTICAL_RECOVERY_MIN_SAMPLES,
+            "optical_recovery_position_p90_px": (
+                OPTICAL_RECOVERY_POSITION_P90_PX
+            ),
+            "signal_loss_timer_basis": "locked_target_absent",
             "optical_intensity_ratio_range": [
                 OPTICAL_INTENSITY_RATIO_LOW,
                 OPTICAL_INTENSITY_RATIO_HIGH,
@@ -209,7 +230,11 @@ class TrackerCsvLogger:
             "frames_na_media": int(state_values["temporal_frame_count"]),
             "janela_media_s": number(state_values["temporal_window_s"], 3),
             "frames_recuperacao": int(state_values["recovery_valid_frames"]),
+            "alvo_detectado": int(bool(state_values["target_present"])),
             "tempo_sem_sinal_s": number(state_values["signal_lost_s"], 3),
+            "tempo_aparencia_instavel_s": number(
+                state_values["optical_unstable_s"], 3
+            ),
             "exposicao_us": number(state_values["exposure_us"], 1),
             "auto_exposicao_ativa": int(
                 bool(state_values["auto_exposure_enabled"])
@@ -267,6 +292,12 @@ class TrackerCsvLogger:
             "razao_largura": number(state_values["optical_width_ratio"], 3),
             "razao_altura": number(state_values["optical_height_ratio"], 3),
             "tempo_estavel_optico_s": number(state_values["optical_stable_s"], 3),
+            "fracao_consenso_recuperacao": number(
+                state_values["optical_recovery_fraction"], 4
+            ),
+            "dispersao_posicao_recuperacao_px": number(
+                state_values["optical_position_spread_px"], 3
+            ),
             "ilha_tocando_borda": int(bool(state_values["spot_touches_border"])),
             "borda_compativel": int(
                 bool(state_values["border_candidate_plausible"])
@@ -281,6 +312,16 @@ class TrackerCsvLogger:
         self._auto_exposure_adjustments = max(
             self._auto_exposure_adjustments,
             int(state_values["auto_exposure_adjustments"]),
+        )
+        self._logged_rows += 1
+        self._target_present_rows += int(bool(state_values["target_present"]))
+        self._max_target_absent_s = max(
+            self._max_target_absent_s,
+            float(state_values["signal_lost_s"]),
+        )
+        self._max_optical_unstable_s = max(
+            self._max_optical_unstable_s,
+            float(state_values["optical_unstable_s"]),
         )
         self._writer.writerow(row)
         self._last_write_t = now
@@ -337,6 +378,16 @@ class TrackerCsvLogger:
             "terminal_event_frame": self._terminal_frame_path,
             "auto_exposure_adjustments": self._auto_exposure_adjustments,
             "exposure_used_range_us": exposure_range,
+            "target_present_percent_logged": (
+                0.0
+                if self._logged_rows == 0
+                else round(100.0 * self._target_present_rows / self._logged_rows, 3)
+            ),
+            "max_target_absent_seconds": round(self._max_target_absent_s, 3),
+            "max_optical_unstable_seconds": round(
+                self._max_optical_unstable_s,
+                3,
+            ),
         })
         self.summary_path.write_text(
             json.dumps(self._summary, indent=2, ensure_ascii=False), encoding="utf-8"

@@ -47,6 +47,8 @@ PREFLIGHT_MAX_RATE_DEG_S = 0.02
 BORDER_CONFIRM_SECONDS = 1.0
 BORDER_MIN_PEAK_RATIO = 0.25
 BORDER_MIN_SIGNATURE_SIMILARITY = 0.35
+# Este limite conta somente ausencia real da ilha travada. Aparencia turbulenta
+# mantem o mount parado, mas possui um cronometro separado e nao encerra a sessao.
 SIGNAL_LOSS_LIMIT_SECONDS = 75.0
 
 # Estimador temporal robusto. Os frames aceitos pela trava de identidade sao
@@ -86,10 +88,15 @@ AUTO_EXPOSURE_SATURATION_FRACTION = 0.002
 # Trava de qualidade optica. Antes de entrar na media temporal, cada ilha e
 # comparada com a mediana recente dos periodos estaveis. Mudancas graduais
 # atualizam a referencia; saltos grandes de intensidade, area ou forma param o
-# mount ate a aparencia normal permanecer estavel por alguns segundos.
+# mount ate uma maioria consistente de frames voltar a ser compativel. Frames
+# ruins isolados nao reiniciam toda a recuperacao durante turbulencia forte.
 OPTICAL_BASELINE_WINDOW_SECONDS = 5.0
 OPTICAL_INITIAL_STABLE_SECONDS = 2.0
-OPTICAL_RECOVERY_STABLE_SECONDS = 3.0
+OPTICAL_RECOVERY_STABLE_SECONDS = 2.0
+OPTICAL_RECOVERY_WINDOW_SECONDS = 3.0
+OPTICAL_RECOVERY_ACCEPTED_FRACTION = 0.80
+OPTICAL_RECOVERY_MIN_SAMPLES = 8
+OPTICAL_RECOVERY_POSITION_P90_PX = 5.0
 OPTICAL_MIN_BASELINE_FRAMES = 5
 OPTICAL_INTENSITY_RATIO_LOW = 0.35
 OPTICAL_INTENSITY_RATIO_HIGH = 2.80
@@ -192,8 +199,14 @@ if not (
     raise ValueError("Os limites da autoexposicao sao invalidos.")
 if not 0 < OPTICAL_INITIAL_STABLE_SECONDS <= OPTICAL_BASELINE_WINDOW_SECONDS:
     raise ValueError("O aquecimento optico precisa caber na janela de referencia.")
-if OPTICAL_RECOVERY_STABLE_SECONDS < TEMPORAL_WINDOW_SECONDS:
-    raise ValueError("A recuperacao optica nao pode ser menor que a media temporal.")
+if not (
+    TEMPORAL_WINDOW_SECONDS <= OPTICAL_RECOVERY_STABLE_SECONDS
+    <= OPTICAL_RECOVERY_WINDOW_SECONDS
+    and 0.5 < OPTICAL_RECOVERY_ACCEPTED_FRACTION <= 1.0
+    and OPTICAL_RECOVERY_MIN_SAMPLES >= 3
+    and OPTICAL_RECOVERY_POSITION_P90_PX > 0
+):
+    raise ValueError("Os limites do consenso de recuperacao sao invalidos.")
 for low, high in (
     (OPTICAL_INTENSITY_RATIO_LOW, OPTICAL_INTENSITY_RATIO_HIGH),
     (OPTICAL_AREA_RATIO_LOW, OPTICAL_AREA_RATIO_HIGH),

@@ -49,6 +49,8 @@ class TrackerSafetyTests(unittest.TestCase):
         bbox_h=10.0,
         compactness=0.7,
         similarity=0.9,
+        x_cm=32.0,
+        y_cm=32.0,
     ):
         return {
             "raw_total": raw_total,
@@ -57,6 +59,8 @@ class TrackerSafetyTests(unittest.TestCase):
             "bbox_h": bbox_h,
             "compactness": compactness,
             "similarity_primary": similarity,
+            "x_cm": x_cm,
+            "y_cm": y_cm,
         }
 
     @staticmethod
@@ -225,6 +229,9 @@ class TrackerSafetyTests(unittest.TestCase):
             normal,
             initial_stable_s=0.1,
             recovery_stable_s=0.2,
+            recovery_window_s=0.5,
+            recovery_accepted_fraction=0.75,
+            recovery_min_samples=3,
             min_baseline_frames=2,
         )
         self.assertFalse(gate.observe(0.0, normal).accepted)
@@ -255,12 +262,16 @@ class TrackerSafetyTests(unittest.TestCase):
             normal,
             initial_stable_s=0.1,
             recovery_stable_s=0.2,
+            recovery_window_s=0.5,
+            recovery_accepted_fraction=0.75,
+            recovery_min_samples=3,
             min_baseline_frames=2,
         )
         gate.observe(0.0, normal)
         self.assertTrue(gate.observe(0.11, normal).accepted)
         self.assertFalse(gate.observe(0.2, None).accepted)
         self.assertFalse(gate.observe(0.3, normal).accepted)
+        self.assertFalse(gate.observe(0.4, normal).accepted)
         self.assertTrue(gate.observe(0.51, normal).accepted)
 
     def test_optical_gate_rejects_sudden_brightening_and_shrinking(self):
@@ -269,6 +280,9 @@ class TrackerSafetyTests(unittest.TestCase):
             normal,
             initial_stable_s=0.1,
             recovery_stable_s=0.2,
+            recovery_window_s=0.5,
+            recovery_accepted_fraction=0.75,
+            recovery_min_samples=3,
             min_baseline_frames=2,
         )
         bright_gate.observe(0.0, normal)
@@ -284,6 +298,9 @@ class TrackerSafetyTests(unittest.TestCase):
             normal,
             initial_stable_s=0.1,
             recovery_stable_s=0.2,
+            recovery_window_s=0.5,
+            recovery_accepted_fraction=0.75,
+            recovery_min_samples=3,
             min_baseline_frames=2,
         )
         small_gate.observe(0.0, normal)
@@ -311,6 +328,79 @@ class TrackerSafetyTests(unittest.TestCase):
             decision = gate.observe(0.11 + (0.1 * index), gradual)
             self.assertTrue(decision.accepted)
             self.assertEqual(decision.phase, "normal")
+
+    def test_optical_recovery_uses_consensus_instead_of_perfect_sequence(self):
+        normal = self._optical_candidate()
+        dim = self._optical_candidate(raw_total=250.0)
+        gate = tracker_qualidade.OpticalQualityGate(
+            normal,
+            initial_stable_s=0.1,
+            recovery_stable_s=2.0,
+            recovery_window_s=3.0,
+            recovery_accepted_fraction=0.8,
+            recovery_min_samples=8,
+            min_baseline_frames=2,
+        )
+        gate.observe(0.0, normal)
+        self.assertTrue(gate.observe(0.11, normal).accepted)
+        self.assertFalse(gate.observe(0.2, dim).accepted)
+
+        recovered = None
+        for index in range(1, 31):
+            # Um frame extremo a cada cinco ainda representa 80% compativeis.
+            candidate = dim if index % 5 == 0 else normal
+            recovered = gate.observe(0.2 + (index * 0.1), candidate)
+            if recovered.accepted:
+                break
+        self.assertIsNotNone(recovered)
+        self.assertTrue(recovered.accepted)
+        self.assertGreaterEqual(recovered.recovery_fraction, 0.8)
+        self.assertEqual(recovered.event, "anomalia_optica_recuperada")
+
+    def test_optical_recovery_rejects_positionally_unstable_candidate(self):
+        normal = self._optical_candidate()
+        dim = self._optical_candidate(raw_total=250.0)
+        gate = tracker_qualidade.OpticalQualityGate(
+            normal,
+            initial_stable_s=0.1,
+            recovery_stable_s=0.5,
+            recovery_window_s=1.0,
+            recovery_accepted_fraction=0.8,
+            recovery_min_samples=5,
+            recovery_position_p90_px=5.0,
+            min_baseline_frames=2,
+        )
+        gate.observe(0.0, normal)
+        gate.observe(0.11, normal)
+        gate.observe(0.2, dim)
+        decision = None
+        for index in range(1, 12):
+            position = 20.0 if index % 2 else 44.0
+            candidate = self._optical_candidate(x_cm=position, y_cm=32.0)
+            decision = gate.observe(0.2 + index * 0.1, candidate)
+        self.assertIsNotNone(decision)
+        self.assertFalse(decision.accepted)
+        self.assertGreater(decision.position_spread_px, 5.0)
+
+    def test_present_unstable_target_does_not_increment_absence_timer(self):
+        timers = tracker_aquisicao.TemporizadoresDisponibilidade()
+        timers.observe(0.0, target_present=True, measurement_valid=False)
+        unstable = timers.observe(
+            80.0,
+            target_present=True,
+            measurement_valid=False,
+        )
+        self.assertEqual(unstable.absent_seconds, 0.0)
+        self.assertEqual(unstable.unstable_seconds, 80.0)
+
+        timers.observe(81.0, target_present=False, measurement_valid=False)
+        absent = timers.observe(
+            156.0,
+            target_present=False,
+            measurement_valid=False,
+        )
+        self.assertEqual(absent.absent_seconds, 75.0)
+        self.assertEqual(absent.unstable_seconds, 0.0)
 
     def test_shared_state_preserves_first_safety_reason(self):
         state = TrackerState()
@@ -449,6 +539,10 @@ class TrackerSafetyTests(unittest.TestCase):
             self.assertEqual(len(rows), 2)
             self.assertEqual(rows[-1]["evento_seguranca"], "teste")
             self.assertTrue(logger.summary_path.exists())
+            summary = json.loads(logger.summary_path.read_text(encoding="utf-8"))
+            self.assertIn("target_present_percent_logged", summary)
+            self.assertIn("max_target_absent_seconds", summary)
+            self.assertIn("max_optical_unstable_seconds", summary)
 
     def test_terminal_event_frame_bypasses_routine_limits(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(

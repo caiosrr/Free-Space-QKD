@@ -176,6 +176,7 @@ class TrackerDisplay:
                 f"{state['temporal_window_s']:.2f}s | recuperacao="
                 f"{state['recovery_valid_frames']}/{TEMPORAL_RECOVERY_VALID_FRAMES} | "
                 f"sem sinal={state['signal_lost_s']:.1f}s | "
+                f"aparencia instavel={state['optical_unstable_s']:.1f}s | "
                 f"exp={state['exposure_us']:.0f} us",
                 (180, 220, 255),
             ),
@@ -185,7 +186,8 @@ class TrackerDisplay:
                 f"area={ratio_text(state['optical_area_ratio'])} | "
                 f"tam={ratio_text(state['optical_width_ratio'])}/"
                 f"{ratio_text(state['optical_height_ratio'])} | "
-                f"estavel={state['optical_stable_s']:.1f}s",
+                f"consenso={state['optical_recovery_fraction']:.0%} | "
+                f"janela={state['optical_stable_s']:.1f}s",
                 (160, 255, 180),
             ),
         ]

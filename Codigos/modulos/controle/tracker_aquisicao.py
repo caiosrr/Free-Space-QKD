@@ -42,6 +42,53 @@ class ResultadoAquisicao:
     ultimo_frame: np.ndarray | None
 
 
+@dataclass(frozen=True)
+class EstadoDisponibilidade:
+    """Tempos distintos para alvo ausente e alvo presente ainda nao confiavel."""
+
+    target_present: bool
+    absent_seconds: float
+    unstable_seconds: float
+
+
+class TemporizadoresDisponibilidade:
+    """Impede que turbulencia optica seja confundida com perda do beacon."""
+
+    def __init__(self):
+        self._absent_since: float | None = None
+        self._unstable_since: float | None = None
+
+    def observe(
+        self,
+        now: float,
+        *,
+        target_present: bool,
+        measurement_valid: bool,
+    ) -> EstadoDisponibilidade:
+        now = float(now)
+        if not target_present:
+            if self._absent_since is None:
+                self._absent_since = now
+            self._unstable_since = None
+        else:
+            self._absent_since = None
+            if measurement_valid:
+                self._unstable_since = None
+            elif self._unstable_since is None:
+                self._unstable_since = now
+        return EstadoDisponibilidade(
+            target_present=bool(target_present),
+            absent_seconds=(
+                0.0 if self._absent_since is None else now - self._absent_since
+            ),
+            unstable_seconds=(
+                0.0
+                if self._unstable_since is None
+                else now - self._unstable_since
+            ),
+        )
+
+
 class ConfirmacaoBorda:
     """Confirma por tempo uma ilha plausivel continuamente cortada pela ROI."""
 
@@ -113,7 +160,8 @@ def executar_aquisicao(
     last_display_t = 0.0
     display_interval_s = 1.0 / DISPLAY_HZ
     border_guard = ConfirmacaoBorda()
-    signal_lost_since = None
+    availability_timers = TemporizadoresDisponibilidade()
+    measurement_invalid_since = None
     estimator_cleared_for_loss = False
     recovery_valid_frames = 0
     ever_locked = False
@@ -191,11 +239,12 @@ def executar_aquisicao(
             recovery_valid_frames = 0
 
         if not instant_valid or temporal_outlier:
-            if signal_lost_since is None:
-                signal_lost_since = now
+            if measurement_invalid_since is None:
+                measurement_invalid_since = now
             recovery_valid_frames = 0
             if (
-                now - signal_lost_since >= TEMPORAL_RESET_AFTER_LOSS_SECONDS
+                now - measurement_invalid_since
+                >= TEMPORAL_RESET_AFTER_LOSS_SECONDS
                 and not estimator_cleared_for_loss
             ):
                 estimator.clear()
@@ -210,18 +259,24 @@ def executar_aquisicao(
             y_cm = float(temporal_estimate["y_px"])
             dx = x_cm - target_x
             dy = y_cm - target_y
-            signal_lost_since = None
+            measurement_invalid_since = None
             estimator_cleared_for_loss = False
         else:
             x_cm, y_cm = target_x, target_y
             dx = dy = 0.0
 
-        signal_lost_s = (
-            0.0 if signal_lost_since is None else now - signal_lost_since
+        availability = availability_timers.observe(
+            now,
+            target_present=candidate_valid,
+            measurement_valid=measurement_valid,
         )
+        signal_lost_s = availability.absent_seconds
+        optical_unstable_s = availability.unstable_seconds
         with state.lock:
             signal_was_locked = state.has_signal
+            target_was_present = state.target_present
             state.has_signal = measurement_valid
+            state.target_present = availability.target_present
             state.spot_touches_border = touches_border
             state.border_candidate_plausible = plausible_border
             state.border_persistence_s = border_persistence_s
@@ -235,6 +290,7 @@ def executar_aquisicao(
             state.temporal_window_s = estimator.window_span_s
             state.recovery_valid_frames = recovery_valid_frames
             state.signal_lost_s = signal_lost_s
+            state.optical_unstable_s = optical_unstable_s
             state.exposure_us = current_exposure_us
             state.auto_exposure_enabled = exposure_controller.enabled
             state.auto_exposure_reason = exposure_decision.reason
@@ -256,6 +312,8 @@ def executar_aquisicao(
             state.optical_quality_phase = quality.phase
             state.optical_anomaly_reason = ",".join(quality.reasons)
             state.optical_stable_s = quality.stable_seconds
+            state.optical_recovery_fraction = quality.recovery_fraction
+            state.optical_position_spread_px = quality.position_spread_px
             state.optical_intensity_ratio = quality.ratios.get("intensidade")
             state.optical_area_ratio = quality.ratios.get("area")
             state.optical_width_ratio = quality.ratios.get("largura")
@@ -292,8 +350,8 @@ def executar_aquisicao(
                     "\nQualidade optica recuperada. "
                     "Reconstruindo a media antes de liberar o controle."
                 )
-        if not event and signal_was_locked and not measurement_valid:
-            event = "inicio_perda_sinal"
+        if not event and target_was_present and not candidate_valid:
+            event = "inicio_alvo_ausente"
             logger.save_event_frame(frame, event)
         elif not event and measurement_valid and not signal_was_locked:
             event = "sinal_recuperado" if ever_locked else "sinal_inicial_confirmado"
