@@ -8,6 +8,10 @@ import numpy as np
 from modulos.configuracoes.tracker import (
     OPTICAL_AREA_RATIO_HIGH,
     OPTICAL_AREA_RATIO_LOW,
+    OPTICAL_ANOMALY_ENTRY_BAD_FRACTION,
+    OPTICAL_ANOMALY_ENTRY_MIN_BAD_FRAMES,
+    OPTICAL_ANOMALY_ENTRY_MIN_COVERAGE_SECONDS,
+    OPTICAL_ANOMALY_ENTRY_WINDOW_SECONDS,
     OPTICAL_BASELINE_WINDOW_SECONDS,
     OPTICAL_COMPACTNESS_RATIO_HIGH,
     OPTICAL_COMPACTNESS_RATIO_LOW,
@@ -65,6 +69,10 @@ class OpticalQualityDecision:
     reasons: tuple[str, ...]
     ratios: dict[str, float]
     stable_seconds: float
+    control_allowed: bool = False
+    transient_rejection: bool = False
+    anomaly_fraction: float = 0.0
+    anomaly_window_s: float = 0.0
     recovery_fraction: float = 0.0
     position_spread_px: float | None = None
     event: str = ""
@@ -112,6 +120,12 @@ class OpticalQualityGate:
         recovery_accepted_fraction: float = OPTICAL_RECOVERY_ACCEPTED_FRACTION,
         recovery_min_samples: int = OPTICAL_RECOVERY_MIN_SAMPLES,
         recovery_position_p90_px: float = OPTICAL_RECOVERY_POSITION_P90_PX,
+        anomaly_entry_window_s: float = OPTICAL_ANOMALY_ENTRY_WINDOW_SECONDS,
+        anomaly_entry_min_coverage_s: float = (
+            OPTICAL_ANOMALY_ENTRY_MIN_COVERAGE_SECONDS
+        ),
+        anomaly_entry_bad_fraction: float = OPTICAL_ANOMALY_ENTRY_BAD_FRACTION,
+        anomaly_entry_min_bad_frames: int = OPTICAL_ANOMALY_ENTRY_MIN_BAD_FRAMES,
         min_baseline_frames: int = OPTICAL_MIN_BASELINE_FRAMES,
     ):
         self.baseline_window_s = float(baseline_window_s)
@@ -121,10 +135,15 @@ class OpticalQualityGate:
         self.recovery_accepted_fraction = float(recovery_accepted_fraction)
         self.recovery_min_samples = int(recovery_min_samples)
         self.recovery_position_p90_px = float(recovery_position_p90_px)
+        self.anomaly_entry_window_s = float(anomaly_entry_window_s)
+        self.anomaly_entry_min_coverage_s = float(anomaly_entry_min_coverage_s)
+        self.anomaly_entry_bad_fraction = float(anomaly_entry_bad_fraction)
+        self.anomaly_entry_min_bad_frames = int(anomaly_entry_min_bad_frames)
         self.min_baseline_frames = int(min_baseline_frames)
         self.phase = "aquecendo"
         self._entries = deque()
         self._recovery_entries = deque()
+        self._normal_votes = deque()
         self._warmup_started = None
         self._anomaly_reported = False
         self._initial_reference = _positive_metrics(initial_reference)
@@ -157,6 +176,31 @@ class OpticalQualityGate:
 
     def _clear_recovery(self) -> None:
         self._recovery_entries.clear()
+
+    def _clear_normal_votes(self) -> None:
+        self._normal_votes.clear()
+
+    def _append_normal_vote(self, now: float, *, anomalous: bool) -> None:
+        self._normal_votes.append((float(now), bool(anomalous)))
+        cutoff = float(now) - self.anomaly_entry_window_s
+        while self._normal_votes and self._normal_votes[0][0] < cutoff:
+            self._normal_votes.popleft()
+
+    def _anomaly_is_persistent(self) -> tuple[bool, float, float]:
+        if not self._normal_votes:
+            return False, 0.0, 0.0
+        coverage_s = max(
+            0.0,
+            self._normal_votes[-1][0] - self._normal_votes[0][0],
+        )
+        bad_count = sum(entry[1] for entry in self._normal_votes)
+        bad_fraction = bad_count / len(self._normal_votes)
+        persistent = bool(
+            bad_count >= self.anomaly_entry_min_bad_frames
+            and coverage_s >= self.anomaly_entry_min_coverage_s
+            and bad_fraction >= self.anomaly_entry_bad_fraction
+        )
+        return persistent, coverage_s, bad_fraction
 
     def _append_recovery(
         self,
@@ -245,6 +289,10 @@ class OpticalQualityGate:
         recovery_fraction: float = 0.0,
         position_spread_px: float | None = None,
         event: str = "",
+        control_allowed: bool | None = None,
+        transient_rejection: bool = False,
+        anomaly_fraction: float = 0.0,
+        anomaly_window_s: float = 0.0,
     ) -> OpticalQualityDecision:
         return OpticalQualityDecision(
             accepted=accepted,
@@ -252,6 +300,12 @@ class OpticalQualityGate:
             reasons=reasons,
             ratios={} if ratios is None else ratios,
             stable_seconds=float(stable_seconds),
+            control_allowed=(
+                accepted if control_allowed is None else control_allowed
+            ),
+            transient_rejection=bool(transient_rejection),
+            anomaly_fraction=float(anomaly_fraction),
+            anomaly_window_s=float(anomaly_window_s),
             recovery_fraction=float(recovery_fraction),
             position_spread_px=position_spread_px,
             event=event,
@@ -269,6 +323,7 @@ class OpticalQualityGate:
             if self.phase != "aquecendo":
                 self.phase = "sem_sinal"
             self._clear_recovery()
+            self._clear_normal_votes()
             return self._decision(False)
 
         reference = self._reference()
@@ -289,24 +344,53 @@ class OpticalQualityGate:
             ):
                 self.phase = "normal"
                 self._clear_recovery()
+                self._clear_normal_votes()
+                self._append_normal_vote(now, anomalous=False)
                 return self._decision(True, ratios=ratios, stable_seconds=stable_s)
             return self._decision(False, ratios=ratios, stable_seconds=stable_s)
 
-        if self.phase == "normal" and reasons:
-            first_anomaly = not self._anomaly_reported
-            self.phase = "anomalia"
-            self._clear_recovery()
-            self._append_recovery(
-                now,
-                compatible=False,
-                metrics=metrics,
-                candidate=candidate,
-            )
-            self._anomaly_reported = True
-            event = ""
-            if first_anomaly:
-                event = "anomalia_optica_" + "_".join(reasons[:3])
-            return self._decision(False, reasons, ratios, event=event)
+        if self.phase == "normal":
+            self._append_normal_vote(now, anomalous=bool(reasons))
+            if reasons:
+                persistent, coverage_s, bad_fraction = (
+                    self._anomaly_is_persistent()
+                )
+                if not persistent:
+                    return self._decision(
+                        False,
+                        reasons,
+                        ratios,
+                        control_allowed=True,
+                        transient_rejection=True,
+                        anomaly_fraction=bad_fraction,
+                        anomaly_window_s=coverage_s,
+                    )
+
+                first_anomaly = not self._anomaly_reported
+                self.phase = "anomalia"
+                self._clear_normal_votes()
+                self._clear_recovery()
+                self._append_recovery(
+                    now,
+                    compatible=False,
+                    metrics=metrics,
+                    candidate=candidate,
+                )
+                self._anomaly_reported = True
+                event = ""
+                if first_anomaly:
+                    event = "anomalia_optica_" + "_".join(reasons[:3])
+                return self._decision(
+                    False,
+                    reasons,
+                    ratios,
+                    event=event,
+                    anomaly_fraction=bad_fraction,
+                    anomaly_window_s=coverage_s,
+                )
+
+            self._append(now, metrics)
+            return self._decision(True, ratios=ratios)
 
         if self.phase in {"anomalia", "recuperando", "sem_sinal"}:
             self.phase = "recuperando"
@@ -332,6 +416,7 @@ class OpticalQualityGate:
             event = "anomalia_optica_recuperada" if self._anomaly_reported else ""
             self.phase = "normal"
             self._anomaly_reported = False
+            self._clear_normal_votes()
             # A maioria confiavel da nova janela passa a ser a referencia. Isso
             # permite acompanhar mudancas lentas sem aprender os frames extremos.
             self._entries.clear()
@@ -349,6 +434,7 @@ class OpticalQualityGate:
             )
 
         self.phase = "normal"
+        self._clear_normal_votes()
         self._clear_recovery()
         self._append(now, metrics)
         return self._decision(True, ratios=ratios)

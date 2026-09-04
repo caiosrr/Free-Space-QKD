@@ -36,6 +36,10 @@ from modulos.configuracoes.tracker import (
     MAX_OFFSET_AZ_DEG,
     OPTICAL_AREA_RATIO_HIGH,
     OPTICAL_AREA_RATIO_LOW,
+    OPTICAL_ANOMALY_ENTRY_BAD_FRACTION,
+    OPTICAL_ANOMALY_ENTRY_MIN_BAD_FRAMES,
+    OPTICAL_ANOMALY_ENTRY_MIN_COVERAGE_SECONDS,
+    OPTICAL_ANOMALY_ENTRY_WINDOW_SECONDS,
     OPTICAL_INTENSITY_RATIO_HIGH,
     OPTICAL_INTENSITY_RATIO_LOW,
     OPTICAL_LINEAR_SIZE_RATIO_HIGH,
@@ -50,6 +54,7 @@ from modulos.configuracoes.tracker import (
     SLOW_BIAS_WINDOW_SECONDS,
     SLOW_CORRECTION_PERSISTENCE_SECONDS,
     TEMPORAL_RECOVERY_VALID_FRAMES,
+    TEMPORAL_OPTICAL_HOLD_SECONDS,
     TEMPORAL_WARMUP_SECONDS,
     TEMPORAL_WINDOW_SECONDS,
     TRACKER_EVENT_IMAGE_LIMIT,
@@ -74,7 +79,8 @@ class TrackerCsvLogger:
         "fundo_percentil_autoexposicao", "fracao_saturada_autoexposicao",
         "ajustes_autoexposicao", "pico_bruto_alvo",
         "intensidade_integrada_alvo",
-        "outlier_temporal", "variancia_x_px2", "variancia_y_px2",
+        "outlier_temporal", "frame_optico_transitorio_rejeitado",
+        "variancia_x_px2", "variancia_y_px2",
         "desvio_padrao_2d_px", "erro_az_deg", "erro_alt_deg",
         "velocidade_az_deg_s", "velocidade_alt_deg_s", "azimute_absoluto_deg",
         "altitude_absoluta_deg", "deslocamento_az_desde_inicio_deg",
@@ -85,6 +91,7 @@ class TrackerCsvLogger:
         "persistencia_erro_s", "fonte_erro_controle",
         "freio_ativo", "autoteste_ativo", "autoteste_aprovado",
         "qualidade_optica", "motivo_anomalia_optica",
+        "fracao_anomalia_janela", "duracao_janela_anomalia_s",
         "razao_intensidade", "razao_area", "razao_largura", "razao_altura",
         "tempo_estavel_optico_s", "fracao_consenso_recuperacao",
         "dispersao_posicao_recuperacao_px",
@@ -114,6 +121,7 @@ class TrackerCsvLogger:
         self._auto_exposure_adjustments = 0
         self._logged_rows = 0
         self._target_present_rows = 0
+        self._optical_transient_rejection_rows = 0
         self._max_target_absent_s = 0.0
         self._max_optical_unstable_s = 0.0
         self._summary = {
@@ -157,12 +165,25 @@ class TrackerCsvLogger:
             "temporal_window_seconds": TEMPORAL_WINDOW_SECONDS,
             "temporal_warmup_seconds": TEMPORAL_WARMUP_SECONDS,
             "temporal_recovery_valid_frames": TEMPORAL_RECOVERY_VALID_FRAMES,
+            "temporal_optical_hold_seconds": TEMPORAL_OPTICAL_HOLD_SECONDS,
             "signal_loss_limit_seconds": SIGNAL_LOSS_LIMIT_SECONDS,
             "border_confirmation_seconds": BORDER_CONFIRM_SECONDS,
             "border_min_peak_ratio": BORDER_MIN_PEAK_RATIO,
             "border_min_signature_similarity": BORDER_MIN_SIGNATURE_SIMILARITY,
             "optical_quality_gate": (
-                "rolling_median_intensity_area_shape_with_recovery_consensus"
+                "debounced_rolling_median_with_recovery_consensus"
+            ),
+            "optical_anomaly_entry_window_seconds": (
+                OPTICAL_ANOMALY_ENTRY_WINDOW_SECONDS
+            ),
+            "optical_anomaly_entry_min_coverage_seconds": (
+                OPTICAL_ANOMALY_ENTRY_MIN_COVERAGE_SECONDS
+            ),
+            "optical_anomaly_entry_bad_fraction": (
+                OPTICAL_ANOMALY_ENTRY_BAD_FRACTION
+            ),
+            "optical_anomaly_entry_min_bad_frames": (
+                OPTICAL_ANOMALY_ENTRY_MIN_BAD_FRAMES
             ),
             "optical_recovery_stable_seconds": OPTICAL_RECOVERY_STABLE_SECONDS,
             "optical_recovery_window_seconds": OPTICAL_RECOVERY_WINDOW_SECONDS,
@@ -257,6 +278,9 @@ class TrackerCsvLogger:
                 state_values["target_raw_total"], 2
             ),
             "outlier_temporal": int(bool(state_values["temporal_outlier"])),
+            "frame_optico_transitorio_rejeitado": int(
+                bool(state_values["optical_transient_rejection"])
+            ),
             "variancia_x_px2": round(variance_x, 4),
             "variancia_y_px2": round(variance_y, 4),
             "desvio_padrao_2d_px": round(np.sqrt(variance_x + variance_y), 4),
@@ -287,6 +311,12 @@ class TrackerCsvLogger:
             "autoteste_aprovado": int(bool(state_values["preflight_passed"])),
             "qualidade_optica": state_values["optical_quality_phase"],
             "motivo_anomalia_optica": state_values["optical_anomaly_reason"],
+            "fracao_anomalia_janela": number(
+                state_values["optical_anomaly_fraction"], 4
+            ),
+            "duracao_janela_anomalia_s": number(
+                state_values["optical_anomaly_window_s"], 3
+            ),
             "razao_intensidade": number(state_values["optical_intensity_ratio"], 3),
             "razao_area": number(state_values["optical_area_ratio"], 3),
             "razao_largura": number(state_values["optical_width_ratio"], 3),
@@ -315,6 +345,9 @@ class TrackerCsvLogger:
         )
         self._logged_rows += 1
         self._target_present_rows += int(bool(state_values["target_present"]))
+        self._optical_transient_rejection_rows += int(
+            bool(state_values["optical_transient_rejection"])
+        )
         self._max_target_absent_s = max(
             self._max_target_absent_s,
             float(state_values["signal_lost_s"]),
@@ -387,6 +420,9 @@ class TrackerCsvLogger:
             "max_optical_unstable_seconds": round(
                 self._max_optical_unstable_s,
                 3,
+            ),
+            "optical_transient_rejections_logged": (
+                self._optical_transient_rejection_rows
             ),
         })
         self.summary_path.write_text(

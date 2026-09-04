@@ -59,6 +59,9 @@ TEMPORAL_WARMUP_SECONDS = 0.5
 TEMPORAL_MIN_VALID_FRAMES = 4
 TEMPORAL_RECOVERY_VALID_FRAMES = 5
 TEMPORAL_RESET_AFTER_LOSS_SECONDS = 0.5
+# Um frame rejeitado apenas pela aparencia pode ser ignorado por pouco tempo,
+# mantendo a ultima media de 2 s. Ausencia, borda e salto espacial nao usam isso.
+TEMPORAL_OPTICAL_HOLD_SECONDS = 0.45
 TEMPORAL_APERTURE_RADIUS_PX = 48
 TEMPORAL_INPUT_JUMP_PX = 24.0
 TEMPORAL_MEAN_THRESHOLD_PERCENT = 0.20
@@ -92,11 +95,17 @@ AUTO_EXPOSURE_SATURATION_FRACTION = 0.002
 # ruins isolados nao reiniciam toda a recuperacao durante turbulencia forte.
 OPTICAL_BASELINE_WINDOW_SECONDS = 5.0
 OPTICAL_INITIAL_STABLE_SECONDS = 2.0
+# Uma deformacao so vira anomalia quando ocupa uma parcela relevante desta
+# janela curta. Pontos ruins isolados sao descartados sem iniciar recuperacao.
+OPTICAL_ANOMALY_ENTRY_WINDOW_SECONDS = 1.0
+OPTICAL_ANOMALY_ENTRY_MIN_COVERAGE_SECONDS = 0.30
+OPTICAL_ANOMALY_ENTRY_BAD_FRACTION = 0.40
+OPTICAL_ANOMALY_ENTRY_MIN_BAD_FRAMES = 3
 OPTICAL_RECOVERY_STABLE_SECONDS = 2.0
 OPTICAL_RECOVERY_WINDOW_SECONDS = 3.0
 OPTICAL_RECOVERY_ACCEPTED_FRACTION = 0.80
 OPTICAL_RECOVERY_MIN_SAMPLES = 8
-OPTICAL_RECOVERY_POSITION_P90_PX = 5.0
+OPTICAL_RECOVERY_POSITION_P90_PX = 8.0
 OPTICAL_MIN_BASELINE_FRAMES = 5
 OPTICAL_INTENSITY_RATIO_LOW = 0.35
 OPTICAL_INTENSITY_RATIO_HIGH = 2.80
@@ -177,6 +186,8 @@ if POSITION_WATCHDOG_HZ <= 0 or CSV_LOG_HZ <= 0:
     raise ValueError("As frequencias de watchdog e CSV precisam ser positivas.")
 if not 0 < TEMPORAL_WARMUP_SECONDS <= TEMPORAL_WINDOW_SECONDS:
     raise ValueError("O aquecimento temporal deve caber na janela temporal.")
+if not 0 < TEMPORAL_OPTICAL_HOLD_SECONDS <= TEMPORAL_WINDOW_SECONDS:
+    raise ValueError("A retencao optica deve caber na janela temporal.")
 if TEMPORAL_MIN_VALID_FRAMES < 2 or TEMPORAL_RECOVERY_VALID_FRAMES < 2:
     raise ValueError("A media e a recuperacao precisam de mais de um frame.")
 if not 0 < TEMPORAL_CONTROL_GAIN_SCALE <= 1:
@@ -199,6 +210,13 @@ if not (
     raise ValueError("Os limites da autoexposicao sao invalidos.")
 if not 0 < OPTICAL_INITIAL_STABLE_SECONDS <= OPTICAL_BASELINE_WINDOW_SECONDS:
     raise ValueError("O aquecimento optico precisa caber na janela de referencia.")
+if not (
+    0 < OPTICAL_ANOMALY_ENTRY_MIN_COVERAGE_SECONDS
+    <= OPTICAL_ANOMALY_ENTRY_WINDOW_SECONDS
+    and 0 < OPTICAL_ANOMALY_ENTRY_BAD_FRACTION <= 1.0
+    and OPTICAL_ANOMALY_ENTRY_MIN_BAD_FRAMES >= 1
+):
+    raise ValueError("Os limites de confirmacao da anomalia sao invalidos.")
 if not (
     TEMPORAL_WINDOW_SECONDS <= OPTICAL_RECOVERY_STABLE_SECONDS
     <= OPTICAL_RECOVERY_WINDOW_SECONDS

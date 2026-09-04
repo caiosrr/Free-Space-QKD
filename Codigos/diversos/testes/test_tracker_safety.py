@@ -223,7 +223,7 @@ class TrackerSafetyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             tracker_autoteste.calcular_deslocamento_mount(np.eye(2))
 
-    def test_optical_gate_rejects_expanded_dim_spot_then_waits_for_recovery(self):
+    def test_optical_gate_requires_persistent_change_then_waits_for_recovery(self):
         normal = self._optical_candidate()
         gate = tracker_qualidade.OpticalQualityGate(
             normal,
@@ -246,15 +246,46 @@ class TrackerSafetyTests(unittest.TestCase):
         )
         rejected = gate.observe(0.2, expanded)
         self.assertFalse(rejected.accepted)
-        self.assertEqual(rejected.phase, "anomalia")
+        self.assertEqual(rejected.phase, "normal")
+        self.assertTrue(rejected.transient_rejection)
+        self.assertTrue(rejected.control_allowed)
         self.assertIn("intensidade_baixa", rejected.reasons)
         self.assertIn("area_expandida", rejected.reasons)
 
-        self.assertFalse(gate.observe(0.3, normal).accepted)
-        self.assertFalse(gate.observe(0.45, normal).accepted)
-        recovered = gate.observe(0.51, normal)
+        self.assertFalse(gate.observe(0.35, expanded).accepted)
+        persistent = gate.observe(0.51, expanded)
+        self.assertEqual(persistent.phase, "anomalia")
+        self.assertFalse(persistent.control_allowed)
+
+        self.assertFalse(gate.observe(0.60, normal).accepted)
+        self.assertFalse(gate.observe(0.72, normal).accepted)
+        recovered = gate.observe(0.82, normal)
         self.assertTrue(recovered.accepted)
         self.assertEqual(recovered.event, "anomalia_optica_recuperada")
+
+    def test_optical_gate_discards_isolated_deformation_without_recovery(self):
+        normal = self._optical_candidate()
+        gate = tracker_qualidade.OpticalQualityGate(
+            normal,
+            initial_stable_s=0.1,
+            min_baseline_frames=2,
+        )
+        gate.observe(0.0, normal)
+        self.assertTrue(gate.observe(0.11, normal).accepted)
+
+        deformed = self._optical_candidate(area=300.0, bbox_w=30.0)
+        rejected = gate.observe(0.2, deformed)
+        self.assertFalse(rejected.accepted)
+        self.assertTrue(rejected.transient_rejection)
+        self.assertTrue(rejected.control_allowed)
+        self.assertEqual(rejected.phase, "normal")
+        self.assertEqual(rejected.event, "")
+        self.assertGreater(rejected.anomaly_fraction, 0.0)
+
+        recovered = gate.observe(0.3, normal)
+        self.assertTrue(recovered.accepted)
+        self.assertFalse(recovered.transient_rejection)
+        self.assertEqual(recovered.phase, "normal")
 
     def test_optical_gate_waits_after_plain_signal_loss(self):
         normal = self._optical_candidate()
@@ -339,6 +370,8 @@ class TrackerSafetyTests(unittest.TestCase):
             recovery_window_s=3.0,
             recovery_accepted_fraction=0.8,
             recovery_min_samples=8,
+            anomaly_entry_min_coverage_s=0.01,
+            anomaly_entry_min_bad_frames=1,
             min_baseline_frames=2,
         )
         gate.observe(0.0, normal)
@@ -368,6 +401,8 @@ class TrackerSafetyTests(unittest.TestCase):
             recovery_accepted_fraction=0.8,
             recovery_min_samples=5,
             recovery_position_p90_px=5.0,
+            anomaly_entry_min_coverage_s=0.01,
+            anomaly_entry_min_bad_frames=1,
             min_baseline_frames=2,
         )
         gate.observe(0.0, normal)

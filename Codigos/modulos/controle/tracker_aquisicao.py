@@ -12,6 +12,7 @@ from modulos.configuracoes.tracker import (
     BORDER_MIN_PEAK_RATIO,
     BORDER_MIN_SIGNATURE_SIMILARITY,
     SIGNAL_LOSS_LIMIT_SECONDS,
+    TEMPORAL_OPTICAL_HOLD_SECONDS,
     TEMPORAL_RECOVERY_VALID_FRAMES,
     TEMPORAL_RESET_AFTER_LOSS_SECONDS,
 )
@@ -164,6 +165,7 @@ def executar_aquisicao(
     measurement_invalid_since = None
     estimator_cleared_for_loss = False
     recovery_valid_frames = 0
+    last_estimator_input_t = None
     ever_locked = False
     last_frame = None
 
@@ -191,13 +193,13 @@ def executar_aquisicao(
         plausible_border = candidato_borda_compativel(selected, focus_signature)
         border_persistence_s = border_guard.observe(now, plausible_border)
         quality = quality_gate.observe(now, selected if candidate_valid else None)
-        instant_valid = candidate_valid and quality.accepted
+        frame_accepted = candidate_valid and quality.accepted
         raw_exposure_frame = latest_raw_frame()
         exposure_decision = exposure_controller.observe(
             now,
             raw_exposure_frame if raw_exposure_frame is not None else frame,
             target_peak=target_raw_peak,
-            trusted_target=instant_valid,
+            trusted_target=frame_accepted,
         )
         exposure_event = ""
         if exposure_decision.changed:
@@ -219,8 +221,7 @@ def executar_aquisicao(
                 # frame rejeitado nao pode arrastar essa ancora para a anomalia.
                 foco.set_focus_expected_position(*last_trusted_center)
         temporal_outlier = False
-        temporal_estimate = None
-        if instant_valid:
+        if frame_accepted:
             accepted = estimator.add(
                 now,
                 frame,
@@ -230,18 +231,31 @@ def executar_aquisicao(
             )
             temporal_outlier = not accepted
             if accepted:
+                last_estimator_input_t = now
                 recovery_valid_frames = min(
                     recovery_valid_frames + 1,
                     TEMPORAL_RECOVERY_VALID_FRAMES,
                 )
-                temporal_estimate = estimator.estimate(now)
-        else:
+        elif not quality.control_allowed:
             recovery_valid_frames = 0
 
-        if not instant_valid or temporal_outlier:
+        temporal_estimate = estimator.estimate(now)
+        estimate_is_fresh = bool(
+            last_estimator_input_t is not None
+            and now - last_estimator_input_t <= TEMPORAL_OPTICAL_HOLD_SECONDS
+        )
+        measurement_valid = bool(
+            temporal_estimate is not None
+            and candidate_valid
+            and quality.control_allowed
+            and not temporal_outlier
+            and estimate_is_fresh
+            and recovery_valid_frames >= TEMPORAL_RECOVERY_VALID_FRAMES
+        )
+
+        if not measurement_valid:
             if measurement_invalid_since is None:
                 measurement_invalid_since = now
-            recovery_valid_frames = 0
             if (
                 now - measurement_invalid_since
                 >= TEMPORAL_RESET_AFTER_LOSS_SECONDS
@@ -249,11 +263,6 @@ def executar_aquisicao(
             ):
                 estimator.clear()
                 estimator_cleared_for_loss = True
-
-        measurement_valid = bool(
-            temporal_estimate is not None
-            and recovery_valid_frames >= TEMPORAL_RECOVERY_VALID_FRAMES
-        )
         if measurement_valid:
             x_cm = float(temporal_estimate["x_px"])
             y_cm = float(temporal_estimate["y_px"])
@@ -309,6 +318,9 @@ def executar_aquisicao(
                 None if target_raw_total is None else float(target_raw_total)
             )
             state.temporal_outlier = temporal_outlier
+            state.optical_transient_rejection = quality.transient_rejection
+            state.optical_anomaly_fraction = quality.anomaly_fraction
+            state.optical_anomaly_window_s = quality.anomaly_window_s
             state.optical_quality_phase = quality.phase
             state.optical_anomaly_reason = ",".join(quality.reasons)
             state.optical_stable_s = quality.stable_seconds

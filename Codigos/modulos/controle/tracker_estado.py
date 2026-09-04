@@ -47,6 +47,9 @@ class TrackerState:
     target_raw_peak: float | None = None
     target_raw_total: float | None = None
     temporal_outlier: bool = False
+    optical_transient_rejection: bool = False
+    optical_anomaly_fraction: float = 0.0
+    optical_anomaly_window_s: float = 0.0
     optical_quality_phase: str = "aquecendo"
     optical_anomaly_reason: str = ""
     optical_stable_s: float = 0.0
