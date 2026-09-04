@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import sys
+from unittest.mock import patch
 from pathlib import Path
 
 import numpy as np
@@ -186,8 +187,93 @@ class ContinuousCalibrationTests(unittest.TestCase):
             )
             for index in range(continuous.MIN_VALID_SWEEP_BINS)
         ]
-        with self.assertRaisesRegex(RuntimeError, "dispersao optica excessiva"):
+        with self.assertRaisesRegex(RuntimeError, "dispersao residual excessiva"):
             continuous._validate_sweep_aggregation(samples, "turbulento")
+
+    def _stepped_telemetry_captures(self, sign=1, oscillation=0.0):
+        captures = []
+        for index in range(80):
+            elapsed = index * 0.05
+            # Mount anda a 30 px/s, mas a coordenada so atualiza a cada 0.5 s.
+            active = sign * (index // 10) * 0.001
+            x_px = 128.0 + sign * 30.0 * (elapsed - 2.0)
+            y_px = 80.0 + oscillation * (-1 if index % 2 else 1)
+            sample = continuous.SweepSample(
+                "fit_az_pos", 0, sign, elapsed, active, 0.0,
+                active, 0.0, x_px, y_px,
+            )
+            captures.append((sample, self._spot_frame(x_px, y_px, size=224), 1.0))
+        return captures
+
+    def test_stepped_angles_do_not_turn_smooth_sweep_into_optical_noise(self):
+        for sign in (-1, 1):
+            with self.subTest(sign=sign):
+                samples = continuous._aggregate_sweep_frames(self._stepped_telemetry_captures(sign))
+                stats = continuous._validate_sweep_aggregation(samples, "smooth")
+                self.assertGreater(stats["median_raw_centroid_spread_px"], 5.0)
+                self.assertLess(stats["median_centroid_spread_px"], 0.01)
+                self.assertAlmostEqual(stats["trend_px_s"][0], sign * 30.0)
+                # O desconto da tendencia nao remove o sinal que calibra a matriz.
+                slope = np.polyfit([s.delta_az_deg for s in samples], [s.x_px for s in samples], 1)[0]
+                self.assertAlmostEqual(slope, 15000.0, delta=150.0)
+
+    def test_detrending_does_not_hide_fast_oscillation(self):
+        samples = continuous._aggregate_sweep_frames(self._stepped_telemetry_captures(oscillation=8.0))
+        with self.assertRaisesRegex(RuntimeError, "dispersao residual excessiva"):
+            continuous._validate_sweep_aggregation(samples, "oscillating")
+
+    def test_constant_timestamps_have_no_motion_discount(self):
+        trend = continuous._sweep_motion_trend(np.zeros(4), np.array([[1., 2.], [2., 8.], [3., 1.], [4., 9.]]))
+        np.testing.assert_array_equal(trend, [0.0, 0.0])
+
+    def test_rejected_sweep_saves_raw_and_bins_after_stopping(self):
+        rejected = continuous._aggregate_sweep_frames(self._stepped_telemetry_captures(oscillation=8.0))
+        frame = self._spot_frame(40, 40)
+        positions = [(0., 0.)] * 46 + [(0.008, 0.)] * 2
+        spec = continuous.SweepSpec("fit_az_pos", 0, 1, 0.008, "fit")
+        original_write = continuous._write_csv
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(continuous, "_baseline_anchor", return_value=(40., 40.)), \
+                patch.object(continuous, "move_axis"), \
+                patch.object(continuous, "stop_axes_safely") as stop, \
+                patch.object(continuous, "read_altaz", side_effect=positions), \
+                patch.object(continuous, "_capture_valid_cm", return_value=(frame, (40., 40., 10., False), {})), \
+                patch.object(continuous, "_aggregate_sweep_frames", return_value=rejected):
+            def write_after_stop(path, runs):
+                stop.assert_called_once()
+                original_write(path, runs)
+
+            with patch.object(continuous, "_write_csv", side_effect=write_after_stop):
+                with self.assertRaisesRegex(RuntimeError, "dispersao residual excessiva"):
+                    continuous._run_one_sweep(
+                        spec=spec, initial_az=0., initial_alt=0., signature={},
+                        center_anchor=(40., 40.), audit_dir=Path(tmp),
+                    )
+            raw = (Path(tmp) / "fit_az_pos_frames.csv").read_text(encoding="utf-8-sig")
+            bins = (Path(tmp) / "fit_az_pos_bins.csv").read_text(encoding="utf-8-sig")
+            self.assertEqual(len(raw.splitlines()), 25)
+            self.assertEqual(len(bins.splitlines()), 9)
+            self.assertIn("raw_centroid_spread_px", bins)
+
+    def test_capture_failure_preserves_partial_frames(self):
+        frame = self._spot_frame(40, 40)
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(continuous, "_baseline_anchor", return_value=(40., 40.)), \
+                patch.object(continuous, "move_axis"), \
+                patch.object(continuous, "stop_axes_safely") as stop, \
+                patch.object(continuous, "read_altaz", return_value=(0., 0.)), \
+                patch.object(continuous, "_capture_valid_cm", side_effect=[
+                    (frame, (40., 40., 10., False), {}), RuntimeError("camera indisponivel"),
+                ]):
+            with self.assertRaisesRegex(RuntimeError, "camera indisponivel"):
+                continuous._run_one_sweep(
+                    spec=continuous.SweepSpec("fit_az_pos", 0, 1, 0.008, "fit"),
+                    initial_az=0., initial_alt=0., signature={},
+                    center_anchor=(40., 40.), audit_dir=Path(tmp),
+                )
+            stop.assert_called_once()
+            raw = (Path(tmp) / "fit_az_pos_frames.csv").read_text(encoding="utf-8-sig")
+            self.assertEqual(len(raw.splitlines()), 2)
 
 
 if __name__ == "__main__":

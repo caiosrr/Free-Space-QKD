@@ -37,3 +37,17 @@ mecanico ou o corte de energia.
 Os parametros da ASI ficam em `../modulos/configuracoes/camera_asi.py`. Os da IDS ficam
 em `../modulos/configuracoes/camera_ids.py`. Resultados IDS continuam em
 `../Link UFF/resultados/`.
+
+## Auditoria da calibracao continua
+
+Cada sessao salva em `varreduras/` os CSVs de frames individuais e bins
+angulares, inclusive os bins rejeitados. Os frames ja adquiridos tambem sao
+salvos quando a captura e interrompida, depois de solicitar a parada dos eixos.
+
+`raw_centroid_spread_px` inclui o movimento durante cada bin. Ja
+`centroid_spread_px` desconta uma tendencia linear robusta da varredura inteira
+antes de medir a dispersao; nao e uma medida exclusiva de turbulencia.
+`bin_duration_s` e `trend_x_px_s`/`trend_y_px_s` permitem auditar esse desconto.
+As imagens e posicoes usadas na matriz nao sao corrigidas por essa tendencia.
+Os limites residuais continuam 5 px (mediana) e 10 px (P90); as validacoes
+de ida/volta e os testes independentes continuam necessarios.

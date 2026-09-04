@@ -89,6 +89,10 @@ class SweepSample:
     frames_combined: int = 1
     centroid_spread_px: float = 0.0
     quality_weight: float = 1.0
+    raw_centroid_spread_px: float = 0.0
+    bin_duration_s: float = 0.0
+    trend_x_px_s: float = 0.0
+    trend_y_px_s: float = 0.0
 
 
 def _four_sweeps(role: str, amplitude: float, order: tuple[tuple[int, int], ...]):
@@ -271,13 +275,35 @@ def _baseline_anchor(signature: dict, expected_x: float, expected_y: float):
     return anchor
 
 
+def _sweep_motion_trend(times: np.ndarray, centers: np.ndarray) -> np.ndarray:
+    """Velocidade visual robusta da varredura inteira, apenas para diagnostico.
+
+    Nao ajustamos uma reta livre em cada bin (poucos frames esconderiam ruido).
+    A tendencia pode incluir deriva lenta: o residuo NAO mede so turbulencia.
+    """
+    if len(times) < 3 or float(np.ptp(times)) < 1e-6:
+        return np.zeros(2)
+    design = np.column_stack((np.ones(len(times)), times - np.median(times)))
+    weights = np.ones(len(times))
+    for _ in range(ROBUST_ITERS):
+        root_w = np.sqrt(weights)[:, None]
+        beta = np.linalg.lstsq(design * root_w, centers * root_w, rcond=None)[0]
+        residual = np.linalg.norm(centers - design @ beta, axis=1)
+        scale = max(1.4826 * float(np.median(np.abs(residual - np.median(residual)))), 0.25)
+        weights = np.minimum(1.0, HUBER_K * scale / np.maximum(residual, 1e-9))
+    return beta[1]
+
+
 def _aggregate_sweep_frames(
     captures: list[tuple[SweepSample, np.ndarray, float]],
 ) -> list[SweepSample]:
-    """Combina frames que representam praticamente o mesmo angulo do mount."""
+    """Combina frames por angulo informado; a telemetria pode ter patamares."""
     if not captures:
         return []
     first_sample = captures[0][0]
+    times = np.asarray([sample.elapsed_s for sample, _, _ in captures])
+    all_centers = np.asarray([[sample.x_px, sample.y_px] for sample, _, _ in captures])
+    trend = _sweep_motion_trend(times, all_centers)
     active_values = np.asarray(
         [
             sample.delta_az_deg if sample.axis == 0 else sample.delta_alt_deg
@@ -305,8 +331,12 @@ def _aggregate_sweep_frames(
             centers,
             frame_weights,
         )
-        robust_center = np.median(centers, axis=0)
-        radial = np.linalg.norm(centers - robust_center, axis=1)
+        raw_radial = np.linalg.norm(centers - np.median(centers, axis=0), axis=1)
+        # Desconta o deslocamento no intervalo do bin SOMENTE na dispersao.
+        # Imagens, centroides e angulos usados no ajuste da matriz ficam intactos.
+        group_times = times[indices]
+        detrended = centers - (group_times - np.median(group_times))[:, None] * trend
+        radial = np.linalg.norm(detrended - np.median(detrended, axis=0), axis=1)
         spread = float(np.percentile(radial, 90.0))
         frames_combined = len(samples)
         quality_weight = float(
@@ -335,6 +365,10 @@ def _aggregate_sweep_frames(
                 frames_combined=frames_combined,
                 centroid_spread_px=spread,
                 quality_weight=quality_weight,
+                raw_centroid_spread_px=float(np.percentile(raw_radial, 90.0)),
+                bin_duration_s=float(np.ptp(group_times)),
+                trend_x_px_s=float(trend[0]),
+                trend_y_px_s=float(trend[1]),
             )
         )
     return aggregated
@@ -354,7 +388,7 @@ def _validate_sweep_aggregation(samples: list[SweepSample], run_name: str) -> di
         or p90_spread > MAX_P90_BIN_SPREAD_PX
     ):
         raise RuntimeError(
-            f"{run_name}: dispersao optica excessiva nos bins "
+            f"{run_name}: dispersao residual excessiva nos bins (apos tendencia) "
             f"(mediana={median_spread:.2f}px; p90={p90_spread:.2f}px)."
         )
     return {
@@ -364,10 +398,19 @@ def _validate_sweep_aggregation(samples: list[SweepSample], run_name: str) -> di
         ),
         "median_centroid_spread_px": median_spread,
         "p90_centroid_spread_px": p90_spread,
+        "spread_method": "global_robust_linear_time_trend_removed",
+        "median_raw_centroid_spread_px": float(np.median(
+            [sample.raw_centroid_spread_px for sample in samples]
+        )),
+        "max_bin_duration_s": max(sample.bin_duration_s for sample in samples),
+        "trend_px_s": [samples[0].trend_x_px_s, samples[0].trend_y_px_s],
     }
 
 
-def _run_one_sweep(*, spec: SweepSpec, initial_az: float, initial_alt: float, signature: dict, center_anchor):
+def _run_one_sweep(*, spec: SweepSpec, initial_az: float, initial_alt: float,
+                   signature: dict, center_anchor, audit_dir: Path | None = None):
+    if audit_dir is not None:
+        audit_dir.mkdir(parents=True, exist_ok=True)
     center_anchor = _baseline_anchor(signature, *center_anchor)
     captures: list[tuple[SweepSample, np.ndarray, float]] = []
     started = time.perf_counter()
@@ -379,8 +422,8 @@ def _run_one_sweep(*, spec: SweepSpec, initial_az: float, initial_alt: float, si
         f"\n{spec.name}: eixo={'Az' if spec.axis == 0 else 'Alt'} comando={spec.command_sign:+d} | "
         f"amplitude={spec.half_range_deg:.4f} deg | velocidade={SWEEP_RATE_DEG_S:.4f} deg/s"
     )
-    move_axis(spec.axis, spec.command_sign * SWEEP_RATE_DEG_S, True)
     try:
+        move_axis(spec.axis, spec.command_sign * SWEEP_RATE_DEG_S, True)
         while True:
             loop_t = time.perf_counter()
             if loop_t - started > timeout_s:
@@ -429,11 +472,19 @@ def _run_one_sweep(*, spec: SweepSpec, initial_az: float, initial_alt: float, si
                 break
     finally:
         stop_axes_safely()
+        # Primeiro parar os eixos; depois preservar ate uma varredura abortada.
+        if audit_dir is not None:
+            try:
+                _write_csv(audit_dir / f"{spec.name}_frames.csv", [[item[0] for item in captures]])
+            except OSError as exc:
+                print(f"Aviso: nao consegui salvar frames de {spec.name}: {exc}")
     minimum = max(MIN_VALID_SWEEP_SAMPLES, int(spec.half_range_deg / SWEEP_RATE_DEG_S * 5))
     if len(captures) < minimum:
         raise RuntimeError(f"{spec.name}: somente {len(captures)} amostras; minimo={minimum}.")
     raw_samples = [item[0] for item in captures]
     samples = _aggregate_sweep_frames(captures)
+    if audit_dir is not None:
+        _write_csv(audit_dir / f"{spec.name}_bins.csv", [samples])
     aggregation = _validate_sweep_aggregation(samples, spec.name)
     values = np.array([s.delta_az_deg if spec.axis == 0 else s.delta_alt_deg for s in samples])
     span = float(np.ptp(values))
@@ -442,7 +493,8 @@ def _run_one_sweep(*, spec: SweepSpec, initial_az: float, initial_alt: float, si
     print(
         f"  concluida: {len(raw_samples)} frames -> {len(samples)} bins | "
         f"{aggregation['median_frames_per_bin']:.1f} frames/bin | "
-        f"dispersao mediana={aggregation['median_centroid_spread_px']:.2f}px | "
+        f"dispersao residual={aggregation['median_centroid_spread_px']:.2f}px "
+        f"(bruta={aggregation['median_raw_centroid_spread_px']:.2f}px) | "
         f"amplitude={span:.5f} deg."
     )
     return samples, center_anchor, raw_samples, aggregation
@@ -671,7 +723,9 @@ def main(profile_name: str | None = None) -> None:
     all_runs, all_frame_runs, aggregation_stats, failed_optional = [], [], [], []
     summary = {"started_epoch": time.time(), "status": "iniciado", "run_dir": display_path(run_dir),
                "backend": backend_name(), "profile": profile.name,
-               "profile_description": profile.description, "trajectory": [asdict(s) for s in profile.specs]}
+               "profile_description": profile.description, "trajectory": [asdict(s) for s in profile.specs],
+               "spread_method": "global_robust_linear_time_trend_removed",
+               "sweep_audit_subdir": "varreduras"}
     try:
         ensure_connected(); ensure_unparked(); ensure_not_tracking()
         connect_camera(); connected = True
@@ -711,6 +765,7 @@ def main(profile_name: str | None = None) -> None:
                 samples, center_anchor, raw_samples, aggregation = _run_one_sweep(
                     spec=spec, initial_az=initial_az, initial_alt=initial_alt,
                     signature=selection["signature"], center_anchor=center_anchor,
+                    audit_dir=run_dir / "varreduras",
                 )
                 all_runs.append(samples)
                 all_frame_runs.append(raw_samples)
