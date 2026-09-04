@@ -71,6 +71,39 @@ class ContinuousCalibrationTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "mal condicionada"):
             continuous._robust_fit(design, pixels)
 
+    def test_asymmetric_azimuth_scale_is_not_promoted_as_valid(self):
+        expected = np.array([[6200.0, 540.0], [320.0, 7330.0]])
+        runs = self._synthetic_runs(expected, noise=0.0)
+        # Reproduz a discrepancia de aproximadamente 53% da sessao real.
+        for sample in runs[0]:
+            delta = expected[:, 0] * sample.delta_az_deg * (1 / 1.53 - 1)
+            sample.x_px += delta[0]
+            sample.y_px += delta[1]
+        fit = continuous._robust_fit(*continuous._center_runs(runs))
+        validation = continuous._validate_fit(runs, fit)
+        self.assertFalse(validation["ok"])
+        self.assertTrue(any("escalas ida/volta" in x for x in validation["failures"]))
+
+    def test_noisy_fit_does_not_relax_independent_validation(self):
+        expected = np.array([[5000., 0.], [0., 5000.]])
+        runs = self._synthetic_runs(expected, noise=0.)
+        for run in runs:
+            for i, sample in enumerate(run):
+                sample.y_px += 6.0 * (-1 if i % 2 else 1)
+        result = continuous._validate_holdout(
+            runs, {"A": expected, "rms_residual_px": 10.0}, label="holdout_local"
+        )
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("residuo alto" in x for x in result["failures"]))
+
+    def test_clean_independent_validation_still_passes(self):
+        expected = np.array([[5000., 500.], [300., 7000.]])
+        result = continuous._validate_holdout(
+            self._synthetic_runs(expected), {"A": expected, "rms_residual_px": 0.5},
+            label="holdout_local",
+        )
+        self.assertTrue(result["ok"], result["failures"])
+
     def test_promotion_backs_up_old_active_matrices(self):
         old_A = np.array([[1.0, 2.0], [3.0, 4.0]])
         new_A = np.array([[10.0, 2.0], [1.0, 9.0]])

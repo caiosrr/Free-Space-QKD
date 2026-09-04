@@ -20,6 +20,7 @@ from modulos.configuracoes.tracker import (
     SLOW_BIAS_WINDOW_SECONDS,
     SLOW_CORRECTION_PERSISTENCE_SECONDS,
     TEMPORAL_CONTROL_GAIN_SCALE,
+    TEMPORAL_WINDOW_SECONDS,
 )
 from modulos.controle.cameras.backend import backend_name
 from modulos.controle.mount_control import (
@@ -37,6 +38,7 @@ from modulos.controle.tracker_controle import (
     pixel_error_to_mount_error,
 )
 from modulos.controle.tracker_estado import TrackerState
+from modulos.controle.tracker_pulsos import BoundedCorrectionCycle
 
 
 # Frequencia e limites enviados ao mount.
@@ -140,6 +142,10 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
         window_s=SLOW_BIAS_WINDOW_SECONDS,
         warmup_s=SLOW_BIAS_WARMUP_SECONDS,
     )
+    pulse_cycle = BoundedCorrectionCycle(
+        VEL_MIN_LIMITE, min_s=1.0 / CONTROL_HZ,
+        image_window_s=TEMPORAL_WINDOW_SECONDS,
+    )
     directional_error = DirectionalErrorEstimator(
         radius_threshold_px=FAST_CORRECTION_RADIUS_PX,
         window_s=FAST_ERROR_WINDOW_SECONDS,
@@ -235,7 +241,7 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     fast_large_fraction = fast_direction_coherence = 0.0
                     fast_ready = False
                     control_error_source = "sem_sinal"
-                elif seq != last_seq:
+                elif pulse_cycle.ready(measurement_ts) and seq != last_seq:
                     last_seq = seq
                     fast_radius_px = float(np.hypot(dx_filt, dy_filt))
                     fast_estimate = directional_error.observe(
@@ -426,6 +432,17 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                 if loop_t0 < brake_until:
                     target_cmd_az = target_cmd_alt = 0.0
 
+                # Supervisor final: limita inclusive o modo PD de erro grande.
+                # A contagem do pulso independe da chegada de novos frames.
+                current_angular_error = pixel_error_to_mount_error(dx_filt, dy_filt, A_inv)
+                target_cmd_az, target_cmd_alt = pulse_cycle.command(
+                    loop_t0, measurement_ts, (target_cmd_az, target_cmd_alt),
+                    (err_az, err_alt), current_angular_error,
+                    fine=trim_mode_active, enabled=signal_ok and loop_t0 >= brake_until,
+                )
+                if pulse_cycle.phase in {"parando", "acomodacao"}:
+                    control_error_source = "acomodacao_pos_movimento"
+
                 target_cmd_az = float(
                     np.clip(target_cmd_az, -VEL_MAX_TESTE, VEL_MAX_TESTE)
                 )
@@ -434,8 +451,8 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                 )
 
                 max_step = CMD_ACCEL_LIMIT * dt_loop
-                cmd_az = limitar_variacao(cmd_az, target_cmd_az, max_step)
-                cmd_alt = limitar_variacao(cmd_alt, target_cmd_alt, max_step)
+                cmd_az = 0.0 if target_cmd_az == 0.0 else limitar_variacao(cmd_az, target_cmd_az, max_step)
+                cmd_alt = 0.0 if target_cmd_alt == 0.0 else limitar_variacao(cmd_alt, target_cmd_alt, max_step)
 
                 if abs(target_cmd_az) < 1e-12 and abs(cmd_az) < VEL_MIN_LIMITE:
                     cmd_az = 0.0
@@ -474,6 +491,27 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     last_sent_alt = cmd_alt
                     last_sent_alt_t = loop_t0
 
+                if cmd_az == 0.0 and cmd_alt == 0.0 and pulse_cycle.confirm_stopped(time.perf_counter()):
+                    # Nao reutilizar medianas/derivadas anteriores ao movimento.
+                    slow_bias.reset()
+                    directional_error.reset()
+                    correction_gate.reset()
+                    ctrl_az.reset()
+                    ctrl_alt.reset()
+                    fine_az.reset()
+                    fine_alt.reset()
+                    target_cmd_az = target_cmd_alt = 0.0
+                    err_az = err_alt = 0.0
+                    hold_active = True
+                    trim_mode_active = False
+                    slow_ready = fast_ready = False
+                    slow_span_s = fast_span_s = correction_persistence_s = 0.0
+                    fast_large_fraction = fast_direction_coherence = 0.0
+                    control_dx_px = control_dy_px = control_radius_px = 0.0
+                    prev_radius_px = prev_dx_filt_px = prev_dy_filt_px = None
+                    runaway_count = 0
+                    last_seq = seq
+
                 with state.lock:
                     state.err_az_deg = err_az
                     state.err_alt_deg = err_alt
@@ -496,6 +534,9 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     state.correction_persistence_s = correction_persistence_s
                     state.control_error_source = control_error_source
                     state.control_loop_hz = control_loop_hz
+                    state.correction_phase = pulse_cycle.phase
+                    state.correction_cycles = pulse_cycle.completed
+                    state.post_motion_wait_s = max(0.0, pulse_cycle.accept_after - loop_t0)
 
                 elapsed = time.perf_counter() - loop_t0
                 if elapsed < dt_target:

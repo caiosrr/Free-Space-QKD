@@ -34,6 +34,9 @@ class TrackerState:
     fast_error_ready: bool = False
     correction_persistence_s: float = 0.0
     control_error_source: str = "repouso"
+    correction_phase: str = "pronto"
+    correction_cycles: int = 0
+    post_motion_wait_s: float = 0.0
     measurement_hz: float = 0.0
     temporal_frame_count: int = 0
     temporal_window_s: float = 0.0

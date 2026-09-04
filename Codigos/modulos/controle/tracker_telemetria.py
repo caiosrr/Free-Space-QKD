@@ -103,6 +103,7 @@ class TrackerCsvLogger:
         "janela_erro_grande_s", "fracao_erro_grande",
         "coerencia_direcional_erro_grande", "erro_grande_confirmado",
         "persistencia_erro_s", "fonte_erro_controle",
+        "fase_correcao", "ciclos_correcao", "espera_pos_movimento_s",
         "freio_ativo", "autoteste_ativo", "autoteste_aprovado",
         "qualidade_optica", "motivo_anomalia_optica",
         "fracao_anomalia_janela", "duracao_janela_anomalia_s",
@@ -163,6 +164,7 @@ class TrackerCsvLogger:
                 FAST_ERROR_MIN_DIRECTION_COHERENCE
             ),
             "fast_error_min_samples": FAST_ERROR_MIN_SAMPLES,
+            "control_strategy": "bounded_pulses_with_post_motion_measurements",
             "auto_exposure_enabled": (
                 AUTO_EXPOSURE_ENABLED and backend_name() == "ids"
             ),
@@ -378,6 +380,9 @@ class TrackerCsvLogger:
                 state_values["correction_persistence_s"], 3
             ),
             "fonte_erro_controle": state_values["control_error_source"],
+            "fase_correcao": state_values.get("correction_phase", "pronto"),
+            "ciclos_correcao": state_values.get("correction_cycles", 0),
+            "espera_pos_movimento_s": number(state_values.get("post_motion_wait_s", 0.0), 3),
             "freio_ativo": int(bool(state_values["brake_active"])),
             "autoteste_ativo": int(bool(state_values["preflight_active"])),
             "autoteste_aprovado": int(bool(state_values["preflight_passed"])),

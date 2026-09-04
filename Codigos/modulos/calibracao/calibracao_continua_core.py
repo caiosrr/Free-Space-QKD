@@ -49,6 +49,13 @@ MIN_VALID_SWEEP_BINS = 8
 MAX_MEDIAN_BIN_SPREAD_PX = 5.0
 MAX_P90_BIN_SPREAD_PX = 10.0
 MIN_CALIBRATION_SIMILARITY = 0.25
+# Independente da ROI enxuta do tracker: os testes amplos precisam de margem.
+CALIBRATION_ROI_SIZE_PX = 512
+# Limites iniciais de repetibilidade, nao uma garantia de precisao subpixel.
+MAX_DIRECTION_SCALE_RATIO = 1.35
+MIN_DIRECTION_COSINE = 0.98
+MAX_HOLDOUT_RELATIVE_RMS = 0.25
+HOLDOUT_NOISE_FLOOR_PX = 3.0
 HUBER_K = 1.5
 ROBUST_ITERS = 10
 
@@ -605,9 +612,9 @@ def _validate_fit(runs: list[list[SweepSample]], fit: dict, half_range_deg=LOCAL
         cosine = float(np.dot(*vectors) / max(norms[0] * norms[1], 1e-12))
         ratio = max(norms) / max(min(norms), 1e-12)
         checks[label] = {"slopes_px_per_deg": [v.tolist() for v in vectors], "cosine": cosine, "magnitude_ratio": ratio}
-        if cosine < 0.55:
+        if cosine < MIN_DIRECTION_COSINE:
             failures.append(f"{label}: ida/volta discordam (cosseno={cosine:.2f})")
-        if ratio > 3.0:
+        if ratio > MAX_DIRECTION_SCALE_RATIO:
             failures.append(f"{label}: escalas ida/volta diferem {ratio:.1f}x")
     response = {}
     rms = float(fit["rms_residual_px"])
@@ -634,13 +641,14 @@ def _validate_holdout(runs: list[list[SweepSample]], fit: dict, *, label: str) -
             cosine = float(np.dot(reference, slope) / max(nr * ns, 1e-12))
             ratio = max(nr, ns) / max(min(nr, ns), 1e-12)
             directions[samples[0].run] = {"cosine_with_fit": cosine, "magnitude_ratio_with_fit": ratio}
-            if cosine < 0.75:
+            if cosine < MIN_DIRECTION_COSINE:
                 failures.append(f"{samples[0].run}: direcao diverge (cosseno={cosine:.2f})")
-            if ratio > 2.5:
+            if ratio > MAX_DIRECTION_SCALE_RATIO:
                 failures.append(f"{samples[0].run}: escala diverge ({ratio:.1f}x)")
     predicted = float(np.median(np.linalg.norm(design @ fit["A"].T, axis=1)))
     relative = rms / max(predicted, 1e-9)
-    if rms > max(10.0, 3.0 * float(fit["rms_residual_px"])) and relative > 0.25:
+    # O ruido alto do proprio ajuste nao deve aumentar a tolerancia do holdout.
+    if rms > HOLDOUT_NOISE_FLOOR_PX and relative > MAX_HOLDOUT_RELATIVE_RMS:
         failures.append(f"{label}: residuo alto ({rms:.1f}px; relativo={relative:.2f})")
     return {"ok": not failures, "failures": failures, "run_count": len(runs),
             "sample_count": sum(map(len, runs)), "rms_residual_px": rms,
@@ -725,7 +733,13 @@ def main(profile_name: str | None = None) -> None:
                "backend": backend_name(), "profile": profile.name,
                "profile_description": profile.description, "trajectory": [asdict(s) for s in profile.specs],
                "spread_method": "global_robust_linear_time_trend_removed",
-               "sweep_audit_subdir": "varreduras"}
+               "sweep_audit_subdir": "varreduras",
+               "validation_limits": {
+                   "maximum_direction_scale_ratio": MAX_DIRECTION_SCALE_RATIO,
+                   "minimum_direction_cosine": MIN_DIRECTION_COSINE,
+                   "maximum_holdout_relative_rms": MAX_HOLDOUT_RELATIVE_RMS,
+                   "holdout_noise_floor_px": HOLDOUT_NOISE_FLOOR_PX,
+               }}
     try:
         ensure_connected(); ensure_unparked(); ensure_not_tracking()
         connect_camera(); connected = True
@@ -735,7 +749,7 @@ def main(profile_name: str | None = None) -> None:
         full_frame = foco.capture_frame(foco.EXPOSURE_SECONDS, light=True)
         selection = foco.escolher_ilha_manualmente(full_frame, max_jump_px=TRACKER_MAX_SPOT_JUMP_PX)
         sensor_h, sensor_w = full_frame.shape[:2]
-        roi_size = roi_size_for_backend(backend_name())
+        roi_size = max(CALIBRATION_ROI_SIZE_PX, roi_size_for_backend(backend_name()))
         raw_x, raw_y = _raw_target_from_display(sensor_w, sensor_h, selection["x_px"], selection["y_px"])
         start_x, start_y, _, _ = roi_incluindo_alvo(sensor_w, sensor_h, roi_size, roi_size, raw_x, raw_y)
         actual_w, actual_h, actual_x, actual_y = camera.set_roi(roi_size, roi_size, start_x, start_y)
