@@ -8,6 +8,11 @@ import numpy as np
 
 from modulos.configuracoes.tracker import (
     FAST_CORRECTION_RADIUS_PX,
+    FAST_ERROR_CONFIRM_SECONDS,
+    FAST_ERROR_MIN_DIRECTION_COHERENCE,
+    FAST_ERROR_MIN_LARGE_FRACTION,
+    FAST_ERROR_MIN_SAMPLES,
+    FAST_ERROR_WINDOW_SECONDS,
     HOLD_ENTER_RADIUS_PX,
     HOLD_EXIT_RADIUS_PX,
     MAX_TRACKING_RATE_DEG_S,
@@ -24,6 +29,7 @@ from modulos.controle.mount_control import (
     stop_axes_safely,
 )
 from modulos.controle.tracker_controle import (
+    DirectionalErrorEstimator,
     FinePulseAxis,
     MeasurementPDTrim,
     SlowBiasEstimator,
@@ -134,6 +140,14 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
         window_s=SLOW_BIAS_WINDOW_SECONDS,
         warmup_s=SLOW_BIAS_WARMUP_SECONDS,
     )
+    directional_error = DirectionalErrorEstimator(
+        radius_threshold_px=FAST_CORRECTION_RADIUS_PX,
+        window_s=FAST_ERROR_WINDOW_SECONDS,
+        confirm_s=FAST_ERROR_CONFIRM_SECONDS,
+        min_large_fraction=FAST_ERROR_MIN_LARGE_FRACTION,
+        min_direction_coherence=FAST_ERROR_MIN_DIRECTION_COHERENCE,
+        min_samples=FAST_ERROR_MIN_SAMPLES,
+    )
     correction_gate = SlowCorrectionGate(
         enter_radius_px=HOLD_ENTER_RADIUS_PX,
         exit_radius_px=HOLD_EXIT_RADIUS_PX,
@@ -163,6 +177,9 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
     slow_dx_px = slow_dy_px = slow_radius_px = 0.0
     slow_span_s = correction_persistence_s = 0.0
     slow_ready = False
+    fast_dx_px = fast_dy_px = fast_span_s = 0.0
+    fast_large_fraction = fast_direction_coherence = 0.0
+    fast_ready = False
     control_error_source = "repouso"
     control_loop_hz = 0.0
 
@@ -208,15 +225,32 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     trim_mode_active = False
                     hold_active = True
                     slow_bias.reset()
+                    directional_error.reset()
                     correction_gate.reset()
                     control_dx_px = control_dy_px = control_radius_px = 0.0
                     slow_dx_px = slow_dy_px = slow_radius_px = 0.0
                     slow_span_s = correction_persistence_s = 0.0
                     slow_ready = False
+                    fast_dx_px = fast_dy_px = fast_span_s = 0.0
+                    fast_large_fraction = fast_direction_coherence = 0.0
+                    fast_ready = False
                     control_error_source = "sem_sinal"
                 elif seq != last_seq:
                     last_seq = seq
                     fast_radius_px = float(np.hypot(dx_filt, dy_filt))
+                    fast_estimate = directional_error.observe(
+                        measurement_ts,
+                        dx_filt,
+                        dy_filt,
+                    )
+                    fast_dx_px = fast_estimate.dx_px
+                    fast_dy_px = fast_estimate.dy_px
+                    fast_span_s = fast_estimate.span_s
+                    fast_large_fraction = fast_estimate.large_fraction
+                    fast_direction_coherence = (
+                        fast_estimate.direction_coherence
+                    )
+                    fast_ready = fast_estimate.ready
                     bias = slow_bias.observe(measurement_ts, dx_filt, dy_filt)
                     slow_dx_px = bias.dx_px
                     slow_dy_px = bias.dy_px
@@ -227,6 +261,8 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     decision = correction_gate.update(
                         measurement_ts,
                         fast_radius_px=fast_radius_px,
+                        fast_confirmed=fast_ready,
+                        fast_persistence_s=fast_span_s,
                         slow_radius_px=slow_radius_px,
                         slow_ready=slow_ready,
                     )
@@ -234,8 +270,8 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     hold_active = decision.hold_active
                     correction_persistence_s = decision.persistence_s
                     control_error_source = decision.source
-                    if decision.source == "erro_grande":
-                        control_dx_px, control_dy_px = dx_filt, dy_filt
+                    if decision.source == "erro_grande_persistente":
+                        control_dx_px, control_dy_px = fast_dx_px, fast_dy_px
                     elif slow_ready:
                         control_dx_px, control_dy_px = slow_dx_px, slow_dy_px
                     else:
@@ -279,11 +315,15 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                         trim_mode_active = False
                         hold_active = True
                         slow_bias.reset()
+                        directional_error.reset()
                         correction_gate.reset()
                         control_dx_px = control_dy_px = control_radius_px = 0.0
                         slow_dx_px = slow_dy_px = slow_radius_px = 0.0
                         slow_span_s = correction_persistence_s = 0.0
                         slow_ready = False
+                        fast_dx_px = fast_dy_px = fast_span_s = 0.0
+                        fast_large_fraction = fast_direction_coherence = 0.0
+                        fast_ready = False
                         control_error_source = "freio_movimento_manual"
                         brake_until = loop_t0 + MANUAL_JUMP_HOLD_S
                         runaway_count = 0
@@ -370,11 +410,15 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                                 trim_mode_active = False
                                 hold_active = True
                                 slow_bias.reset()
+                                directional_error.reset()
                                 correction_gate.reset()
                                 control_dx_px = control_dy_px = control_radius_px = 0.0
                                 slow_dx_px = slow_dy_px = slow_radius_px = 0.0
                                 slow_span_s = correction_persistence_s = 0.0
                                 slow_ready = False
+                                fast_dx_px = fast_dy_px = fast_span_s = 0.0
+                                fast_large_fraction = fast_direction_coherence = 0.0
+                                fast_ready = False
                                 control_error_source = "freio_erro_crescente"
                                 brake_until = loop_t0 + RUNAWAY_HOLD_S
                                 runaway_count = 0
@@ -443,6 +487,12 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     state.control_radius_px = control_radius_px
                     state.slow_bias_window_s = slow_span_s
                     state.slow_bias_ready = slow_ready
+                    state.fast_error_window_s = fast_span_s
+                    state.fast_error_large_fraction = fast_large_fraction
+                    state.fast_error_direction_coherence = (
+                        fast_direction_coherence
+                    )
+                    state.fast_error_ready = fast_ready
                     state.correction_persistence_s = correction_persistence_s
                     state.control_error_source = control_error_source
                     state.control_loop_hz = control_loop_hz

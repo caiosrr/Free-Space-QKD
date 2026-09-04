@@ -30,6 +30,11 @@ from modulos.configuracoes.tracker import (
     CSV_FLUSH_SECONDS,
     CSV_LOG_HZ,
     FAST_CORRECTION_RADIUS_PX,
+    FAST_ERROR_CONFIRM_SECONDS,
+    FAST_ERROR_MIN_DIRECTION_COHERENCE,
+    FAST_ERROR_MIN_LARGE_FRACTION,
+    FAST_ERROR_MIN_SAMPLES,
+    FAST_ERROR_WINDOW_SECONDS,
     HOLD_ENTER_RADIUS_PX,
     HOLD_EXIT_RADIUS_PX,
     MAX_OFFSET_ALT_DEG,
@@ -88,6 +93,8 @@ class TrackerCsvLogger:
         "calibracao", "zona_parada_ativa", "correcao_lenta_ativa",
         "erro_controle_x_px", "erro_controle_y_px", "raio_controle_px",
         "janela_vies_lento_s", "vies_lento_pronto",
+        "janela_erro_grande_s", "fracao_erro_grande",
+        "coerencia_direcional_erro_grande", "erro_grande_confirmado",
         "persistencia_erro_s", "fonte_erro_controle",
         "freio_ativo", "autoteste_ativo", "autoteste_aprovado",
         "qualidade_optica", "motivo_anomalia_optica",
@@ -140,6 +147,15 @@ class TrackerCsvLogger:
                 SLOW_CORRECTION_PERSISTENCE_SECONDS
             ),
             "fast_correction_radius_px": FAST_CORRECTION_RADIUS_PX,
+            "fast_error_window_seconds": FAST_ERROR_WINDOW_SECONDS,
+            "fast_error_confirm_seconds": FAST_ERROR_CONFIRM_SECONDS,
+            "fast_error_min_large_fraction": (
+                FAST_ERROR_MIN_LARGE_FRACTION
+            ),
+            "fast_error_min_direction_coherence": (
+                FAST_ERROR_MIN_DIRECTION_COHERENCE
+            ),
+            "fast_error_min_samples": FAST_ERROR_MIN_SAMPLES,
             "auto_exposure_enabled": (
                 AUTO_EXPOSURE_ENABLED and backend_name() == "ids"
             ),
@@ -302,6 +318,18 @@ class TrackerCsvLogger:
             "raio_controle_px": number(state_values["control_radius_px"], 3),
             "janela_vies_lento_s": number(state_values["slow_bias_window_s"], 3),
             "vies_lento_pronto": int(bool(state_values["slow_bias_ready"])),
+            "janela_erro_grande_s": number(
+                state_values["fast_error_window_s"], 3
+            ),
+            "fracao_erro_grande": number(
+                state_values["fast_error_large_fraction"], 4
+            ),
+            "coerencia_direcional_erro_grande": number(
+                state_values["fast_error_direction_coherence"], 4
+            ),
+            "erro_grande_confirmado": int(
+                bool(state_values["fast_error_ready"])
+            ),
             "persistencia_erro_s": number(
                 state_values["correction_persistence_s"], 3
             ),

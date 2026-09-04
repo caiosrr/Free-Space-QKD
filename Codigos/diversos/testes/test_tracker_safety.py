@@ -24,6 +24,7 @@ from modulos.controle.tracker_exposicao import (
     border_background_metrics,
 )
 from modulos.controle.tracker_controle import (
+    DirectionalErrorEstimator,
     FinePulseAxis,
     SlowBiasEstimator,
     SlowCorrectionGate,
@@ -154,7 +155,39 @@ class TrackerSafetyTests(unittest.TestCase):
         self.assertEqual(estimate.span_s, 4.0)
         self.assertAlmostEqual(estimate.dx_px, 2.2)
 
-    def test_slow_gate_requires_time_but_large_error_is_immediate(self):
+    def test_directional_error_rejects_oscillation_and_accepts_displacement(self):
+        oscillating = DirectionalErrorEstimator(
+            radius_threshold_px=5.0,
+            window_s=3.0,
+            confirm_s=2.0,
+            min_large_fraction=0.7,
+            min_direction_coherence=0.8,
+            min_samples=5,
+        )
+        estimate = None
+        for index in range(13):
+            dx = 6.0 if index % 2 == 0 else -6.0
+            estimate = oscillating.observe(index * 0.2, dx, 0.0)
+        self.assertIsNotNone(estimate)
+        self.assertFalse(estimate.ready)
+        self.assertLess(estimate.direction_coherence, 0.2)
+
+        displaced = DirectionalErrorEstimator(
+            radius_threshold_px=5.0,
+            window_s=3.0,
+            confirm_s=2.0,
+            min_large_fraction=0.7,
+            min_direction_coherence=0.8,
+            min_samples=5,
+        )
+        for index in range(11):
+            estimate = displaced.observe(index * 0.2, 6.0, 1.0)
+        self.assertTrue(estimate.ready)
+        self.assertGreater(estimate.direction_coherence, 0.99)
+        self.assertAlmostEqual(estimate.dx_px, 6.0)
+        self.assertAlmostEqual(estimate.dy_px, 1.0)
+
+    def test_slow_gate_requires_time_and_confirms_large_error(self):
         gate = SlowCorrectionGate(
             enter_radius_px=1.0,
             exit_radius_px=2.0,
@@ -187,9 +220,24 @@ class TrackerSafetyTests(unittest.TestCase):
                 2.1, fast_radius_px=1.0, slow_radius_px=0.9, slow_ready=True
             ).hold_active
         )
-        decision = gate.update(3.0, fast_radius_px=5.1, slow_ready=False)
+        decision = gate.update(
+            3.0,
+            fast_radius_px=5.1,
+            fast_confirmed=False,
+            fast_persistence_s=1.0,
+            slow_ready=False,
+        )
+        self.assertTrue(decision.hold_active)
+        self.assertEqual(decision.source, "aguardando_erro_grande")
+        decision = gate.update(
+            4.1,
+            fast_radius_px=5.1,
+            fast_confirmed=True,
+            fast_persistence_s=2.1,
+            slow_ready=False,
+        )
         self.assertFalse(decision.hold_active)
-        self.assertEqual(decision.source, "erro_grande")
+        self.assertEqual(decision.source, "erro_grande_persistente")
 
     def test_fine_pulse_uses_minimum_rate_then_waits_for_settling(self):
         pulse = FinePulseAxis(

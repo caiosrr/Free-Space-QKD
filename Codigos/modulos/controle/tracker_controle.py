@@ -59,6 +59,99 @@ class SlowBiasEstimator:
 
 
 @dataclass(frozen=True)
+class DirectionalErrorEstimate:
+    """Resumo robusto da persistencia de um deslocamento grande."""
+
+    dx_px: float
+    dy_px: float
+    span_s: float
+    large_fraction: float
+    direction_coherence: float
+    ready: bool
+
+    @property
+    def radius_px(self) -> float:
+        return float(np.hypot(self.dx_px, self.dy_px))
+
+
+class DirectionalErrorEstimator:
+    """Distingue deslocamento coerente de oscilacao radial em torno do alvo."""
+
+    def __init__(
+        self,
+        radius_threshold_px=5.0,
+        window_s=3.0,
+        confirm_s=2.0,
+        min_large_fraction=0.70,
+        min_direction_coherence=0.80,
+        min_samples=8,
+    ):
+        self.radius_threshold_px = float(radius_threshold_px)
+        self.window_s = float(window_s)
+        self.confirm_s = float(confirm_s)
+        self.min_large_fraction = float(min_large_fraction)
+        self.min_direction_coherence = float(min_direction_coherence)
+        self.min_samples = int(min_samples)
+        if not (
+            self.radius_threshold_px > 0.0
+            and 0.0 < self.confirm_s <= self.window_s
+            and 0.5 < self.min_large_fraction <= 1.0
+            and 0.5 < self.min_direction_coherence <= 1.0
+            and self.min_samples >= 3
+        ):
+            raise ValueError("Parametros invalidos para confirmar erro direcional.")
+        self.reset()
+
+    def reset(self):
+        self._samples = deque()
+
+    def observe(self, timestamp, dx_px, dy_px) -> DirectionalErrorEstimate:
+        timestamp = float(timestamp)
+        values = np.asarray([dx_px, dy_px], dtype=float)
+        if not np.all(np.isfinite(values)):
+            self.reset()
+            return DirectionalErrorEstimate(0.0, 0.0, 0.0, 0.0, 0.0, False)
+
+        self._samples.append((timestamp, float(values[0]), float(values[1])))
+        cutoff = timestamp - self.window_s
+        while self._samples and self._samples[0][0] < cutoff:
+            self._samples.popleft()
+
+        points = np.asarray([(item[1], item[2]) for item in self._samples])
+        radii = np.hypot(points[:, 0], points[:, 1])
+        large = radii >= self.radius_threshold_px
+        large_fraction = float(np.mean(large))
+        span_s = max(0.0, timestamp - self._samples[0][0])
+
+        if np.any(large):
+            large_points = points[large]
+            large_radii = radii[large]
+            unit_vectors = large_points / large_radii[:, None]
+            direction_coherence = float(np.linalg.norm(np.mean(unit_vectors, axis=0)))
+            median = np.median(large_points, axis=0)
+        else:
+            direction_coherence = 0.0
+            median = np.zeros(2, dtype=float)
+
+        median_radius = float(np.hypot(median[0], median[1]))
+        ready = bool(
+            len(self._samples) >= self.min_samples
+            and span_s >= self.confirm_s
+            and large_fraction >= self.min_large_fraction
+            and direction_coherence >= self.min_direction_coherence
+            and median_radius >= self.radius_threshold_px
+        )
+        return DirectionalErrorEstimate(
+            float(median[0]),
+            float(median[1]),
+            span_s,
+            large_fraction,
+            direction_coherence,
+            ready,
+        )
+
+
+@dataclass(frozen=True)
 class CorrectionDecision:
     hold_active: bool
     source: str
@@ -66,7 +159,7 @@ class CorrectionDecision:
 
 
 class SlowCorrectionGate:
-    """Atua em vies persistente e preserva resposta imediata a erros grandes."""
+    """Atua em vies lento ou em erro grande previamente confirmado."""
 
     def __init__(
         self,
@@ -95,6 +188,8 @@ class SlowCorrectionGate:
         timestamp,
         *,
         fast_radius_px,
+        fast_confirmed=False,
+        fast_persistence_s=0.0,
         slow_radius_px=None,
         slow_ready=False,
     ) -> CorrectionDecision:
@@ -109,21 +204,33 @@ class SlowCorrectionGate:
             self.reset()
             return CorrectionDecision(True, "repouso", 0.0)
 
-        if fast_radius_px >= self.fast_radius_px:
+        if fast_confirmed:
             self._correction_active = True
             self._above_since = None
-            return CorrectionDecision(False, "erro_grande", 0.0)
+            return CorrectionDecision(
+                False,
+                "erro_grande_persistente",
+                float(fast_persistence_s),
+            )
 
         if self._correction_active:
             control_radius = slow_radius_px if slow_ready else fast_radius_px
             if control_radius <= self.enter_radius_px:
                 self.reset()
                 return CorrectionDecision(True, "repouso", 0.0)
-            source = "vies_lento" if slow_ready else "erro_grande"
+            source = (
+                "vies_lento" if slow_ready else "erro_grande_persistente"
+            )
             return CorrectionDecision(False, source, 0.0)
 
         if not slow_ready or slow_radius_px < self.exit_radius_px:
             self._above_since = None
+            if fast_radius_px >= self.fast_radius_px:
+                return CorrectionDecision(
+                    True,
+                    "aguardando_erro_grande",
+                    float(fast_persistence_s),
+                )
             return CorrectionDecision(True, "repouso", 0.0)
 
         if self._above_since is None:

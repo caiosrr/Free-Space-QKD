@@ -30,6 +30,13 @@ SLOW_BIAS_WINDOW_SECONDS = 8.0
 SLOW_BIAS_WARMUP_SECONDS = 4.0
 SLOW_CORRECTION_PERSISTENCE_SECONDS = 1.5
 FAST_CORRECTION_RADIUS_PX = 5.0
+# Um erro acima do raio rapido nao comanda mais o mount por uma unica media.
+# Ele precisa persistir e manter direcao coerente nesta janela curta.
+FAST_ERROR_WINDOW_SECONDS = 3.0
+FAST_ERROR_CONFIRM_SECONDS = 2.0
+FAST_ERROR_MIN_LARGE_FRACTION = 0.70
+FAST_ERROR_MIN_DIRECTION_COHERENCE = 0.80
+FAST_ERROR_MIN_SAMPLES = 8
 
 # AUTOTESTE TEMPORARIO: desloca a ilha depois de salvar o alvo e verifica se o
 # tracker a recupera. A opcao continua desativada por padrao no prompt inicial.
@@ -159,6 +166,13 @@ if not (
     and SLOW_CORRECTION_PERSISTENCE_SECONDS > 0
 ):
     raise ValueError("Os tempos e raios do controle em duas escalas sao invalidos.")
+if not (
+    0 < FAST_ERROR_CONFIRM_SECONDS <= FAST_ERROR_WINDOW_SECONDS
+    and 0.5 < FAST_ERROR_MIN_LARGE_FRACTION <= 1.0
+    and 0.5 < FAST_ERROR_MIN_DIRECTION_COHERENCE <= 1.0
+    and FAST_ERROR_MIN_SAMPLES >= 3
+):
+    raise ValueError("A confirmacao vetorial do erro grande e invalida.")
 if (
     PREFLIGHT_MIN_CONFIRMED_ERROR_PX <= HOLD_EXIT_RADIUS_PX
     or (PREFLIGHT_SHIFT_X_PX**2 + PREFLIGHT_SHIFT_Y_PX**2) ** 0.5
