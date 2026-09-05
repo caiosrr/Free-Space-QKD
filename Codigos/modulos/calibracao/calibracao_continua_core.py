@@ -29,7 +29,7 @@ from modulos.controle.mapa_jacobianas import registrar_no
 from modulos.visao import detector_ilhas as foco
 from modulos.calibracao.referencias_estaticas import (
     REFERENCE_WINDOW_S, REFERENCE_SETTLE_S, REFERENCE_TIMEOUT_S, REFERENCE_MIN_FRAMES,
-    collect_reference, reference_difference,
+    collect_reference,
 )
 
 
@@ -66,6 +66,7 @@ MAX_HOLDOUT_RELATIVE_RMS = 0.25
 HOLDOUT_NOISE_FLOOR_PX = 3.0
 HUBER_K = 1.5
 ROBUST_ITERS = 10
+STATIONARY_FRACTIONS = (0.25, 0.50, 0.75, 1.0)
 
 
 @dataclass(frozen=True)
@@ -127,7 +128,7 @@ def calibration_profile(name: str) -> CalibrationProfile:
     if normalized in {"rapido", "quick"}:
         return CalibrationProfile(
             "rapido",
-            "4 varreduras com referencias A-B-A; validacao interna, cerca de 1-2 min",
+            "4 escadas unidirecionais com medias paradas; validacao interna, cerca de 2 min",
             _four_sweeps("fit", LOCAL_HALF_RANGE_DEG, ((0, +1), (1, -1), (0, -1), (1, +1))),
             False,
         )
@@ -138,7 +139,7 @@ def calibration_profile(name: str) -> CalibrationProfile:
     wide = _four_sweeps("holdout_amplo", WIDE_HALF_RANGE_DEG, ((0, -1), (1, +1), (0, +1), (1, -1)))
     return CalibrationProfile(
         "robusto",
-        "4 ajustes + 4 validacoes locais + 4 amplas com referencias A-B-A; cerca de 3-5 min",
+        "4 ajustes + 4 validacoes locais + 4 amplas em patamares; cerca de 4-7 min",
         fit + holdout + wide,
         True,
     )
@@ -491,6 +492,10 @@ def _run_one_sweep(*, spec: SweepSpec, initial_az: float, initial_alt: float,
         f"amplitude={spec.half_range_deg:.4f} deg | velocidade={SWEEP_RATE_DEG_S:.4f} deg/s"
     )
     try:
+        # Patamares usam limites cumulativos; nunca iniciar um passo ja atingido.
+        start_offsets = _offsets_from_start(initial_az, initial_alt, *read_altaz())
+        if abs(start_offsets[spec.axis]) >= spec.half_range_deg:
+            raise RuntimeError(f"{spec.name}: patamar ja atingido antes do movimento.")
         move_axis(spec.axis, spec.command_sign * SWEEP_RATE_DEG_S, True)
         while True:
             loop_t = time.perf_counter()
@@ -508,6 +513,8 @@ def _run_one_sweep(*, spec: SweepSpec, initial_az: float, initial_alt: float,
             other = dalt if spec.axis == 0 else daz
             if abs(active) > hard_limit:
                 raise RuntimeError(f"Watchdog: {spec.name} excedeu {hard_limit:.3f} deg.")
+            if active * spec.command_sign < -0.001:
+                raise RuntimeError(f"Watchdog: {spec.name} moveu no sentido angular oposto.")
             if abs(other) > OTHER_AXIS_LIMIT_DEG:
                 raise RuntimeError(f"Watchdog: outro eixo derivou {other:+.4f} deg.")
             quality = _frame_quality(selected)
@@ -539,14 +546,18 @@ def _run_one_sweep(*, spec: SweepSpec, initial_az: float, initial_alt: float,
             if abs(active) >= spec.half_range_deg:
                 break
     finally:
-        stop_axes_safely()
+        stopped = stop_axes_safely()
         # Primeiro parar os eixos; depois preservar ate uma varredura abortada.
         if audit_dir is not None:
             try:
                 _write_csv(audit_dir / f"{spec.name}_frames.csv", [[item[0] for item in captures]])
             except OSError as exc:
                 print(f"Aviso: nao consegui salvar frames de {spec.name}: {exc}")
-    minimum = max(MIN_VALID_SWEEP_SAMPLES, int(spec.half_range_deg / SWEEP_RATE_DEG_S * 5))
+        if not stopped:
+            raise RuntimeError(f"Parada nao confirmada em {spec.name}.")
+    # Em passos curtos estes frames sao apenas vigilancia, nunca o estimador.
+    minimum = (max(MIN_VALID_SWEEP_SAMPLES, int(spec.half_range_deg / SWEEP_RATE_DEG_S * 5))
+               if validate_dynamic else 3)
     if len(captures) < minimum:
         raise RuntimeError(f"{spec.name}: somente {len(captures)} amostras; minimo={minimum}.")
     raw_samples = [item[0] for item in captures]
@@ -608,7 +619,12 @@ def _take_stationary_reference(signature, expected, initial_az, initial_alt, aud
 
 
 def _run_reference_sweep(*, spec, initial_az, initial_alt, signature, center_anchor, audit_dir):
-    """Origem A -> varredura -> ponto B -> retorno A'; so mede parado."""
+    """Mede quatro patamares no mesmo sentido; retorno nao participa do ajuste.
+
+    O trecho ate P1 acomoda a inversao. Cada escada tem intercepto proprio,
+    portanto deslocamentos opticos entre retornos nao viram uma falsa escala.
+    Deriva atmosferica lenta ainda e verificada nas direcoes e holdouts.
+    """
     def reference(label, expected, expected_angle=None):
         print(f"  {spec.name}: referencia {label}, mount parado, media >= {REFERENCE_WINDOW_S:.1f}s")
         try:
@@ -618,14 +634,44 @@ def _run_reference_sweep(*, spec, initial_az, initial_alt, signature, center_anc
         except RuntimeError as exc:
             raise RuntimeError(f"{spec.name}/{label}: {exc}") from exc
     before = reference("A", center_anchor, (0.0, 0.0))
-    _, _, raw_samples, aggregation = _run_one_sweep(
-        spec=spec, initial_az=initial_az, initial_alt=initial_alt, signature=signature,
-        center_anchor=tuple(before["center"]), audit_dir=audit_dir,
-        baseline=False, validate_dynamic=False,
-    )
-    last = raw_samples[-1]
-    displaced = reference("B", (last.x_px, last.y_px))
-    # Volta para o angulo MEDIDO em A, nao apenas para a origem nominal da sessao.
+    samples, raw_samples, references, steps = [], [], [], []
+    anchor = tuple(before["center"])
+    for index, fraction in enumerate(STATIONARY_FRACTIONS, 1):
+        step = SweepSpec(f"{spec.name}_P{index}", spec.axis, spec.command_sign,
+                         fraction * spec.half_range_deg, spec.role)
+        _, _, raw, stats = _run_one_sweep(
+            spec=step, initial_az=initial_az, initial_alt=initial_alt, signature=signature,
+            center_anchor=anchor, audit_dir=audit_dir, baseline=False, validate_dynamic=False,
+        )
+        raw_samples.extend(raw)
+        steps.append(stats)
+        point = reference(f"P{index}", (raw[-1].x_px, raw[-1].y_px))
+        references.append(point)
+        anchor = tuple(point["center"])
+        daz, dalt = point["angle"]
+        spread = max(0.5, point["block_spread_px"])
+        samples.append(SweepSample(
+            run=spec.name, axis=spec.axis, command_sign=spec.command_sign,
+            elapsed_s=point["t"] - before["t"],
+            az_deg=(initial_az + daz) % 360, alt_deg=initial_alt + dalt,
+            delta_az_deg=daz, delta_alt_deg=dalt, x_px=anchor[0], y_px=anchor[1],
+            role=spec.role, half_range_deg=spec.half_range_deg,
+            frames_combined=point["frame_count"], centroid_spread_px=spread,
+            quality_weight=1 / spread**2, sample_kind="stationary_monotonic_plateau",
+        ))
+    _write_csv(audit_dir / f"{spec.name}_patamares.csv", [samples])
+    # Audita antes de validar, inclusive se os patamares forem rejeitados.
+    diagnostics = {"method": "monotonic_stationary_plateaus", "return_used_for_fit": False,
+                   "reference_count": len(references) + 2,
+                   "valid_reference_frames": before["frame_count"] + sum(p["frame_count"] for p in references),
+                   "steps": steps}
+    try:
+        diagnostics.update(_validate_stationary_staircase(samples, spec), status="patamares_validados")
+    except RuntimeError as exc:
+        diagnostics.update(status="erro", error=str(exc))
+        raise
+    finally:
+        (audit_dir / f"{spec.name}_escada.json").write_text(json.dumps(diagnostics, indent=2), encoding="utf-8")
     returned = _return_to_absolute_start(
         (initial_az + before["angle"][0]) % 360.0, initial_alt + before["angle"][1],
         audit_path=audit_dir / f"{spec.name}_retorno.json",
@@ -633,35 +679,41 @@ def _run_reference_sweep(*, spec, initial_az, initial_alt, signature, center_anc
     if not returned["success"]:
         raise RuntimeError(f"Retorno para referencia A' falhou: {returned.get('error')}")
     after = reference("A_retorno", tuple(before["center"]), before["angle"])
-    closure_audit = {"status": "avaliando"}
-    try:
-        difference = reference_difference(before, displaced, after, axis=spec.axis,
-                                          amplitude=spec.half_range_deg, audit=closure_audit)
-        closure_audit["status"] = "ok"
-    except RuntimeError as exc:
-        closure_audit.update(status="erro", error=str(exc))
-        raise RuntimeError(f"{spec.name}: {exc}") from exc
-    finally:
-        (audit_dir / f"{spec.name}_fechamento.json").write_text(json.dumps(closure_audit, indent=2), encoding="utf-8")
-    samples = []
-    # Diferencas corrigidas: origem virtual (0,0) e deslocamento medido.
-    # As coordenadas originais de sensor e angulo ficam nos JSONs A/B/A_retorno.
-    for factor in (0.0, 1.0):
-        daz, dalt = factor * np.array(difference["delta_deg"])
-        x, y = factor * np.array(difference["displacement_px"])
-        samples.append(SweepSample(
-            run=spec.name, axis=spec.axis, command_sign=spec.command_sign,
-            elapsed_s=factor * (displaced["t"] - before["t"]),
-            az_deg=float(daz), alt_deg=float(dalt), delta_az_deg=float(daz), delta_alt_deg=float(dalt),
-            x_px=float(x), y_px=float(y), role=spec.role, half_range_deg=spec.half_range_deg,
-            frames_combined=before["frame_count"] + displaced["frame_count"] + after["frame_count"],
-            centroid_spread_px=difference["reference_spread_px"], quality_weight=difference["weight"],
-            sample_kind="stationary_ABA_difference",
-        ))
-    _write_csv(audit_dir / f"{spec.name}_diferenca_estatica.csv", [samples])
-    aggregation["stationary_difference"] = difference
-    print(f"  A-B-A: deslocamento={difference['displacement_px']} px | retorno={difference['closure_px']:.2f}px")
-    return samples, tuple(after["center"]), raw_samples, aggregation
+    diagnostics["valid_reference_frames"] += after["frame_count"]
+    diagnostics["optical_return_px"] = float(np.linalg.norm(np.array(after["center"]) - before["center"]))
+    (audit_dir / f"{spec.name}_escada.json").write_text(json.dumps(diagnostics, indent=2), encoding="utf-8")
+    print(f"  Patamares: {len(samples)} | retorno optico (diagnostico)={diagnostics['optical_return_px']:.2f}px")
+    return samples, tuple(after["center"]), raw_samples, diagnostics
+
+
+def _validate_stationary_staircase(samples, spec):
+    """Exige excitacao e linearidade dentro da escada, sem usar o retorno."""
+    if len(samples) != len(STATIONARY_FRACTIONS):
+        raise RuntimeError(f"{spec.name}: faltam patamares independentes.")
+    q = np.array([[s.delta_az_deg, s.delta_alt_deg] for s in samples])
+    p = np.array([[s.x_px, s.y_px] for s in samples])
+    if not np.all(np.isfinite(np.r_[q.ravel(), p.ravel()])):
+        raise RuntimeError(f"{spec.name}: patamares nao finitos.")
+    active = q[:, spec.axis]
+    if np.any(np.diff(active) * spec.command_sign < 0.0005):
+        raise RuntimeError(f"{spec.name}: passos nao monotonicos ou pequenos demais.")
+    span = float(np.ptp(active))
+    if span < 0.60 * spec.half_range_deg:
+        raise RuntimeError(f"{spec.name}: amplitude util insuficiente apos acomodacao.")
+    if np.ptp(q[:, 1-spec.axis]) > 0.0005:
+        raise RuntimeError(f"{spec.name}: eixo ortogonal variou entre patamares.")
+    slope = _direction_slope(samples, spec.axis)
+    intercept = np.median(p - active[:, None] * slope, axis=0)
+    residual = np.linalg.norm(p - (intercept + active[:, None] * slope), axis=1)
+    response = float(np.linalg.norm(slope) * span)
+    rms = float(np.sqrt(np.mean(residual**2)))
+    noise = float(np.median([s.centroid_spread_px for s in samples]))
+    if response < max(8.0, 4 * noise):
+        raise RuntimeError(f"{spec.name}: resposta insuficiente frente a dispersao parada.")
+    if rms > max(3.0, 0.15 * response):
+        raise RuntimeError(f"{spec.name}: patamares nao lineares (RMS={rms:.2f}px).")
+    return dict(useful_span_deg=span, slope_px_per_deg=slope.tolist(),
+                plateau_rms_px=rms, response_px=response)
 
 
 def _center_runs(runs: list[list[SweepSample]], *, include_weights: bool = False):
@@ -890,7 +942,9 @@ def main(profile_name: str | None = None) -> None:
                "backend": backend_name(), "profile": profile.name,
                "profile_description": profile.description, "trajectory": [asdict(s) for s in profile.specs],
                "spread_method": "global_robust_linear_time_trend_removed",
-               "estimation_method": "stationary_ABA_temporal_references",
+               "estimation_method": "monotonic_stationary_plateaus",
+               "stationary_fractions": list(STATIONARY_FRACTIONS),
+               "return_used_for_fit": False,
                "reference_window_seconds": REFERENCE_WINDOW_S,
                "reference_timeout_seconds": REFERENCE_TIMEOUT_S,
                "sweep_audit_subdir": "varreduras",
@@ -971,7 +1025,7 @@ def main(profile_name: str | None = None) -> None:
         frame_rates = []
         for run in all_frame_runs:
             if len(run) >= 2:
-                duration = run[-1].elapsed_s - run[0].elapsed_s
+                duration = run[-1].capture_mid_epoch - run[0].capture_mid_epoch
                 if duration > 0:
                     frame_rates.append((len(run) - 1) / duration)
         spreads = np.asarray(
@@ -990,12 +1044,12 @@ def main(profile_name: str | None = None) -> None:
                        sample_count=sum(map(len, all_runs)), fit_sample_count=sum(map(len, fit_runs)),
                        raw_frame_sample_count=sum(map(len, all_frame_runs)),
                        stationary_aggregation={
-                           "method": "A-B-A linear local drift interpolation",
-                           "difference_count": len(all_runs),
-                           "reference_count": 3 * len(all_runs),
-                           "valid_reference_frames": sum(r[0].frames_combined for r in all_runs),
+                           "method": "monotonic stationary plateaus; independent intercept per run",
+                           "staircase_count": len(all_runs),
+                           "reference_count": sum(a["reference_count"] for a in aggregation_stats),
+                           "valid_reference_frames": sum(a["valid_reference_frames"] for a in aggregation_stats),
                            "median_reference_spread_px": float(np.median(spreads)),
-                           "median_frames_per_difference": float(np.median(frames_per_bin)),
+                           "median_frames_per_plateau": float(np.median(frames_per_bin)),
                        },
                        angular_aggregation={
                            "used_for_matrix": False,
@@ -1020,10 +1074,10 @@ def main(profile_name: str | None = None) -> None:
             f"RMS ajuste={fit['rms_residual_px']:.2f}px | "
             f"cond={fit['condition_number']:.2f} | "
             f"frames={summary['raw_frame_sample_count']} -> "
-            f"pontos de diferencas estaticas={summary['sample_count']}"
+            f"patamares estaticos={summary['sample_count']}"
         )
         print(
-            f"Sweep={summary['sweep_sample_rate_hz']:.1f} Hz | "
+            f"Frames de vigilancia/tempo total={summary['sweep_sample_rate_hz']:.1f} Hz | "
             f"captura isolada={summary['capture_rate_hz']:.1f} Hz | "
             f"media={summary['capture_mean_ms']:.1f} ms | p95={summary['capture_p95_ms']:.1f} ms"
         )

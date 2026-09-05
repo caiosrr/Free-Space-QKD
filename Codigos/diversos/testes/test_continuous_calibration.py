@@ -262,7 +262,7 @@ class ContinuousCalibrationTests(unittest.TestCase):
     def test_rejected_sweep_saves_raw_and_bins_after_stopping(self):
         rejected = continuous._aggregate_sweep_frames(self._stepped_telemetry_captures(oscillation=8.0))
         frame = self._spot_frame(40, 40)
-        positions = [(0., 0.)] * 46 + [(0.008, 0.)] * 2
+        positions = [(0., 0.)] * 47 + [(0.008, 0.)] * 2
         spec = continuous.SweepSpec("fit_az_pos", 0, 1, 0.008, "fit")
         original_write = continuous._write_csv
         with tempfile.TemporaryDirectory() as tmp, \

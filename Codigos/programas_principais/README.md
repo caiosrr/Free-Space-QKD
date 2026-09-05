@@ -40,8 +40,9 @@ em `../modulos/configuracoes/camera_ids.py`. Resultados IDS continuam em
 
 ## Auditoria da calibracao continua
 
-O estimador usa referencias paradas A-B-A: origem, ponto deslocado e retorno
-a origem. Cada referencia espera 0,8 s de acomodacao e mede pelo menos 2 s
+O estimador usa quatro patamares no mesmo sentido, em 25%, 50%, 75% e 100%
+da amplitude. O trecho inicial ate 25% acomoda a inversao e nao define a escala.
+Cada referencia espera 0,8 s de acomodacao e mede pelo menos 2 s
 de imagens. Faz medias de imagem por blocos de 0,4 s e usa a mediana dos centros
 dos blocos, sem tratar frames consecutivos como amostras independentes.
 Acima de 120 FPS, a referencia guarda uma subamostragem temporal para limitar
@@ -49,23 +50,26 @@ memoria, sem encurtar os 2 s. A auditoria distingue frames capturados e retidos.
 
 A coleta exige >=20 frames validos, >=60% de validade na janela recente e
 quatro blocos utilizaveis. Pode esperar ate 12 s por referencia; nao busca outra
-ilha nem muda a exposicao. Os JSONs `*_referencia_A/B/A_retorno.json` guardam
+ilha nem muda a exposicao. Os JSONs `*_referencia_A/P1/P2/P3/P4/A_retorno.json` guardam
 posicoes, blocos e motivos de rejeicao, inclusive nas tentativas malsucedidas.
 
-A origem e interpolada entre A e A_retorno no instante de B, em pixels e nos
-angulos informados. Isso compensa deriva aproximadamente linear durante o ciclo,
-nao separa atmosfera de mecanica. O retorno optico desconta a pequena diferenca
-angular residual usando a resposta A->B do proprio eixo, sem matriz anterior.
-Nao extrapola alem de 15% da excursao nem compensa um eixo ortogonal sem escala.
-Se o residuo optico divergir mais que 25% da resposta (com piso de 3 px e teto
-de 10 px), o ciclo e recusado. A dispersao dos
-blocos serve como indicador conservador de qualidade, nao intervalo de confianca.
+O ajuste usa somente P1..P4, com origem optica independente para cada escada.
+O retorno angular continua obrigatorio e confirmado estavel, mas o deslocamento
+optico A_retorno-A fica como diagnostico em `*_escada.json`, sem interpolar ou
+vetar a escala. Isso evita confundir uma mudanca de origem no retorno com a
+resposta incremental. Nao garante eliminar folga que persista apos P1 ou deriva
+atmosferica lenta: ambas ainda podem causar rejeicao nas direcoes e holdouts.
+Exige quatro patamares monotonicos, amplitude util >=60% da nominal, eixo
+ortogonal estavel e residuo interno <=max(3 px, 15% da resposta). Os limites de
+concordancia entre direcoes e validacao independente nao foram relaxados.
+A dispersao dos blocos e indicador de qualidade, nao intervalo de confianca.
 
-`amostras.csv` e `*_diferenca_estatica.csv` contem pares virtuais origem/deslocamento
-com `sample_kind=stationary_ABA_difference`; nao sao coordenadas reais do sensor.
-Estas estao nos JSONs de referencias. `stationary_aggregation` no resumo conta
-as referencias e os frames efetivamente usados. O perfil robusto leva tipicamente
-3-5 min; perdas de sinal e retornos demorados podem alongar a execucao.
+`amostras.csv` e `*_patamares.csv` contem centros locais da ROI e offsets angulares
+medidos em cada patamar, com `sample_kind=stationary_monotonic_plateau`.
+`stationary_aggregation` conta referencias adquiridas (incluindo A e retorno)
+e frames; `frames_combined` no CSV conta apenas os frames de cada patamar.
+O resumo identifica `estimation_method=monotonic_stationary_plateaus`.
+O perfil robusto tem estimativa de 4-7 min; perdas e retornos podem alonga-lo.
 
 As varreduras continuam com os watchdogs de movimento e perda de sinal. Os CSVs
 `*_frames.csv` e `*_bins.csv` sao diagnosticos, nao entram na matriz; o primeiro

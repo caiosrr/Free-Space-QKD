@@ -88,7 +88,12 @@ class ReferenceCalibrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             for i, spec in enumerate(core.calibration_profile("robusto").specs[:4]):
                 q = np.zeros(2); q[spec.axis] = spec.command_sign * spec.half_range_deg
-                references = [self.reference(t, a, A) for t, a in [(0., np.zeros(2)), (7., q), (14., np.zeros(2))]]
+                references = [self.reference(0., np.zeros(2), A, drift=(0., 0.))]
+                references += [self.reference(4.*j, fraction*q, A, drift=(0., 0.))
+                               for j, fraction in enumerate(core.STATIONARY_FRACTIONS, 1)]
+                references += [self.reference(25., np.zeros(2), A, drift=(0., 0.))]
+                # Mesmo com fechamento optico ruim, a escala vem dos patamares.
+                references[-1]["center"][0] += 20.
                 raw = core.SweepSample(spec.name, spec.axis, spec.command_sign, 4., 0., 0., 0., 0., 100., 100.)
                 # Dados em movimento deliberadamente sem resposta optica util.
                 with patch.object(core, "_take_stationary_reference", side_effect=references), \
@@ -100,6 +105,9 @@ class ReferenceCalibrationTests(unittest.TestCase):
                     )
                 runs.append(samples)
                 np.testing.assert_allclose(anchor, references[-1]["center"])
+                self.assertEqual(len(samples), 4)
+                self.assertFalse(stats['return_used_for_fit'])
+                self.assertEqual(stats['optical_return_px'], 20.)
             fit = core._robust_fit(*core._center_runs(runs, include_weights=True))
             np.testing.assert_allclose(fit["A"], A, atol=1e-8)
             self.assertTrue(core._validate_fit(runs, fit)["ok"])
