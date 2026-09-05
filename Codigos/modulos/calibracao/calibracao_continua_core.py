@@ -22,7 +22,7 @@ from modulos.configuracoes.tracker import (
 from modulos.controle.alvo_alinhamento import TARGET_FILENAME, roi_incluindo_alvo, salvar_alvo
 from modulos.controle.cameras.backend import backend_name, connect_camera, direct_camera, disconnect_camera, set_gain
 from modulos.controle.mount_control import (
-    TOLERANCIA_GRAUS, calc_error, ensure_connected, ensure_not_tracking,
+    TOLERANCIA_GRAUS, VEL_MIN_LIMITE, calc_error, ensure_connected, ensure_not_tracking,
     ensure_unparked, move_axes_pid_2d, move_axis, read_altaz, stop_axes_safely,
 )
 from modulos.controle.mapa_jacobianas import registrar_no
@@ -30,6 +30,9 @@ from modulos.visao import detector_ilhas as foco
 from modulos.calibracao.referencias_estaticas import (
     REFERENCE_WINDOW_S, REFERENCE_SETTLE_S, REFERENCE_TIMEOUT_S, REFERENCE_MIN_FRAMES,
     collect_reference,
+)
+from modulos.calibracao.resposta_local import (
+    LOCAL_STEP_DEG, LOCAL_REPETITIONS, measure_step, matrix_step_usable, timed_pulse,
 )
 
 
@@ -128,7 +131,7 @@ def calibration_profile(name: str) -> CalibrationProfile:
     if normalized in {"rapido", "quick"}:
         return CalibrationProfile(
             "rapido",
-            "4 escadas unidirecionais com medias paradas; validacao interna, cerca de 2 min",
+            "4 sequencias locais repetidas com controles sem movimento; cerca de 3-4 min",
             _four_sweeps("fit", LOCAL_HALF_RANGE_DEG, ((0, +1), (1, -1), (0, -1), (1, +1))),
             False,
         )
@@ -136,11 +139,10 @@ def calibration_profile(name: str) -> CalibrationProfile:
         raise ValueError("Perfil invalido. Use 'rapido' ou 'robusto'.")
     fit = _four_sweeps("fit", LOCAL_HALF_RANGE_DEG, ((0, +1), (1, -1), (0, -1), (1, +1)))
     holdout = _four_sweeps("holdout_local", LOCAL_HALF_RANGE_DEG, ((1, +1), (0, -1), (1, -1), (0, +1)))
-    wide = _four_sweeps("holdout_amplo", WIDE_HALF_RANGE_DEG, ((0, -1), (1, +1), (0, +1), (1, -1)))
     return CalibrationProfile(
         "robusto",
-        "4 ajustes + 4 validacoes locais + 4 amplas em patamares; cerca de 4-7 min",
-        fit + holdout + wide,
+        "4 ajustes + 4 validacoes locais, 3 passos/serie e diagnostico de micropulsos; cerca de 5-8 min",
+        fit + holdout,
         True,
     )
 
@@ -716,6 +718,108 @@ def _validate_stationary_staircase(samples, spec):
                 plateau_rms_px=rms, response_px=response)
 
 
+def _run_local_sequence(*, spec, initial_az, initial_alt, signature, center_anchor, audit_dir):
+    """Repete passos locais e mede deriva em trechos parados antes/depois.
+
+    A escala vem dos offsets angulares medidos. Micropulsos ficam apenas no
+    diagnostico: podem ser menores que a resolucao do driver ou que o ruido.
+    """
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    audit = dict(method="paired_local_steps_with_stationary_controls", status="coletando",
+                 return_used_for_fit=False, reference_count=0, valid_reference_frames=0,
+                 steps=[], micropulses=[])
+    anchor = center_anchor
+    samples, raw_samples = [], []
+
+    def reference(label, expected_angle=None):
+        nonlocal anchor
+        r = _take_stationary_reference(signature, anchor, initial_az, initial_alt,
+                                       audit_dir / f"{spec.name}_{label}.json",
+                                       expected_angle=expected_angle)
+        anchor = tuple(r['center'])
+        audit['reference_count'] += 1
+        audit['valid_reference_frames'] += r['frame_count']
+        return r
+
+    def limit_check():
+        offsets = _offsets_from_start(initial_az, initial_alt, *read_altaz())
+        if not np.all(np.isfinite(offsets)) or max(map(abs, offsets)) > spec.half_range_deg + .002:
+            raise RuntimeError('Limite local excedido; interrompendo sequencia.')
+
+    try:
+        before = [reference('antes_0', (0., 0.)), reference('antes_1')]
+        origin = before[0]
+        for index in range(LOCAL_REPETITIONS):
+            limit_check()
+            step = SweepSpec(f"{spec.name}_passo_{index+1}", spec.axis, spec.command_sign,
+                             LOCAL_STEP_DEG, spec.role)
+            # O destino e incremental a partir do angulo atualmente MEDIDO.
+            step_az, step_alt = read_altaz()
+            _, _, raw, _ = _run_one_sweep(
+                spec=step, initial_az=step_az, initial_alt=step_alt, signature=signature,
+                center_anchor=anchor, audit_dir=audit_dir, baseline=False, validate_dynamic=False)
+            raw_samples.extend(raw)
+            anchor = (raw[-1].x_px, raw[-1].y_px)
+            after = [reference(f'passo_{index+1}_depois_0'), reference(f'passo_{index+1}_depois_1')]
+            result = measure_step(before + after)
+            usable, reason = matrix_step_usable(result, spec.axis, spec.command_sign)
+            audit['steps'].append(dict(index=index+1, usable=usable, reason=reason, **result))
+            if usable:
+                # Pares simetricos mantem origem zero sem um intercepto espurio.
+                for factor in (-.5, .5):
+                    q = factor*np.array(result['delta_deg'])
+                    p = factor*np.array(result['displacement_px'])
+                    samples.append(SweepSample(
+                        spec.name, spec.axis, spec.command_sign, after[0]['t']-origin['t'],
+                        *q, *q, *p, role=spec.role, half_range_deg=LOCAL_STEP_DEG,
+                        frames_combined=result['frame_count'],
+                        centroid_spread_px=result['reference_noise_px'],
+                        quality_weight=1/result['reference_noise_px']**2,
+                        sample_kind='paired_local_step_difference'))
+            print(f"  {spec.name}/{index+1}: {reason}; resposta={np.linalg.norm(result['displacement_px']):.2f}px; "
+                  f"variacao de referencia={result['reference_noise_px']:.2f}px")
+            before = after  # Mesmo patamar: reusa dados, sem contar como novas amostras independentes.
+        limit_check()
+        if len(samples) < 4:
+            raise RuntimeError(f'{spec.name}: menos de dois passos distinguiveis da variacao sem comando.')
+        if spec.role == 'fit':
+            # Inversao seguida de repeticao no mesmo sentido: nao altera matriz/gains.
+            for index in range(2):
+                limit_check()
+                pulse = timed_pulse(spec.axis, -spec.command_sign, VEL_MIN_LIMITE,
+                                    move=move_axis, stop=stop_axes_safely,
+                                    clock=time.perf_counter, sleep=time.sleep)
+                after = [reference(f'micropulso_{index+1}_depois_0'), reference(f'micropulso_{index+1}_depois_1')]
+                result = measure_step(before + after)
+                audit['micropulses'].append(dict(
+                    kind='primeiro_apos_inversao' if index == 0 else 'repetido_mesmo_sentido',
+                    timing=pulse, optically_resolved=bool(np.linalg.norm(result['displacement_px']) > 2*result['reference_noise_px']),
+                    used_for_matrix=False, **result))
+                before = after
+        limit_check()
+        returned = _return_to_absolute_start(initial_az, initial_alt,
+                                            audit_path=audit_dir / f'{spec.name}_retorno.json')
+        if not returned['success']:
+            raise RuntimeError(f"Retorno local falhou: {returned.get('error')}")
+        anchor = tuple(origin['center'])
+        after_return = reference('retorno', (0., 0.))
+        audit.update(status='coletada', optical_return_px=float(np.linalg.norm(
+            np.array(after_return['center'])-origin['center'])))
+        return samples, anchor, raw_samples, audit
+    except Exception as exc:
+        audit.update(status='erro', error=str(exc))
+        raise
+    finally:
+        # Tambem deixa os dados de tentativas incompletas para diagnostico.
+        stopped = stop_axes_safely()
+        if not stopped:
+            audit.update(status='erro', error='Parada local nao confirmada.')
+        _write_csv(audit_dir / f'{spec.name}_diferencas.csv', [samples])
+        (audit_dir / f'{spec.name}_resposta_local.json').write_text(json.dumps(audit, indent=2), encoding='utf-8')
+        if not stopped:
+            raise RuntimeError('Parada local nao confirmada.')
+
+
 def _center_runs(runs: list[list[SweepSample]], *, include_weights: bool = False):
     design_parts, pixel_parts, weight_parts = [], [], []
     for samples in runs:
@@ -839,7 +943,10 @@ def _validate_holdout(runs: list[list[SweepSample]], fit: dict, *, label: str) -
     if len(runs) != 4:
         return {"ok": False, "failures": [f"{label}: esperava 4 varreduras, recebeu {len(runs)}"], "run_count": len(runs)}
     design, pixels = _center_runs(runs)
-    residual = np.linalg.norm(pixels - design @ fit["A"].T, axis=1)
+    # Pares +/-delta/2 sao representacao algebrica, nao duas observacoes.
+    # Reporta/valida o erro do deslocamento COMPLETO, sem dividi-lo por dois.
+    factor = 2.0 if all(r[0].sample_kind == 'paired_local_step_difference' for r in runs) else 1.0
+    residual = factor * np.linalg.norm(pixels - design @ fit["A"].T, axis=1)
     rms = float(np.sqrt(np.mean(residual**2)))
     failures, directions = [], {}
     for axis in (0, 1):
@@ -854,15 +961,20 @@ def _validate_holdout(runs: list[list[SweepSample]], fit: dict, *, label: str) -
                 failures.append(f"{samples[0].run}: direcao diverge (cosseno={cosine:.2f})")
             if ratio > MAX_DIRECTION_SCALE_RATIO:
                 failures.append(f"{samples[0].run}: escala diverge ({ratio:.1f}x)")
-    predicted = float(np.median(np.linalg.norm(design @ fit["A"].T, axis=1)))
+    predicted = factor * float(np.median(np.linalg.norm(design @ fit["A"].T, axis=1)))
     relative = rms / max(predicted, 1e-9)
     # O ruido alto do proprio ajuste nao deve aumentar a tolerancia do holdout.
     if rms > HOLDOUT_NOISE_FLOOR_PX and relative > MAX_HOLDOUT_RELATIVE_RMS:
         failures.append(f"{label}: residuo alto ({rms:.1f}px; relativo={relative:.2f})")
+    # Cada sentido pode estar perto da matriz e ainda divergir muito do outro.
+    # A validacao independente tambem precisa ser internamente repetivel.
+    repeatability = _validate_fit(runs, fit, half_range_deg=LOCAL_STEP_DEG)
+    failures.extend(f"{label}: {failure}" for failure in repeatability['failures'])
     return {"ok": not failures, "failures": failures, "run_count": len(runs),
             "sample_count": sum(map(len, runs)), "rms_residual_px": rms,
             "median_residual_px": float(np.median(residual)), "max_residual_px": float(np.max(residual)),
-            "relative_rms": relative, "directions": directions}
+            "relative_rms": relative, "directions": directions, "virtual_pair_residual_factor": factor,
+            "independent_direction_checks": repeatability['direction_checks']}
 
 
 def _write_csv(path: Path, runs: list[list[SweepSample]]) -> None:
@@ -942,8 +1054,9 @@ def main(profile_name: str | None = None) -> None:
                "backend": backend_name(), "profile": profile.name,
                "profile_description": profile.description, "trajectory": [asdict(s) for s in profile.specs],
                "spread_method": "global_robust_linear_time_trend_removed",
-               "estimation_method": "monotonic_stationary_plateaus",
-               "stationary_fractions": list(STATIONARY_FRACTIONS),
+               "estimation_method": "paired_local_steps_with_stationary_controls",
+               "local_step_deg": LOCAL_STEP_DEG,
+               "repetitions_per_direction": LOCAL_REPETITIONS,
                "return_used_for_fit": False,
                "reference_window_seconds": REFERENCE_WINDOW_S,
                "reference_timeout_seconds": REFERENCE_TIMEOUT_S,
@@ -991,7 +1104,7 @@ def main(profile_name: str | None = None) -> None:
             if not returned["success"]:
                 raise RuntimeError(f"Retorno antes de {spec.name} falhou: {returned.get('error')}")
             try:
-                samples, center_anchor, raw_samples, aggregation = _run_reference_sweep(
+                samples, center_anchor, raw_samples, aggregation = _run_local_sequence(
                     spec=spec, initial_az=initial_az, initial_alt=initial_alt,
                     signature=selection["signature"], center_anchor=center_anchor,
                     audit_dir=run_dir / "varreduras",
@@ -1013,10 +1126,12 @@ def main(profile_name: str | None = None) -> None:
         local_runs = [r for r in all_runs if r[0].role == "holdout_local"]
         wide_runs = [r for r in all_runs if r[0].role == "holdout_amplo"]
         fit = _robust_fit(*_center_runs(fit_runs, include_weights=True))
-        fit_validation = _validate_fit(fit_runs, fit)
+        for key in ('rms_residual_px', 'median_residual_px', 'max_residual_px'):
+            fit[key] *= 2.0  # Erro do deslocamento completo, nao das duas metades virtuais.
+        fit_validation = _validate_fit(fit_runs, fit, half_range_deg=LOCAL_STEP_DEG)
         local_validation = (_validate_holdout(local_runs, fit, label="holdout_local")
                             if profile.requires_holdout else {"ok": True, "not_independent": True})
-        wide_validation = _validate_holdout(wide_runs, fit, label="holdout_amplo")
+        wide_validation = {"ok": False, "not_tested": True, "reason": "calibracao_local_para_tracker"}
         activation_ok = bool(fit_validation["ok"] and local_validation["ok"])
         capture_times = np.array(
             [sample.capture_duration_s for run in all_frame_runs for sample in run],
@@ -1040,16 +1155,27 @@ def main(profile_name: str | None = None) -> None:
         _write_csv(run_dir / "amostras.csv", all_runs)
         np.save(run_dir / "A_continua.npy", fit["A"])
         np.save(run_dir / "A_inv_continua.npy", fit["A_inv"])
+        pulse_diagnostics = []
+        for aggregation in aggregation_stats:
+            for pulse in aggregation['micropulses']:
+                timing = pulse['timing']
+                predicted = (fit['A'][:, timing['axis']] * timing['sign'] *
+                             timing['rate_deg_s'] * timing['requested_seconds'])
+                pulse_diagnostics.append(dict(run=aggregation['run'], **pulse,
+                    predicted_from_nominal_command_px=predicted.tolist(),
+                    duration_is_software_timing_not_mechanical_measurement=True))
         summary.update(status="validada" if activation_ok else "rejeitada", finished_epoch=time.time(),
                        sample_count=sum(map(len, all_runs)), fit_sample_count=sum(map(len, fit_runs)),
                        raw_frame_sample_count=sum(map(len, all_frame_runs)),
+                       residual_basis="full_local_step_displacement",
                        stationary_aggregation={
-                           "method": "monotonic stationary plateaus; independent intercept per run",
-                           "staircase_count": len(all_runs),
+                           "method": "paired steps; drift measured before and after commands",
+                           "sequence_count": len(all_runs),
                            "reference_count": sum(a["reference_count"] for a in aggregation_stats),
                            "valid_reference_frames": sum(a["valid_reference_frames"] for a in aggregation_stats),
                            "median_reference_spread_px": float(np.median(spreads)),
-                           "median_frames_per_plateau": float(np.median(frames_per_bin)),
+                           "median_frames_per_difference": float(np.median(frames_per_bin)),
+                           "shared_references_between_consecutive_steps": True,
                        },
                        angular_aggregation={
                            "used_for_matrix": False,
@@ -1067,14 +1193,17 @@ def main(profile_name: str | None = None) -> None:
                        capture_p95_ms=float(1000.0 * np.percentile(capture_times, 95)),
                        capture_rate_hz=float(1.0 / max(np.mean(capture_times), 1e-9)),
                        sweep_sample_rate_hz=float(np.median(frame_rates)),
-                       validated_half_range_deg=WIDE_HALF_RANGE_DEG if wide_validation.get("ok") else LOCAL_HALF_RANGE_DEG,
+                       micropulse_diagnostics=pulse_diagnostics,
+                       validated_half_range_deg=LOCAL_STEP_DEG,
                        return_to_start=returned)
         print(f"\nA =\n{fit['A']}")
+        print(f"Micropulsos: {sum(p['optically_resolved'] for p in pulse_diagnostics)}/{len(pulse_diagnostics)} "
+              "com resposta distinguivel do ruido; diagnostico apenas, tracker inalterado.")
         print(
             f"RMS ajuste={fit['rms_residual_px']:.2f}px | "
             f"cond={fit['condition_number']:.2f} | "
             f"frames={summary['raw_frame_sample_count']} -> "
-            f"patamares estaticos={summary['sample_count']}"
+            f"pares de diferencas locais={summary['sample_count']//2}"
         )
         print(
             f"Frames de vigilancia/tempo total={summary['sweep_sample_rate_hz']:.1f} Hz | "
@@ -1083,7 +1212,7 @@ def main(profile_name: str | None = None) -> None:
         )
         if profile.requires_holdout:
             print(f"Holdout local: {'OK' if local_validation['ok'] else 'FALHOU'}")
-            print(f"Amplitude {WIDE_HALF_RANGE_DEG:.3f} deg: {'linear' if wide_validation.get('ok') else 'nao validada'}")
+            print(f"Validacao limitada a passos locais de {LOCAL_STEP_DEG:.3f} deg; amplitudes grandes nao testadas.")
         if not activation_ok:
             print("REJEITADA; matrizes atuais preservadas:")
             for failure in fit_validation["failures"] + local_validation.get("failures", []):

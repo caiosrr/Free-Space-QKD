@@ -40,8 +40,9 @@ em `../modulos/configuracoes/camera_ids.py`. Resultados IDS continuam em
 
 ## Auditoria da calibracao continua
 
-O estimador usa quatro patamares no mesmo sentido, em 25%, 50%, 75% e 100%
-da amplitude. O trecho inicial ate 25% acomoda a inversao e nao define a escala.
+O estimador usa tres deslocamentos incrementais de 0,002 grau por sentido/eixo,
+com duas referencias paradas antes e duas depois de cada atuacao. Os dois
+periodos sem movimento permitem estimar deriva local separadamente da resposta.
 Cada referencia espera 0,8 s de acomodacao e mede pelo menos 2 s
 de imagens. Faz medias de imagem por blocos de 0,4 s e usa a mediana dos centros
 dos blocos, sem tratar frames consecutivos como amostras independentes.
@@ -50,26 +51,39 @@ memoria, sem encurtar os 2 s. A auditoria distingue frames capturados e retidos.
 
 A coleta exige >=20 frames validos, >=60% de validade na janela recente e
 quatro blocos utilizaveis. Pode esperar ate 12 s por referencia; nao busca outra
-ilha nem muda a exposicao. Os JSONs `*_referencia_A/P1/P2/P3/P4/A_retorno.json` guardam
+ilha nem muda a exposicao. Os JSONs `*_antes_*.json`, `*_passo_*_depois_*.json` guardam
 posicoes, blocos e motivos de rejeicao, inclusive nas tentativas malsucedidas.
 
-O ajuste usa somente P1..P4, com origem optica independente para cada escada.
-O retorno angular continua obrigatorio e confirmado estavel, mas o deslocamento
-optico A_retorno-A fica como diagnostico em `*_escada.json`, sem interpolar ou
-vetar a escala. Isso evita confundir uma mudanca de origem no retorno com a
-resposta incremental. Nao garante eliminar folga que persista apos P1 ou deriva
-atmosferica lenta: ambas ainda podem causar rejeicao nas direcoes e holdouts.
-Exige quatro patamares monotonicos, amplitude util >=60% da nominal, eixo
-ortogonal estavel e residuo interno <=max(3 px, 15% da resposta). Os limites de
-concordancia entre direcoes e validacao independente nao foram relaxados.
-A dispersao dos blocos e indicador de qualidade, nao intervalo de confianca.
+O modelo local e `posicao = origem + deriva*tempo + resposta*degrau`, aplicado
+a pixels e angulos medidos. Nao usa o angulo nominal do comando como medicao.
+A deriva aproximadamente linear e identificada pelos periodos sem comando;
+discordancia entre a deriva anterior e posterior aumenta o indicador de ruido.
+Isso nao elimina mudancas abruptas nem permite separar toda atmosfera da mecanica.
+Cada sentido precisa de pelo menos dois dos tres passos com resposta distinguivel
+da variacao sem comando; os passos recusados e seus motivos ficam na auditoria.
+O retorno angular continua obrigatorio, mas o fechamento optico e so diagnostico.
+O holdout compara tambem os dois sentidos entre si, evitando aprovar sentidos
+muito diferentes apenas porque cada um esta proximo da matriz intermediaria.
 
-`amostras.csv` e `*_patamares.csv` contem centros locais da ROI e offsets angulares
-medidos em cada patamar, com `sample_kind=stationary_monotonic_plateau`.
-`stationary_aggregation` conta referencias adquiridas (incluindo A e retorno)
-e frames; `frames_combined` no CSV conta apenas os frames de cada patamar.
-O resumo identifica `estimation_method=monotonic_stationary_plateaus`.
-O perfil robusto tem estimativa de 4-7 min; perdas e retornos podem alonga-lo.
+`amostras.csv` e `*_diferencas.csv` representam cada deslocamento como dois pontos
+virtuais +/-metade da diferenca, com `sample_kind=paired_local_step_difference`.
+Nao sao coordenadas reais da camera. RMS no resumo/holdout e do deslocamento
+COMPLETO (`residual_basis=full_local_step_displacement`), nao da metade virtual.
+`*_resposta_local.json` preserva diferencas brutas/corrigidas, deriva, ruido e recusas.
+As referencias posteriores sao reutilizadas antes do proximo passo; isso nao
+constitui novas amostras independentes. `stationary_aggregation` conta cada
+referencia adquirida uma vez, incluindo diagnosticos e retorno.
+O perfil robusto usa 4 sequencias de ajuste e 4 independentes, sem testes amplos;
+o rapido usa apenas as 4 de ajuste. Estimativa robusta: 5-8 min, podendo alongar
+com perdas. O raio declarado e conservador: 0,002 grau, sem validar grandes saltos.
+
+Em cada sequencia de ajuste, dois micropulsos de 0,12 s na velocidade minima do
+tracker medem inversao e repeticao no mesmo sentido. A parada nao espera uma
+captura. Tempos de envio/parada sao auditados, nao equivalem a duracao mecanica.
+`micropulse_diagnostics` compara resposta observada com previsao nominal da matriz.
+Se a resposta for menor que duas vezes o indicador de ruido, fica inconclusiva.
+Micropulsos NAO entram na matriz e NAO alteram ganhos ou comandos do tracker.
+Exposicao permanece fixa; nao e um teste de autoexposicao.
 
 As varreduras continuam com os watchdogs de movimento e perda de sinal. Os CSVs
 `*_frames.csv` e `*_bins.csv` sao diagnosticos, nao entram na matriz; o primeiro
@@ -93,7 +107,7 @@ precisam de validacao experimental; uma rejeicao preserva a matriz ativa.
 O retorno usa alvo absoluto fixo no PID e exige pelo menos 1,5 s de leituras
 dentro de 0,0005 grau do alvo (1,8 arcsec), com variacao <=1 arcsec na janela.
 Cada verificacao dura no maximo 4 s, com ate duas tentativas de retorno.
-Para A_retorno, o alvo e o angulo efetivamente medido em A; a referencia optica
+No retorno local, o alvo e a origem angular inicial da sessao; a referencia optica
 tambem exige permanencia dentro da tolerancia durante sua janela de coleta.
 Isso confirma a telemetria do driver, nao substitui uma verificacao mecanica.
 

@@ -139,13 +139,13 @@ class ContinuousCalibrationTests(unittest.TestCase):
         self.assertAlmostEqual(daz, 0.005)
         self.assertAlmostEqual(dalt, -0.002)
 
-    def test_robust_profile_separates_fit_local_holdout_and_wide_validation(self):
+    def test_robust_profile_separates_fit_and_local_holdout_without_wide_motion(self):
         profile = continuous.calibration_profile("robusto")
         roles = [spec.role for spec in profile.specs]
 
         self.assertEqual(roles.count("fit"), 4)
         self.assertEqual(roles.count("holdout_local"), 4)
-        self.assertEqual(roles.count("holdout_amplo"), 4)
+        self.assertEqual(roles.count("holdout_amplo"), 0)
         self.assertTrue(
             all(
                 spec.half_range_deg == continuous.LOCAL_HALF_RANGE_DEG
