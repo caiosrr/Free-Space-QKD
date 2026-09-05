@@ -27,6 +27,10 @@ from modulos.controle.mount_control import (
 )
 from modulos.controle.mapa_jacobianas import registrar_no
 from modulos.visao import detector_ilhas as foco
+from modulos.calibracao.referencias_estaticas import (
+    REFERENCE_WINDOW_S, REFERENCE_SETTLE_S, REFERENCE_TIMEOUT_S, REFERENCE_MIN_FRAMES,
+    collect_reference, reference_difference,
+)
 
 
 LOCAL_HALF_RANGE_DEG = 0.008
@@ -100,6 +104,7 @@ class SweepSample:
     bin_duration_s: float = 0.0
     trend_x_px_s: float = 0.0
     trend_y_px_s: float = 0.0
+    sample_kind: str = "moving_frame"
 
 
 def _four_sweeps(role: str, amplitude: float, order: tuple[tuple[int, int], ...]):
@@ -118,7 +123,7 @@ def calibration_profile(name: str) -> CalibrationProfile:
     if normalized in {"rapido", "quick"}:
         return CalibrationProfile(
             "rapido",
-            "4 varreduras; ajuste e validacao interna em cerca de 30-60 s",
+            "4 varreduras com referencias A-B-A; validacao interna, cerca de 1-2 min",
             _four_sweeps("fit", LOCAL_HALF_RANGE_DEG, ((0, +1), (1, -1), (0, -1), (1, +1))),
             False,
         )
@@ -129,7 +134,7 @@ def calibration_profile(name: str) -> CalibrationProfile:
     wide = _four_sweeps("holdout_amplo", WIDE_HALF_RANGE_DEG, ((0, -1), (1, +1), (0, +1), (1, -1)))
     return CalibrationProfile(
         "robusto",
-        "4 ajustes + 4 validacoes locais + 4 testes amplos; cerca de 1-3 min",
+        "4 ajustes + 4 validacoes locais + 4 amplas com referencias A-B-A; cerca de 3-5 min",
         fit + holdout + wide,
         True,
     )
@@ -172,7 +177,9 @@ def _return_to_absolute_start(initial_az: float, initial_alt: float) -> dict:
 def _capture_valid_cm():
     frame = foco.capture_frame(foco.EXPOSURE_SECONDS, light=True)
     cm = foco.centro_massa(frame)
-    selected = (foco.get_focus_debug().get("selected") or {}).copy()
+    debug = foco.get_focus_debug()
+    selected = (debug.get("selected") or {}).copy()
+    selected["candidate_count"] = int(debug.get("candidate_count", 0))
     return frame, cm, selected
 
 
@@ -415,10 +422,12 @@ def _validate_sweep_aggregation(samples: list[SweepSample], run_name: str) -> di
 
 
 def _run_one_sweep(*, spec: SweepSpec, initial_az: float, initial_alt: float,
-                   signature: dict, center_anchor, audit_dir: Path | None = None):
+                   signature: dict, center_anchor, audit_dir: Path | None = None,
+                   baseline=True, validate_dynamic=True):
     if audit_dir is not None:
         audit_dir.mkdir(parents=True, exist_ok=True)
-    center_anchor = _baseline_anchor(signature, *center_anchor)
+    if baseline:
+        center_anchor = _baseline_anchor(signature, *center_anchor)
     captures: list[tuple[SweepSample, np.ndarray, float]] = []
     started = time.perf_counter()
     started_epoch = time.time()
@@ -489,10 +498,22 @@ def _run_one_sweep(*, spec: SweepSpec, initial_az: float, initial_alt: float,
     if len(captures) < minimum:
         raise RuntimeError(f"{spec.name}: somente {len(captures)} amostras; minimo={minimum}.")
     raw_samples = [item[0] for item in captures]
-    samples = _aggregate_sweep_frames(captures)
+    # O inicio transitorio continua no CSV bruto, mas fica fora do diagnostico
+    # dinamico quando a matriz e estimada por referencias paradas.
+    useful = captures if validate_dynamic else [item for item in captures if item[0].elapsed_s >= 1.0]
+    samples = _aggregate_sweep_frames(useful)
     if audit_dir is not None:
         _write_csv(audit_dir / f"{spec.name}_bins.csv", [samples])
-    aggregation = _validate_sweep_aggregation(samples, spec.name)
+    try:
+        aggregation = _validate_sweep_aggregation(samples, spec.name)
+    except RuntimeError as exc:
+        if validate_dynamic:
+            raise
+        aggregation = {"dynamic_warning": str(exc), "bin_count": len(samples)}
+    aggregation["transient_excluded_s"] = 0.0 if validate_dynamic else 1.0
+    if not validate_dynamic:
+        print(f"  {len(raw_samples)} frames; referencias paradas definirao a matriz.")
+        return samples, center_anchor, raw_samples, aggregation
     values = np.array([s.delta_az_deg if spec.axis == 0 else s.delta_alt_deg for s in samples])
     span = float(np.ptp(values))
     if span < max(0.003, 0.65 * spec.half_range_deg):
@@ -505,6 +526,76 @@ def _run_one_sweep(*, spec: SweepSpec, initial_az: float, initial_alt: float,
         f"amplitude={span:.5f} deg."
     )
     return samples, center_anchor, raw_samples, aggregation
+
+
+def _take_stationary_reference(signature, expected, initial_az, initial_alt, audit_path):
+    audit = {"settle_seconds": REFERENCE_SETTLE_S}
+    try:
+        stop_axes_safely()
+        time.sleep(REFERENCE_SETTLE_S)
+        if not foco.initialize_focus_lock(signature, *expected, freeze_reference=True,
+                                         max_jump_px=TRACKER_MAX_SPOT_JUMP_PX):
+            raise RuntimeError("Nao consegui inicializar a ilha para referencia parada.")
+        result = collect_reference(
+            _capture_valid_cm,
+            lambda: _offsets_from_start(initial_az, initial_alt, *read_altaz()),
+            _centroid_from_stacked_frames,
+            clock=time.perf_counter, quality=_frame_quality, audit=audit,
+        )
+        foco.set_focus_expected_position(*result["center"], max_jump_px=TRACKER_MAX_SPOT_JUMP_PX)
+        return result
+    except Exception as exc:
+        audit.update(status="erro", error=str(exc))
+        raise
+    finally:
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        audit_path.write_text(json.dumps(audit, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _run_reference_sweep(*, spec, initial_az, initial_alt, signature, center_anchor, audit_dir):
+    """Origem A -> varredura -> ponto B -> retorno A'; so mede parado."""
+    def reference(label, expected):
+        print(f"  {spec.name}: referencia {label}, mount parado, media >= {REFERENCE_WINDOW_S:.1f}s")
+        try:
+            return _take_stationary_reference(signature, expected, initial_az, initial_alt,
+                                              audit_dir / f"{spec.name}_referencia_{label}.json")
+        except RuntimeError as exc:
+            raise RuntimeError(f"{spec.name}/{label}: {exc}") from exc
+    before = reference("A", center_anchor)
+    _, _, raw_samples, aggregation = _run_one_sweep(
+        spec=spec, initial_az=initial_az, initial_alt=initial_alt, signature=signature,
+        center_anchor=tuple(before["center"]), audit_dir=audit_dir,
+        baseline=False, validate_dynamic=False,
+    )
+    last = raw_samples[-1]
+    displaced = reference("B", (last.x_px, last.y_px))
+    returned = _return_to_absolute_start(initial_az, initial_alt)
+    if not returned["success"]:
+        raise RuntimeError(f"Retorno para referencia A' falhou: {returned}")
+    after = reference("A_retorno", tuple(before["center"]))
+    try:
+        difference = reference_difference(before, displaced, after, axis=spec.axis, amplitude=spec.half_range_deg)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{spec.name}: {exc}") from exc
+    samples = []
+    # Diferencas corrigidas: origem virtual (0,0) e deslocamento medido.
+    # As coordenadas originais de sensor e angulo ficam nos JSONs A/B/A_retorno.
+    for factor in (0.0, 1.0):
+        daz, dalt = factor * np.array(difference["delta_deg"])
+        x, y = factor * np.array(difference["displacement_px"])
+        samples.append(SweepSample(
+            run=spec.name, axis=spec.axis, command_sign=spec.command_sign,
+            elapsed_s=factor * (displaced["t"] - before["t"]),
+            az_deg=float(daz), alt_deg=float(dalt), delta_az_deg=float(daz), delta_alt_deg=float(dalt),
+            x_px=float(x), y_px=float(y), role=spec.role, half_range_deg=spec.half_range_deg,
+            frames_combined=before["frame_count"] + displaced["frame_count"] + after["frame_count"],
+            centroid_spread_px=difference["reference_spread_px"], quality_weight=difference["weight"],
+            sample_kind="stationary_ABA_difference",
+        ))
+    _write_csv(audit_dir / f"{spec.name}_diferenca_estatica.csv", [samples])
+    aggregation["stationary_difference"] = difference
+    print(f"  A-B-A: deslocamento={difference['displacement_px']} px | retorno={difference['closure_px']:.2f}px")
+    return samples, tuple(after["center"]), raw_samples, aggregation
 
 
 def _center_runs(runs: list[list[SweepSample]], *, include_weights: bool = False):
@@ -733,6 +824,9 @@ def main(profile_name: str | None = None) -> None:
                "backend": backend_name(), "profile": profile.name,
                "profile_description": profile.description, "trajectory": [asdict(s) for s in profile.specs],
                "spread_method": "global_robust_linear_time_trend_removed",
+               "estimation_method": "stationary_ABA_temporal_references",
+               "reference_window_seconds": REFERENCE_WINDOW_S,
+               "reference_timeout_seconds": REFERENCE_TIMEOUT_S,
                "sweep_audit_subdir": "varreduras",
                "validation_limits": {
                    "maximum_direction_scale_ratio": MAX_DIRECTION_SCALE_RATIO,
@@ -765,8 +859,8 @@ def main(profile_name: str | None = None) -> None:
                        local_half_range_deg=LOCAL_HALF_RANGE_DEG, wide_half_range_deg=WIDE_HALF_RANGE_DEG,
                        exposure_seconds=foco.EXPOSURE_SECONDS, gain=foco.CAMERA_GAIN,
                        exposure_strategy="fixed_during_calibration",
-                       baseline_valid_frames=BASELINE_VALID_FRAMES,
-                       baseline_window_seconds=BASELINE_WINDOW_SECONDS)
+                       baseline_valid_frames=REFERENCE_MIN_FRAMES,
+                       baseline_window_seconds=REFERENCE_WINDOW_S)
         print(f"\nCalibracao continua {profile.name} | camera={backend_name()} | ROI={actual_w}x{actual_h}")
         print(profile.description)
         print("Ctrl+C para parar os eixos e retornar a posicao absoluta inicial.")
@@ -776,7 +870,7 @@ def main(profile_name: str | None = None) -> None:
             if not returned["success"]:
                 raise RuntimeError(f"Retorno antes de {spec.name} falhou: {returned}")
             try:
-                samples, center_anchor, raw_samples, aggregation = _run_one_sweep(
+                samples, center_anchor, raw_samples, aggregation = _run_reference_sweep(
                     spec=spec, initial_az=initial_az, initial_alt=initial_alt,
                     signature=selection["signature"], center_anchor=center_anchor,
                     audit_dir=run_dir / "varreduras",
@@ -827,13 +921,19 @@ def main(profile_name: str | None = None) -> None:
         summary.update(status="validada" if activation_ok else "rejeitada", finished_epoch=time.time(),
                        sample_count=sum(map(len, all_runs)), fit_sample_count=sum(map(len, fit_runs)),
                        raw_frame_sample_count=sum(map(len, all_frame_runs)),
+                       stationary_aggregation={
+                           "method": "A-B-A linear local drift interpolation",
+                           "difference_count": len(all_runs),
+                           "reference_count": 3 * len(all_runs),
+                           "valid_reference_frames": sum(r[0].frames_combined for r in all_runs),
+                           "median_reference_spread_px": float(np.median(spreads)),
+                           "median_frames_per_difference": float(np.median(frames_per_bin)),
+                       },
                        angular_aggregation={
+                           "used_for_matrix": False,
                            "bin_width_deg": ANGLE_BIN_WIDTH_DEG,
                            "minimum_frames_per_bin": MIN_FRAMES_PER_ANGLE_BIN,
                            "minimum_valid_bins_per_sweep": MIN_VALID_SWEEP_BINS,
-                           "median_frames_per_bin": float(np.median(frames_per_bin)),
-                           "median_centroid_spread_px": float(np.median(spreads)),
-                           "p90_centroid_spread_px": float(np.percentile(spreads, 90)),
                            "sweeps": aggregation_stats,
                        },
                        A=fit["A"].tolist(), A_inv=fit["A_inv"].tolist(),
@@ -852,7 +952,7 @@ def main(profile_name: str | None = None) -> None:
             f"RMS ajuste={fit['rms_residual_px']:.2f}px | "
             f"cond={fit['condition_number']:.2f} | "
             f"frames={summary['raw_frame_sample_count']} -> "
-            f"bins={summary['sample_count']}"
+            f"pontos de diferencas estaticas={summary['sample_count']}"
         )
         print(
             f"Sweep={summary['sweep_sample_rate_hz']:.1f} Hz | "

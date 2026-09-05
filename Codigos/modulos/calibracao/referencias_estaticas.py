@@ -1,0 +1,140 @@
+"""Referencias temporais paradas e diferencas A-B-A para calibracao angular.
+
+Nao depende de camera/mount: callbacks fornecem captura, posicao e relogio.
+Os blocos reduzem a influencia de frames isolados, sem assumir independencia
+estatistica entre imagens consecutivas.
+"""
+
+from collections import Counter, deque
+import numpy as np
+
+
+REFERENCE_WINDOW_S = 2.0
+REFERENCE_TIMEOUT_S = 12.0
+REFERENCE_SETTLE_S = 0.8
+REFERENCE_BLOCK_S = 0.4
+REFERENCE_MIN_FRAMES = 20
+REFERENCE_MIN_VALID_FRACTION = 0.6
+REFERENCE_MAX_BLOCK_SPREAD_PX = 5.0
+REFERENCE_STORED_FPS = 120.0
+
+
+def collect_reference(capture, position, centroid, *, clock, quality, audit):
+    """Espera um trecho recente valido; nao acumula frames atraves de oclusoes.
+
+    `capture`: frame, cm, candidato. `position`: offsets angulares desde a origem.
+    `audit` recebe motivos por frame e resultado mesmo quando a coleta falha.
+    """
+    started = clock()
+    recent = deque()
+    reasons = Counter()
+    last_evaluation = -float("inf")
+    audit.update(status="coletando", records=[])
+    while clock() - started < REFERENCE_TIMEOUT_S:
+        before = clock()
+        frame, cm, selected = capture()
+        now = clock()
+        weight = quality(selected)
+        reason = ("sem_candidato" if cm is None else "borda" if cm[3]
+                  else "assinatura_rejeitada" if weight <= 0 else "valido")
+        if cm is None and selected.get("candidate_count", 0) > 0:
+            reason = "candidatos_rejeitados_pelo_detector"
+        if reason == "valido" and not np.all(np.isfinite(cm[:2])):
+            reason = "centro_nao_finito"
+        # Bloqueia tentativa de referenciar um alvo encostado no recorte.
+        if reason == "borda":
+            audit.update(status="erro", error="Alvo tocou a borda na referencia parada.")
+            raise RuntimeError(audit["error"])
+        angle = position() if reason == "valido" else None
+        mid = (before + now) / 2
+        reasons[reason] += 1
+        retained = not recent or mid - recent[-1][0] >= 1 / REFERENCE_STORED_FPS
+        audit["records"].append(dict(t=mid, reason=reason,
+                                     center=None if cm is None else list(map(float, cm[:2])),
+                                     angle=angle, candidate_count=selected.get("candidate_count", 0),
+                                     retained=retained))
+        audit["rejections"] = dict(reasons)
+        if not retained:
+            continue  # Mantem cobertura temporal sem armazenar centenas de MB a FPS alto.
+        # Janela deslizante com limite de memoria, inclusive se houver FPS alto.
+        recent.append((mid, np.asarray(frame, dtype=np.uint8).copy() if reason == "valido" else None,
+                       cm, weight, angle))
+        while recent and (mid - recent[0][0] > REFERENCE_WINDOW_S + REFERENCE_BLOCK_S or len(recent) > 600):
+            recent.popleft()
+        valid = [r for r in recent if r[1] is not None]
+        span = valid[-1][0] - valid[0][0] if valid else 0.0
+        if (len(valid) < REFERENCE_MIN_FRAMES or span < REFERENCE_WINDOW_S
+                or len(valid) / len(recent) < REFERENCE_MIN_VALID_FRACTION):
+            continue
+        if now - last_evaluation < REFERENCE_BLOCK_S:
+            continue
+        last_evaluation = now
+        # Mede uma imagem media por bloco e usa a mediana dos centros dos blocos.
+        ids = np.floor((np.array([r[0] for r in valid]) - valid[0][0]) / REFERENCE_BLOCK_S).astype(int)
+        blocks = []
+        for index in np.unique(ids):
+            group = [r for r, group_id in zip(valid, ids) if group_id == index]
+            if len(group) < 3 or group[-1][0] - group[0][0] < REFERENCE_BLOCK_S * 0.5:
+                continue
+            xy = centroid([r[1] for r in group], np.array([r[2][:2] for r in group]),
+                          np.array([r[3] for r in group]))
+            blocks.append(dict(t=float(np.median([r[0] for r in group])), center=list(xy),
+                               angle=np.median([r[4] for r in group], axis=0).tolist()))
+        if len(blocks) < 4:
+            continue
+        centers = np.array([b["center"] for b in blocks])
+        center = np.median(centers, axis=0)
+        spread = float(np.percentile(np.linalg.norm(centers - center, axis=1), 90))
+        audit["last_block_spread_px"] = spread
+        if spread > REFERENCE_MAX_BLOCK_SPREAD_PX:
+            continue
+        angle_span = np.ptp([b["angle"] for b in blocks], axis=0)
+        audit["last_angle_span_deg"] = angle_span.tolist()
+        if not np.all(np.isfinite(angle_span)) or np.max(angle_span) > 0.00056:
+            continue  # Posicao informada ainda nao estabilizou (limite ~2 arcsec).
+        result = dict(t=float(np.median([b["t"] for b in blocks])), center=center.tolist(),
+                      angle=np.median([b["angle"] for b in blocks], axis=0).tolist(),
+                      frame_count=len(valid), span_s=span, valid_fraction=len(valid) / len(recent),
+                      captured_count=sum(reasons.values()), stored_fps_limit=REFERENCE_STORED_FPS,
+                      block_spread_px=spread, blocks=blocks)
+        audit.update(status="ok", result=result)
+        return result
+    error = (f"Referencia parada insuficiente em {REFERENCE_TIMEOUT_S:.0f}s; motivos={dict(reasons)}; "
+             f"dispersao_blocos_px={audit.get('last_block_spread_px')}; "
+             f"variacao_angular_deg={audit.get('last_angle_span_deg')}")
+    audit.update(status="erro", error=error)
+    raise RuntimeError(error)
+
+
+def reference_difference(before, displaced, returned, *, axis, amplitude):
+    """Compara B com a interpolacao temporal de A e A' (deriva linear local).
+
+    A diferenca A'-A nao e atribuida exclusivamente a atmosfera: pode incluir
+    mecanica. Uma discrepancia grande impede usar a interpolacao.
+    """
+    ta, tb, tc = (r["t"] for r in (before, displaced, returned))
+    if not ta < tb < tc:
+        raise RuntimeError("Tempos invalidos nas referencias A-B-A.")
+    fraction = (tb - ta) / (tc - ta)
+    pa, pb, pc = (np.array(r["center"], dtype=float) for r in (before, displaced, returned))
+    qa, qb, qc = (np.array(r["angle"], dtype=float) for r in (before, displaced, returned))
+    if not np.all(np.isfinite(np.r_[pa, pb, pc, qa, qb, qc])):
+        raise RuntimeError("Referencia contem valores nao finitos.")
+    delta = qb - ((1 - fraction) * qa + fraction * qc)
+    raw = pb - pa
+    closure = float(np.linalg.norm(pc - pa))
+    limit = min(10.0, max(3.0, 0.25 * float(np.linalg.norm(raw))))
+    if closure > limit:
+        raise RuntimeError(f"Retorno optico nao repetivel: {closure:.2f}px; limite={limit:.2f}px.")
+    if abs(delta[axis]) < max(0.003, 0.65 * amplitude):
+        raise RuntimeError("Amplitude insuficiente entre referencias paradas.")
+    if abs(delta[1-axis]) > 0.001:
+        raise RuntimeError("Outro eixo variou entre referencias paradas.")
+    corrected = pb - ((1 - fraction) * pa + fraction * pc)
+    spread = max(0.5, float(np.sqrt(sum(r["block_spread_px"]**2 for r in (before, displaced, returned)))))
+    if np.linalg.norm(corrected) < max(8.0, 3 * spread):
+        raise RuntimeError("Deslocamento optico insuficiente frente a dispersao das referencias.")
+    return dict(delta_deg=delta.tolist(), displacement_px=corrected.tolist(),
+                uncorrected_displacement_px=raw.tolist(), closure_px=closure,
+                closure_limit_px=limit, interpolation_fraction=fraction,
+                reference_spread_px=spread, weight=1 / spread**2)
