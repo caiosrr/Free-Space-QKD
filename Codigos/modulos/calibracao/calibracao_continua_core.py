@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
+import cv2
 
 from modulos.artefatos import display_path
 from modulos.configuracoes.tracker import (
@@ -29,8 +30,10 @@ from modulos.controle.mapa_jacobianas import registrar_no
 from modulos.visao import detector_ilhas as foco
 from modulos.calibracao.referencias_estaticas import (
     REFERENCE_WINDOW_S, REFERENCE_SETTLE_S, REFERENCE_TIMEOUT_S, REFERENCE_MIN_FRAMES,
+    REFERENCE_TARGET_FRAMES, REFERENCE_MAX_WINDOW_S,
     collect_reference,
 )
+from modulos.calibracao.imagem_integrada import integrated_centroid, measure_integrated_beacon
 from modulos.calibracao.resposta_local import (
     LOCAL_STEP_DEG, LOCAL_REPETITIONS, measure_step, matrix_step_usable, timed_pulse,
 )
@@ -141,7 +144,7 @@ def calibration_profile(name: str) -> CalibrationProfile:
     holdout = _four_sweeps("holdout_local", LOCAL_HALF_RANGE_DEG, ((1, +1), (0, -1), (1, -1), (0, +1)))
     return CalibrationProfile(
         "robusto",
-        "4 ajustes + 4 validacoes locais, 3 passos/serie e diagnostico de micropulsos; cerca de 5-8 min",
+        "4 ajustes + 4 validacoes locais; medias de 160 frames e diagnostico de micropulsos; cerca de 8-12 min",
         fit + holdout,
         True,
     )
@@ -596,6 +599,16 @@ def _run_one_sweep(*, spec: SweepSpec, initial_az: float, initial_alt: float,
 def _take_stationary_reference(signature, expected, initial_az, initial_alt, audit_path,
                                *, expected_angle=None):
     audit = {"settle_seconds": REFERENCE_SETTLE_S, "expected_angle_deg": expected_angle}
+    def final_measurement(frames, centers):
+        result = measure_integrated_beacon(frames, centers)
+        preview = result.pop('preview')
+        preview_path = audit_path.with_suffix('.png')
+        preview_path.parent.mkdir(parents=True, exist_ok=True)
+        if not cv2.imwrite(str(preview_path), preview):
+            raise OSError(f'Nao consegui salvar imagem media: {preview_path}')
+        result['preview_file'] = preview_path.name
+        result['preview_display_only_normalized'] = True
+        return result
     try:
         if not stop_axes_safely():
             raise RuntimeError("Parada dos eixos nao confirmada antes da referencia.")
@@ -606,9 +619,10 @@ def _take_stationary_reference(signature, expected, initial_az, initial_alt, aud
         result = collect_reference(
             _capture_valid_cm,
             lambda: _offsets_from_start(initial_az, initial_alt, *read_altaz()),
-            _centroid_from_stacked_frames,
+            integrated_centroid,
             clock=time.perf_counter, quality=_frame_quality, audit=audit,
             expected_angle=expected_angle, angle_tolerance=TOLERANCIA_GRAUS,
+            final_measurement=final_measurement,
         )
         foco.set_focus_expected_position(*result["center"], max_jump_px=TRACKER_MAX_SPOT_JUMP_PX)
         return result
@@ -1059,6 +1073,9 @@ def main(profile_name: str | None = None) -> None:
                "repetitions_per_direction": LOCAL_REPETITIONS,
                "return_used_for_fit": False,
                "reference_window_seconds": REFERENCE_WINDOW_S,
+               "reference_target_frames": REFERENCE_TARGET_FRAMES,
+               "reference_max_window_seconds": REFERENCE_MAX_WINDOW_S,
+               "reference_position_method": "centroid_of_full_mean_image",
                "reference_timeout_seconds": REFERENCE_TIMEOUT_S,
                "sweep_audit_subdir": "varreduras",
                "validation_limits": {

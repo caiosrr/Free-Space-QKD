@@ -18,7 +18,10 @@ def measure_step(references):
     t = np.array([r['t'] for r in references], dtype=float)
     p = np.array([r['center'] for r in references], dtype=float)
     q = np.array([r['angle'] for r in references], dtype=float)
-    spread = np.array([max(.5, r['block_spread_px']) for r in references])
+    # Oscilacao entre blocos curtos nao e o erro da imagem integrada inteira.
+    # A concordancia entre metades e um indicador de estabilidade, nao erro padrao.
+    spread = np.array([max(.5, r.get('integration_stability_px', r['block_spread_px']))
+                       for r in references])
     if (not np.all(np.isfinite(np.r_[t, p.ravel(), q.ravel(), spread]))
             or np.any(np.diff(t) <= 0)):
         raise ValueError('Referencias nao finitas ou tempos fora de ordem.')
