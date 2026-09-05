@@ -40,6 +40,10 @@ SWEEP_HALF_RANGE_DEG = LOCAL_HALF_RANGE_DEG
 OTHER_AXIS_LIMIT_DEG = 0.004
 RETURN_MAX_RATE_DEG_S = 0.02
 RETURN_ATTEMPTS = 2
+RETURN_STABLE_SECONDS = 1.5
+RETURN_VERIFY_TIMEOUT_S = 4.0
+RETURN_POLL_SECONDS = 0.2
+RETURN_STABLE_SPAN_DEG = 1.0 / 3600.0
 BASELINE_VALID_FRAMES = 20
 BASELINE_WINDOW_SECONDS = 0.5
 SIGNAL_LOSS_TIMEOUT_S = 1.5
@@ -144,33 +148,81 @@ def _offsets_from_start(initial_az: float, initial_alt: float, az: float, alt: f
     return float(calc_error(0, az, initial_az)), float(alt - initial_alt)
 
 
-def _return_to_absolute_start(initial_az: float, initial_alt: float) -> dict:
-    result = {"success": False, "attempts": 0, "error": None}
-    stop_axes_safely()
+def _confirm_stable_return(initial_az, initial_alt, result):
+    """Exige permanencia dentro da tolerancia, nao uma passagem pelo alvo."""
+    started = time.perf_counter()
+    stable = []
+    while time.perf_counter() - started < RETURN_VERIFY_TIMEOUT_S:
+        az, alt = read_altaz()
+        now = time.perf_counter()
+        errors = (float(calc_error(0, initial_az, az)), float(initial_alt - alt))
+        if not np.all(np.isfinite([az, alt, *errors])):
+            raise RuntimeError("Posicao nao finita durante verificacao do retorno.")
+        result.update(final_az_deg=az, final_alt_deg=alt,
+                      error_az_deg=errors[0], error_alt_deg=errors[1])
+        result["readings"].append(dict(t=now, attempt=result["attempts"],
+                                       phase="confirmacao_parado", az_deg=az, alt_deg=alt,
+                                       error_az_deg=errors[0], error_alt_deg=errors[1]))
+        if max(map(abs, errors)) <= TOLERANCIA_GRAUS:
+            stable.append((now, errors))
+            while len(stable) > 1 and np.max(np.ptp([r[1] for r in stable], axis=0)) > RETURN_STABLE_SPAN_DEG + 1e-10:
+                stable.pop(0)
+            if len(stable) >= 5 and now - stable[0][0] >= RETURN_STABLE_SECONDS:
+                result.update(stable_seconds=now-stable[0][0], stable_readings=len(stable))
+                return True
+        else:
+            stable.clear()
+        time.sleep(RETURN_POLL_SECONDS)
+    return False
+
+
+def _return_to_absolute_start(initial_az: float, initial_alt: float, *, audit_path=None) -> dict:
+    result = {"success": False, "attempts": 0, "error": None, "readings": [], "commands": [],
+              "target_az_deg": initial_az, "target_alt_deg": initial_alt,
+              "required_stable_seconds": RETURN_STABLE_SECONDS, "tolerance_deg": TOLERANCIA_GRAUS,
+              "stable_span_limit_deg": RETURN_STABLE_SPAN_DEG,
+              "verification_timeout_seconds": RETURN_VERIFY_TIMEOUT_S}
     try:
+        if not stop_axes_safely():
+            raise RuntimeError("Parada dos eixos nao confirmada antes do retorno.")
         for attempt in range(1, RETURN_ATTEMPTS + 1):
             az, alt = read_altaz()
             delta_az = float(calc_error(0, initial_az, az))
             delta_alt = float(initial_alt - alt)
             result["attempts"] = attempt
-            if max(abs(delta_az), abs(delta_alt)) <= TOLERANCIA_GRAUS:
-                break
+            if not np.all(np.isfinite([az, alt, delta_az, delta_alt])):
+                raise RuntimeError("Posicao nao finita antes do retorno.")
+            result["readings"].append(dict(t=time.perf_counter(), attempt=attempt, phase="antes_comando",
+                                           az_deg=az, alt_deg=alt, error_az_deg=delta_az, error_alt_deg=delta_alt))
             if max(abs(delta_az), abs(delta_alt)) > 0.05:
                 raise RuntimeError("Retorno automatico recusado: deslocamento maior que 0.05 deg.")
-            print(f"Retorno {attempt}/{RETURN_ATTEMPTS}: dAz={delta_az:+.5f} dAlt={delta_alt:+.5f} deg")
-            move_axes_pid_2d(True, delta_az, delta_alt, max_velocity_deg_s=RETURN_MAX_RATE_DEG_S)
-        final_az, final_alt = read_altaz()
-        error_az = float(calc_error(0, initial_az, final_az))
-        error_alt = float(initial_alt - final_alt)
-        result.update(
-            final_az_deg=final_az, final_alt_deg=final_alt,
-            error_az_deg=error_az, error_alt_deg=error_alt,
-            success=max(abs(error_az), abs(error_alt)) <= TOLERANCIA_GRAUS,
-        )
+            if max(abs(delta_az), abs(delta_alt)) > TOLERANCIA_GRAUS:
+                print(f"Retorno {attempt}/{RETURN_ATTEMPTS}: dAz={delta_az:+.5f} dAlt={delta_alt:+.5f} deg")
+                command = dict(started_t=time.perf_counter(), delta_az_deg=delta_az,
+                               delta_alt_deg=delta_alt, max_rate_deg_s=RETURN_MAX_RATE_DEG_S)
+                result["commands"].append(command)
+                move_axes_pid_2d(
+                    True, delta_az, delta_alt, max_velocity_deg_s=RETURN_MAX_RATE_DEG_S,
+                    absolute_target=(initial_az, initial_alt),
+                    telemetry_callback=lambda row: result["readings"].append(
+                        {"attempt": attempt, "phase": "movimento_pid", **row}),
+                )
+                command["finished_t"] = time.perf_counter()
+            if not stop_axes_safely():
+                raise RuntimeError("Parada dos eixos nao confirmada apos retorno.")
+            if _confirm_stable_return(initial_az, initial_alt, result):
+                result["success"] = True
+                break
+        if not result["success"]:
+            result["error"] = "Retorno nao permaneceu estavel dentro da tolerancia."
     except Exception as exc:
         result["error"] = str(exc)
     finally:
-        stop_axes_safely()
+        if not stop_axes_safely():
+            result.update(success=False, error="Parada final dos eixos nao confirmada.")
+        if audit_path is not None:
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            audit_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result
 
 
@@ -528,10 +580,12 @@ def _run_one_sweep(*, spec: SweepSpec, initial_az: float, initial_alt: float,
     return samples, center_anchor, raw_samples, aggregation
 
 
-def _take_stationary_reference(signature, expected, initial_az, initial_alt, audit_path):
-    audit = {"settle_seconds": REFERENCE_SETTLE_S}
+def _take_stationary_reference(signature, expected, initial_az, initial_alt, audit_path,
+                               *, expected_angle=None):
+    audit = {"settle_seconds": REFERENCE_SETTLE_S, "expected_angle_deg": expected_angle}
     try:
-        stop_axes_safely()
+        if not stop_axes_safely():
+            raise RuntimeError("Parada dos eixos nao confirmada antes da referencia.")
         time.sleep(REFERENCE_SETTLE_S)
         if not foco.initialize_focus_lock(signature, *expected, freeze_reference=True,
                                          max_jump_px=TRACKER_MAX_SPOT_JUMP_PX):
@@ -541,6 +595,7 @@ def _take_stationary_reference(signature, expected, initial_az, initial_alt, aud
             lambda: _offsets_from_start(initial_az, initial_alt, *read_altaz()),
             _centroid_from_stacked_frames,
             clock=time.perf_counter, quality=_frame_quality, audit=audit,
+            expected_angle=expected_angle, angle_tolerance=TOLERANCIA_GRAUS,
         )
         foco.set_focus_expected_position(*result["center"], max_jump_px=TRACKER_MAX_SPOT_JUMP_PX)
         return result
@@ -554,14 +609,15 @@ def _take_stationary_reference(signature, expected, initial_az, initial_alt, aud
 
 def _run_reference_sweep(*, spec, initial_az, initial_alt, signature, center_anchor, audit_dir):
     """Origem A -> varredura -> ponto B -> retorno A'; so mede parado."""
-    def reference(label, expected):
+    def reference(label, expected, expected_angle=None):
         print(f"  {spec.name}: referencia {label}, mount parado, media >= {REFERENCE_WINDOW_S:.1f}s")
         try:
             return _take_stationary_reference(signature, expected, initial_az, initial_alt,
-                                              audit_dir / f"{spec.name}_referencia_{label}.json")
+                                              audit_dir / f"{spec.name}_referencia_{label}.json",
+                                              expected_angle=expected_angle)
         except RuntimeError as exc:
             raise RuntimeError(f"{spec.name}/{label}: {exc}") from exc
-    before = reference("A", center_anchor)
+    before = reference("A", center_anchor, (0.0, 0.0))
     _, _, raw_samples, aggregation = _run_one_sweep(
         spec=spec, initial_az=initial_az, initial_alt=initial_alt, signature=signature,
         center_anchor=tuple(before["center"]), audit_dir=audit_dir,
@@ -569,14 +625,24 @@ def _run_reference_sweep(*, spec, initial_az, initial_alt, signature, center_anc
     )
     last = raw_samples[-1]
     displaced = reference("B", (last.x_px, last.y_px))
-    returned = _return_to_absolute_start(initial_az, initial_alt)
+    # Volta para o angulo MEDIDO em A, nao apenas para a origem nominal da sessao.
+    returned = _return_to_absolute_start(
+        (initial_az + before["angle"][0]) % 360.0, initial_alt + before["angle"][1],
+        audit_path=audit_dir / f"{spec.name}_retorno.json",
+    )
     if not returned["success"]:
-        raise RuntimeError(f"Retorno para referencia A' falhou: {returned}")
-    after = reference("A_retorno", tuple(before["center"]))
+        raise RuntimeError(f"Retorno para referencia A' falhou: {returned.get('error')}")
+    after = reference("A_retorno", tuple(before["center"]), before["angle"])
+    closure_audit = {"status": "avaliando"}
     try:
-        difference = reference_difference(before, displaced, after, axis=spec.axis, amplitude=spec.half_range_deg)
+        difference = reference_difference(before, displaced, after, axis=spec.axis,
+                                          amplitude=spec.half_range_deg, audit=closure_audit)
+        closure_audit["status"] = "ok"
     except RuntimeError as exc:
+        closure_audit.update(status="erro", error=str(exc))
         raise RuntimeError(f"{spec.name}: {exc}") from exc
+    finally:
+        (audit_dir / f"{spec.name}_fechamento.json").write_text(json.dumps(closure_audit, indent=2), encoding="utf-8")
     samples = []
     # Diferencas corrigidas: origem virtual (0,0) e deslocamento medido.
     # As coordenadas originais de sensor e angulo ficam nos JSONs A/B/A_retorno.
@@ -866,9 +932,10 @@ def main(profile_name: str | None = None) -> None:
         print("Ctrl+C para parar os eixos e retornar a posicao absoluta inicial.")
         center_anchor = target_local
         for spec in profile.specs:
-            returned = _return_to_absolute_start(initial_az, initial_alt)
+            returned = _return_to_absolute_start(initial_az, initial_alt,
+                                                 audit_path=run_dir / "varreduras" / f"antes_{spec.name}_retorno.json")
             if not returned["success"]:
-                raise RuntimeError(f"Retorno antes de {spec.name} falhou: {returned}")
+                raise RuntimeError(f"Retorno antes de {spec.name} falhou: {returned.get('error')}")
             try:
                 samples, center_anchor, raw_samples, aggregation = _run_reference_sweep(
                     spec=spec, initial_az=initial_az, initial_alt=initial_alt,
@@ -883,9 +950,10 @@ def main(profile_name: str | None = None) -> None:
                     raise
                 failed_optional.append({"run": spec.name, "error": str(exc)})
                 print(f"Aviso: teste amplo indisponivel: {exc}")
-        returned = _return_to_absolute_start(initial_az, initial_alt)
+        returned = _return_to_absolute_start(initial_az, initial_alt,
+                                             audit_path=run_dir / "retorno_final.json")
         if not returned["success"]:
-            raise RuntimeError(f"Retorno final nao confirmado: {returned}")
+            raise RuntimeError(f"Retorno final nao confirmado: {returned.get('error')}")
 
         fit_runs = [r for r in all_runs if r[0].role == "fit"]
         local_runs = [r for r in all_runs if r[0].role == "holdout_local"]
@@ -1027,7 +1095,7 @@ def main(profile_name: str | None = None) -> None:
     finally:
         stop_axes_safely()
         if initial_position is not None:
-            returned = _return_to_absolute_start(*initial_position)
+            returned = _return_to_absolute_start(*initial_position, audit_path=run_dir / "retorno_encerramento.json")
             summary["return_to_start_finally"] = returned
             print("Posicao absoluta inicial restaurada." if returned["success"] else f"ALERTA: retorno nao confirmado: {returned}")
         try:

@@ -228,6 +228,9 @@ def move_axes_pid_2d(
     delta_az: float,
     delta_alt: float,
     max_velocity_deg_s: float | None = None,
+    *,
+    absolute_target: tuple[float, float] | None = None,
+    telemetry_callback=None,
 ):
     """Movimento contínuo simultâneo nos dois eixos usando PID e Threads."""
 
@@ -242,6 +245,14 @@ def move_axes_pid_2d(
     az0, alt0 = read_altaz()
     alvo_az = (az0 + delta_az) % 360
     alvo_alt = alt0 + delta_alt
+    if absolute_target is not None:
+        if len(absolute_target) != 2 or not np.all(np.isfinite(absolute_target)):
+            raise ValueError("Alvo absoluto invalido.")
+        # Nao somar um delta calculado com uma leitura antiga a uma nova leitura.
+        alvo_az = float(absolute_target[0]) % 360.0
+        alvo_alt = float(absolute_target[1])
+        delta_az = float(calc_error(0, alvo_az, az0))
+        delta_alt = alvo_alt - alt0
 
     # Travas de segurança físicas para a Altitude
     if alvo_alt > 90:
@@ -274,6 +285,7 @@ def move_axes_pid_2d(
         try:
             while True:
                 az, alt = read_altaz()
+                sample_t = time.perf_counter()
                 tempo_decorrido = time.time() - t0
 
                 # Atualiza os PIDs
@@ -350,6 +362,14 @@ def move_axes_pid_2d(
                     future_az.result()
                 if future_alt:
                     future_alt.result()
+
+                if telemetry_callback is not None:
+                    telemetry_callback(dict(
+                        t=sample_t, az_deg=float(az), alt_deg=float(alt),
+                        target_az_deg=float(alvo_az), target_alt_deg=float(alvo_alt),
+                        error_az_deg=float(error_az), error_alt_deg=float(error_alt),
+                        cmd_az_deg_s=float(cmd_az), cmd_alt_deg_s=float(cmd_alt),
+                    ))
 
                 # Interface visual compacta
                 _status_write(

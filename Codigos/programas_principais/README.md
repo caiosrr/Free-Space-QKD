@@ -54,8 +54,11 @@ posicoes, blocos e motivos de rejeicao, inclusive nas tentativas malsucedidas.
 
 A origem e interpolada entre A e A_retorno no instante de B, em pixels e nos
 angulos informados. Isso compensa deriva aproximadamente linear durante o ciclo,
-nao separa atmosfera de mecanica. Se o retorno optico divergir mais que 25% da
-resposta (com piso de 3 px e teto de 10 px), o ciclo e recusado. A dispersao dos
+nao separa atmosfera de mecanica. O retorno optico desconta a pequena diferenca
+angular residual usando a resposta A->B do proprio eixo, sem matriz anterior.
+Nao extrapola alem de 15% da excursao nem compensa um eixo ortogonal sem escala.
+Se o residuo optico divergir mais que 25% da resposta (com piso de 3 px e teto
+de 10 px), o ciclo e recusado. A dispersao dos
 blocos serve como indicador conservador de qualidade, nao intervalo de confianca.
 
 `amostras.csv` e `*_diferenca_estatica.csv` contem pares virtuais origem/deslocamento
@@ -82,6 +85,17 @@ da ROI menor do tracker. Ida/volta e holdout exigem razao entre escalas <= 1,35
 e cosseno entre direcoes >= 0,98. O holdout reprova residuo RMS acima de 3 px
 quando tambem excede 25% da resposta mediana prevista. Esses limites iniciais
 precisam de validacao experimental; uma rejeicao preserva a matriz ativa.
+
+O retorno usa alvo absoluto fixo no PID e exige pelo menos 1,5 s de leituras
+dentro de 0,0005 grau do alvo (1,8 arcsec), com variacao <=1 arcsec na janela.
+Cada verificacao dura no maximo 4 s, com ate duas tentativas de retorno.
+Para A_retorno, o alvo e o angulo efetivamente medido em A; a referencia optica
+tambem exige permanencia dentro da tolerancia durante sua janela de coleta.
+Isso confirma a telemetria do driver, nao substitui uma verificacao mecanica.
+
+`*_retorno.json` registra alvos, pedidos de movimento, leituras/comandos do PID
+e leituras apos parar. `*_fechamento.json` registra retorno observado em pixels,
+deslocamento previsto pela diferenca angular e residuo, inclusive nas rejeicoes.
 
 ## Correcoes limitadas e teste acompanhado
 

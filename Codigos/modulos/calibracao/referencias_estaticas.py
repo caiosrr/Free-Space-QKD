@@ -19,7 +19,8 @@ REFERENCE_MAX_BLOCK_SPREAD_PX = 5.0
 REFERENCE_STORED_FPS = 120.0
 
 
-def collect_reference(capture, position, centroid, *, clock, quality, audit):
+def collect_reference(capture, position, centroid, *, clock, quality, audit,
+                      expected_angle=None, angle_tolerance=0.0005):
     """Espera um trecho recente valido; nao acumula frames atraves de oclusoes.
 
     `capture`: frame, cm, candidato. `position`: offsets angulares desde a origem.
@@ -92,6 +93,12 @@ def collect_reference(capture, position, centroid, *, clock, quality, audit):
         audit["last_angle_span_deg"] = angle_span.tolist()
         if not np.all(np.isfinite(angle_span)) or np.max(angle_span) > 0.00056:
             continue  # Posicao informada ainda nao estabilizou (limite ~2 arcsec).
+        if expected_angle is not None:
+            errors = np.array([r[4] for r in valid]) - np.asarray(expected_angle)
+            maximum = float(np.max(np.abs(errors)))
+            audit["last_target_error_deg"] = maximum
+            if not np.isfinite(maximum) or maximum > angle_tolerance + 1e-10:
+                continue  # Estar estavel fora do alvo angular nao confirma retorno.
         result = dict(t=float(np.median([b["t"] for b in blocks])), center=center.tolist(),
                       angle=np.median([b["angle"] for b in blocks], axis=0).tolist(),
                       frame_count=len(valid), span_s=span, valid_fraction=len(valid) / len(recent),
@@ -101,12 +108,13 @@ def collect_reference(capture, position, centroid, *, clock, quality, audit):
         return result
     error = (f"Referencia parada insuficiente em {REFERENCE_TIMEOUT_S:.0f}s; motivos={dict(reasons)}; "
              f"dispersao_blocos_px={audit.get('last_block_spread_px')}; "
-             f"variacao_angular_deg={audit.get('last_angle_span_deg')}")
+             f"variacao_angular_deg={audit.get('last_angle_span_deg')}; "
+             f"erro_alvo_angular_deg={audit.get('last_target_error_deg')}")
     audit.update(status="erro", error=error)
     raise RuntimeError(error)
 
 
-def reference_difference(before, displaced, returned, *, axis, amplitude):
+def reference_difference(before, displaced, returned, *, axis, amplitude, audit=None):
     """Compara B com a interpolacao temporal de A e A' (deriva linear local).
 
     A diferenca A'-A nao e atribuida exclusivamente a atmosfera: pode incluir
@@ -122,10 +130,34 @@ def reference_difference(before, displaced, returned, *, axis, amplitude):
         raise RuntimeError("Referencia contem valores nao finitos.")
     delta = qb - ((1 - fraction) * qa + fraction * qc)
     raw = pb - pa
-    closure = float(np.linalg.norm(pc - pa))
+    observed_return = pc - pa
+    # Compensa APENAS o componente angular do eixo que esta sendo medido,
+    # com a resposta A->B desta propria tentativa (sem matriz antiga).
+    excursion = qb - qa
+    angular_return = qc - qa
+    if abs(excursion[axis]) < 0.003:
+        raise RuntimeError("Excursao insuficiente para avaliar retorno angular.")
+    ratio = float(angular_return[axis] / excursion[axis])
+    if abs(ratio) > 0.15:
+        raise RuntimeError("Retorno angular distante demais para compensacao local (>15% da excursao).")
+    if max(abs(angular_return[1-axis]), abs(excursion[1-axis])) > 0.0005 + 1e-10:
+        raise RuntimeError("Eixo ortogonal variou; nao ha escala independente para compensar o retorno.")
+    predicted_return = raw * ratio
+    residual_return = observed_return - predicted_return
+    closure = float(np.linalg.norm(residual_return))
     limit = min(10.0, max(3.0, 0.25 * float(np.linalg.norm(raw))))
+    diagnostics = dict(raw_closure_px=float(np.linalg.norm(observed_return)),
+                       angular_return_deg=angular_return.tolist(),
+                       observed_return_px=observed_return.tolist(),
+                       predicted_angular_return_px=predicted_return.tolist(),
+                       residual_return_px=residual_return.tolist(),
+                       closure_px=closure, closure_limit_px=limit,
+                       closure_method="same_sweep_axis_angular_compensation")
+    if audit is not None:
+        audit.update(diagnostics)
     if closure > limit:
-        raise RuntimeError(f"Retorno optico nao repetivel: {closure:.2f}px; limite={limit:.2f}px.")
+        raise RuntimeError(f"Retorno optico nao repetivel apos compensacao angular: {closure:.2f}px; "
+                           f"bruto={diagnostics['raw_closure_px']:.2f}px; limite={limit:.2f}px.")
     if abs(delta[axis]) < max(0.003, 0.65 * amplitude):
         raise RuntimeError("Amplitude insuficiente entre referencias paradas.")
     if abs(delta[1-axis]) > 0.001:
@@ -135,6 +167,5 @@ def reference_difference(before, displaced, returned, *, axis, amplitude):
     if np.linalg.norm(corrected) < max(8.0, 3 * spread):
         raise RuntimeError("Deslocamento optico insuficiente frente a dispersao das referencias.")
     return dict(delta_deg=delta.tolist(), displacement_px=corrected.tolist(),
-                uncorrected_displacement_px=raw.tolist(), closure_px=closure,
-                closure_limit_px=limit, interpolation_fraction=fraction,
+                uncorrected_displacement_px=raw.tolist(), **diagnostics, interpolation_fraction=fraction,
                 reference_spread_px=spread, weight=1 / spread**2)
