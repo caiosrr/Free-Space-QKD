@@ -230,9 +230,22 @@ def set_focus_expected_position(
     return True
 
 
-def capture_frame(exposure_seconds: float, light: bool = True) -> np.ndarray:
+def capture_frame(
+    exposure_seconds: float,
+    light: bool = True,
+    min_raw_signal: float | None = None,
+) -> np.ndarray:
+    """Captura e normaliza um frame, com tentativas em caso de falha.
+
+    ``min_raw_signal`` e o piso absoluto de contagens abaixo do qual o frame e
+    considerado vazio. Ele existe para a selecao manual e a calibracao, onde um
+    frame de puro ruido nao deve produzir ilhas. O tracker passa 0: ele opera
+    com exposicao muito menor, onde o pico do beacon fica na casa de 15
+    contagens, e ja tem a trava de identidade da ilha para rejeitar ruido.
+    """
     global LAST_CAPTURE_STATS, LAST_RAW_FRAME
 
+    limite_bruto = RAW_SIGNAL_MIN if min_raw_signal is None else float(min_raw_signal)
     last_exc = None
     for attempt in range(1, CAPTURE_HTTP_ATTEMPTS + 1):
         try:
@@ -243,7 +256,7 @@ def capture_frame(exposure_seconds: float, light: bool = True) -> np.ndarray:
             median_val = float(np.median(frame))
             std_val = float(np.std(frame))
 
-            if max_val < RAW_SIGNAL_MIN or max_val <= min_val:
+            if max_val < limite_bruto or max_val <= min_val:
                 norm = np.zeros_like(frame, dtype=np.uint8)
                 pedestal = min_val
             else:

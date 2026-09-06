@@ -337,11 +337,14 @@ def disconnect_camera() -> None:
 def capture_frame(exposure_seconds: float) -> np.ndarray:
     """Captura e normaliza pelo mesmo caminho usado na calibracao.
 
-    Herda dai as tentativas de captura e o piso ``RAW_SIGNAL_MIN``, que a
-    versao antiga deste modulo nao tinha; um beacon fraco passa a ser tratado
-    igual nos dois programas.
+    Herda dai as tentativas de captura em caso de falha. O piso absoluto de
+    contagens fica DESLIGADO aqui, como sempre esteve neste modulo: com a
+    autoexposicao em ~1150 us o pico bruto do beacon fica perto de 15
+    contagens sobre um fundo de 2, e o piso de 20 do detector zeraria 94% dos
+    frames de uma sessao real. Quem rejeita ruido no tracker e a trava de
+    identidade da ilha, nao um limiar absoluto.
     """
-    return foco_temp.capture_frame(exposure_seconds, light=True)
+    return foco_temp.capture_frame(exposure_seconds, light=True, min_raw_signal=0.0)
 
 
 def latest_raw_frame() -> np.ndarray | None:
