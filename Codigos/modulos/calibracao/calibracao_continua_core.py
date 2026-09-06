@@ -45,13 +45,16 @@ from modulos.calibracao.imagem_integrada import integrated_centroid, measure_int
 # 30-60% de erro no angulo e ate 20x de espalhamento na velocidade optica.
 # A correcao e aumentar o braco de alavanca e ajustar so a fase de velocidade
 # constante: cada fonte de erro cai na proporcao da amplitude.
-SWEEP_HALF_RANGE_DEG = 0.030
+# 144 arcsec, ~10 s a 0.004 deg/s. Dimensionado pelas sessoes de 2026-09-06:
+# o transiente de partida variou de 1.0 a 3.8 s, entao a varredura precisa ser
+# longa o bastante para sobrar fase estavel util depois do pior caso.
+SWEEP_HALF_RANGE_DEG = 0.040
 # 4x a velocidade minima do mount, longe da regiao de atrito estatico onde a
 # partida domina. Abaixo disso o movimento vira stick-slip.
 SWEEP_RATE_DEG_S = 0.004
 # Trava por pixel: nao dependemos de conhecer a escala antes de calibrar. O que
 # ocorrer primeiro (angulo ou pixel) encerra a varredura longe da borda.
-SWEEP_MAX_PIXELS = 320.0
+SWEEP_MAX_PIXELS = 400.0
 # Descartes de partida e frenagem. O de partida e apenas o piso: a janela real
 # e detectada pela propria velocidade optica (ver _janela_fase_estavel).
 SWEEP_MIN_TRANSIENT_S = 1.0
@@ -70,11 +73,12 @@ BASELINE_VALID_FRAMES = 20
 BASELINE_WINDOW_SECONDS = 0.5
 SIGNAL_LOSS_TIMEOUT_S = 1.5
 MIN_VALID_SWEEP_SAMPLES = 20
-# Cada bin precisa juntar varios frames para media. Com 1 arcsec de quantizacao
-# e a varredura a 0.004 deg/s, bins de 0.9 arcsec ficariam com menos de 3 frames
-# e seriam descartados. 1.8 arcsec (2 quanta) mantem >=3 frames por bin mesmo na
-# taxa pessimista do laco (~15 Hz) e ainda deixa bins de sobra para o ajuste.
-ANGLE_BIN_WIDTH_DEG = 0.0005
+# O bin acompanha o passo REAL da telemetria, nao o quantum de 1 arcsec: o
+# driver atualiza a posicao a cerca de 2 Hz, entao a 0.004 deg/s ele anda ~7.2
+# arcsec por atualizacao. Bins mais estreitos que isso nao criam informacao
+# nova, so se dividem dentro do mesmo patamar e ficam abaixo do minimo de
+# frames. Com 7.2 arcsec e o laco medido em ~19 Hz, cada bin junta ~9 frames.
+ANGLE_BIN_WIDTH_DEG = 0.002
 MIN_FRAMES_PER_ANGLE_BIN = 3
 # O ASCOM pode repetir a mesma coordenada por varios frames e atualizar a
 # posicao em degraus. Oito bins preservam apenas estados angulares independentes
@@ -783,7 +787,22 @@ def _run_sweep_sequence(*, spec, initial_az, initial_alt, signature, center_anch
         for amostra in samples:
             amostra.sample_kind = "sweep_steady_phase"
         _write_csv(audit_dir / f"{spec.name}_bins.csv", [samples])
-        audit.update(_validate_sweep_aggregation(samples, spec.name))
+        try:
+            audit.update(_validate_sweep_aggregation(samples, spec.name))
+        except RuntimeError as exc:
+            # A mensagem crua nao diz se faltou tempo, taxa de frames ou sinal.
+            # Aqui ja sabemos os tres, entao o diagnostico sai junto do erro.
+            taxa_hz = len(estaveis) / max(duracao, 1e-9)
+            bins_possiveis = duracao * SWEEP_RATE_DEG_S / ANGLE_BIN_WIDTH_DEG
+            raise RuntimeError(
+                f"{exc} Fase estavel={duracao:.1f}s a {taxa_hz:.1f} Hz "
+                f"({len(estaveis)} frames), transiente descartado="
+                f"{audit['discarded_start_s']:.1f}s. Bins de "
+                f"{ANGLE_BIN_WIDTH_DEG * 3600:.1f} arcsec cabem "
+                f"{bins_possiveis:.0f} na fase estavel, com "
+                f"{len(estaveis) / max(bins_possiveis, 1.0):.1f} frames por bin "
+                f"(minimo={MIN_FRAMES_PER_ANGLE_BIN})."
+            ) from exc
 
         valores = np.array(
             [s.delta_az_deg if spec.axis == 0 else s.delta_alt_deg for s in samples]

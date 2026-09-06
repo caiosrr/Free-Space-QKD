@@ -116,6 +116,44 @@ class AnchorAfterSweepTests(unittest.TestCase):
         self.assertGreater(abs(ancora[0] - 100.0), 100.0)
 
 
+class SweepSizingTests(unittest.TestCase):
+    """Trava o dimensionamento contra o que foi medido em bancada.
+
+    Sessoes de 2026-09-06: laco da varredura a 19 Hz, telemetria do mount
+    atualizando a ~2 Hz e transiente de partida de 1.0 a 3.8 s. Com bins de
+    1.8 arcsec, cada bin ficava com 2.4 frames (abaixo do minimo de 3) e a
+    calibracao morria com "somente 7 bins angulares validos".
+    """
+
+    LOOP_HZ = 19.0          # medido: 146 frames em 7.7 s
+    TELEMETRIA_HZ = 2.0     # o driver so atualiza a posicao a cada ~0.5 s
+    PIOR_TRANSIENTE_S = 4.0  # observado ate 3.8 s
+
+    def test_bin_nao_e_mais_estreito_que_o_passo_da_telemetria(self):
+        """Bin menor que o passo do driver se divide dentro do mesmo patamar."""
+        passo_telemetria_deg = core.SWEEP_RATE_DEG_S / self.TELEMETRIA_HZ
+        self.assertGreaterEqual(core.ANGLE_BIN_WIDTH_DEG, passo_telemetria_deg * 0.9)
+
+    def test_sobra_fase_estavel_util_no_pior_transiente(self):
+        duracao = core.SWEEP_HALF_RANGE_DEG / core.SWEEP_RATE_DEG_S
+        estavel = duracao - self.PIOR_TRANSIENTE_S - core.SWEEP_DECEL_DISCARD_S
+        self.assertGreaterEqual(estavel, core.SWEEP_MIN_STEADY_SECONDS)
+
+        bins = estavel * core.SWEEP_RATE_DEG_S / core.ANGLE_BIN_WIDTH_DEG
+        self.assertGreaterEqual(bins, core.MIN_VALID_SWEEP_BINS)
+
+        frames_por_bin = (estavel * self.LOOP_HZ) / bins
+        self.assertGreaterEqual(frames_por_bin, core.MIN_FRAMES_PER_ANGLE_BIN)
+
+    def test_excursao_cabe_na_roi_com_folga(self):
+        """A 8771 px/deg medidos, a varredura nao pode chegar perto da borda."""
+        escala_px_deg = 8771.0
+        excursao = core.SWEEP_HALF_RANGE_DEG * escala_px_deg
+        self.assertLessEqual(excursao, core.SWEEP_MAX_PIXELS)
+        margem_roi = core.CALIBRATION_ROI_SIZE_PX / 2
+        self.assertLess(core.SWEEP_MAX_PIXELS, margem_roi - core.TEMPORAL_APERTURE_RADIUS_PX)
+
+
 class TwoRulersTests(unittest.TestCase):
     def test_as_duas_reguas_concordam_numa_varredura_longa(self):
         amostras = varredura(duracao=12.0, escala_px_deg=7100.0)

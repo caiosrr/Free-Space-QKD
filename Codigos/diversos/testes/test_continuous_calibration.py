@@ -155,7 +155,9 @@ class ContinuousCalibrationTests(unittest.TestCase):
 
     def test_angle_bins_stack_short_exposures_before_fitting(self):
         captures = []
-        slope_px_per_deg = 5000.0
+        # Escala baixa de proposito: 20 bins de 7.2 arcsec precisam caber no
+        # frame sintetico sem encostar na borda.
+        slope_px_per_deg = 1500.0
         rng = np.random.default_rng(42)
         for bin_index in range(20):
             for frame_index in range(4):
@@ -180,7 +182,7 @@ class ContinuousCalibrationTests(unittest.TestCase):
                     y_px=y_px,
                 )
                 captures.append(
-                    (sample, self._spot_frame(x_px, y_px), 1.0)
+                    (sample, self._spot_frame(x_px, y_px, size=224), 1.0)
                 )
 
         aggregated = continuous._aggregate_sweep_frames(captures)
@@ -215,19 +217,26 @@ class ContinuousCalibrationTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "dispersao residual excessiva"):
             continuous._validate_sweep_aggregation(samples, "turbulento")
 
+    # Passo real medido em bancada: o driver so atualiza a posicao a cada 0.5 s
+    # e, a 0.004 deg/s, cada atualizacao anda 0.002 deg (7.2 arcsec).
+    TELEMETRY_STEP_DEG = 0.002
+    TELEMETRY_PERIOD_S = 0.5
+    OPTICAL_SPEED_PX_S = 30.0
+
     def _stepped_telemetry_captures(self, sign=1, oscillation=0.0):
         captures = []
-        for index in range(80):
-            elapsed = index * 0.05
-            # Mount anda a 30 px/s, mas a coordenada so atualiza a cada 0.5 s.
-            active = sign * (index // 10) * 0.001
-            x_px = 128.0 + sign * 30.0 * (elapsed - 2.0)
-            y_px = 80.0 + oscillation * (-1 if index % 2 else 1)
+        dt = 0.05
+        for index in range(120):
+            elapsed = index * dt
+            plateau = index // int(self.TELEMETRY_PERIOD_S / dt)
+            active = sign * plateau * self.TELEMETRY_STEP_DEG
+            x_px = 160.0 + sign * self.OPTICAL_SPEED_PX_S * (elapsed - 3.0)
+            y_px = 110.0 + oscillation * (-1 if index % 2 else 1)
             sample = continuous.SweepSample(
                 "fit_az_pos", 0, sign, elapsed, active, 0.0,
                 active, 0.0, x_px, y_px,
             )
-            captures.append((sample, self._spot_frame(x_px, y_px, size=224), 1.0))
+            captures.append((sample, self._spot_frame(x_px, y_px, size=320), 1.0))
         return captures
 
     def test_stepped_angles_do_not_turn_smooth_sweep_into_optical_noise(self):
@@ -239,8 +248,11 @@ class ContinuousCalibrationTests(unittest.TestCase):
                 self.assertLess(stats["median_centroid_spread_px"], 0.01)
                 self.assertAlmostEqual(stats["trend_px_s"][0], sign * 30.0)
                 # O desconto da tendencia nao remove o sinal que calibra a matriz.
+                esperado = self.OPTICAL_SPEED_PX_S / (
+                    self.TELEMETRY_STEP_DEG / self.TELEMETRY_PERIOD_S
+                )
                 slope = np.polyfit([s.delta_az_deg for s in samples], [s.x_px for s in samples], 1)[0]
-                self.assertAlmostEqual(slope, 15000.0, delta=150.0)
+                self.assertAlmostEqual(slope, esperado, delta=150.0)
 
     def test_detrending_does_not_hide_fast_oscillation(self):
         samples = continuous._aggregate_sweep_frames(self._stepped_telemetry_captures(oscillation=8.0))

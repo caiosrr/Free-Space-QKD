@@ -60,8 +60,8 @@ ate 20x de espalhamento na velocidade optica: para o MESMO angulo relatado de
 fator limitante (referencias paradas com 1,9 px de dispersao e 0,14 px/s de
 deriva, contra respostas de 10 a 35 px).
 
-A correcao e aumentar o braco de alavanca. Com amplitude de 0,030 grau
-(108 arcsec) a 0,004 grau/s, cada fonte de erro cai na proporcao da amplitude:
+A correcao e aumentar o braco de alavanca. Com amplitude de 0,040 grau
+(144 arcsec) a 0,004 grau/s, cada fonte de erro cai na proporcao da amplitude:
 a quantizacao de 1 arcsec sai de 10-30% para cerca de 1%, o transiente de
 partida sai de 40% para poucos por cento e ainda e descartado, e a turbulencia
 sai de 10-20% para cerca de 1%.
@@ -70,16 +70,17 @@ sai de 10-20% para cerca de 1%.
 
 1. Referencia parada antes, para medir ruido e deriva local.
 2. Movimento continuo num sentido so, ate o que vier primeiro: a amplitude
-   angular, o orcamento de 320 px ou um dos watchdogs. O orcamento em pixels
+   angular, o orcamento de 400 px ou um dos watchdogs. O orcamento em pixels
    protege a borda da ROI sem precisar conhecer a escala, que e justamente o
    que estamos medindo.
 3. Deteccao automatica da fase estavel: mede-se a velocidade optica da segunda
    metade da varredura e descarta-se todo o inicio abaixo de 90% dela. O tempo
    descartado e registrado como `transient_seconds`, entao da para acompanhar o
    atrito do mount ao longo das noites.
-4. Os frames da fase estavel sao agrupados em bins angulares de 1,8 arcsec
-   (dois quanta da telemetria) com pelo menos 3 frames cada, e cada bin vira uma
-   amostra do ajuste.
+4. Os frames da fase estavel sao agrupados em bins angulares de 7,2 arcsec,
+   que e o passo real da telemetria: o driver so atualiza a posicao a cerca de
+   2 Hz, entao bins mais estreitos apenas se dividem dentro do mesmo patamar.
+   Cada bin exige ao menos 3 frames e vira uma amostra do ajuste.
 5. Referencia parada depois, e retorno a posicao absoluta inicial.
 
 A varredura exige pelo menos 3 s de fase estavel e 8 bins validos. Abaixo disso

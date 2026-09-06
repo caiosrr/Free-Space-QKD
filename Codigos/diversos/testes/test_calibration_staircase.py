@@ -57,9 +57,25 @@ class LocalStepFitTests(unittest.TestCase):
         self.assertFalse(core._validate_holdout(runs[4:8], fit, label='local')['ok'])
 
     def test_large_slow_drift_is_not_claimed_to_be_removed(self):
-        runs = self.make_runs(drift=6.)
+        """Uma deriva comparavel a resposta continua sendo reprovada.
+
+        A deriva e expressa como fracao da resposta prevista, e nao em pixels
+        fixos: aumentar a amplitude da varredura torna a MESMA deriva em pixels
+        genuinamente menos nociva, e o teste precisa continuar medindo a mesma
+        coisa se as constantes mudarem de novo.
+        """
+        resposta_px = core.SWEEP_HALF_RANGE_DEG * np.linalg.norm(self.A[:, 0])
+        deriva_por_passo = 0.12 * resposta_px  # ~36% da resposta ao longo da escada
+        runs = self.make_runs(drift=deriva_por_passo)
         fit = core._robust_fit(*core._center_runs(runs[:4], include_weights=True))
         self.assertFalse(core._validate_fit(runs[:4], fit)['ok'])
+
+    def test_small_drift_is_tolerated_thanks_to_the_longer_lever_arm(self):
+        """O contraponto: com braco de alavanca grande, deriva pequena passa."""
+        resposta_px = core.SWEEP_HALF_RANGE_DEG * np.linalg.norm(self.A[:, 0])
+        runs = self.make_runs(drift=0.024 * resposta_px)  # ~7% da resposta
+        fit = core._robust_fit(*core._center_runs(runs[:4], include_weights=True))
+        self.assertTrue(core._validate_fit(runs[:4], fit)['ok'])
 
     def test_short_movement_failure_stops_before_audit(self):
         spec = core.SweepSpec('step', 0, 1, .002, 'fit')
