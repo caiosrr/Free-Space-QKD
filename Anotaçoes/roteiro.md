@@ -211,6 +211,40 @@ dispersao do centroide. Se cair, mexer na autoexposicao (o alvo de CNR, nao o
 teto de 18000 us, que ja esta dimensionado para o periodo de 50 fps). Se nao
 cair, o erro e atmosferico e a exposicao atual esta correta.
 
+### 1b. A autoexposicao nao recupera de uma queda rapida
+
+Em regime estavel nao ha risco de ficar fraca demais: o controlador mira CNR
+entre 8 e 16 e ficou em 12,8 na sessao de 5,9 h, meio da faixa. O piso de
+1000 us nunca foi atingido (minimo observado 1154 us).
+
+O problema e a assimetria numa queda de brilho:
+
+* subir a exposicao anda 10% por atualizacao, a cada 5 s, ou seja no maximo
+  4,2x dentro dos 75 s do limite de perda de sinal;
+* pior, quando o alvo some a exposicao **congela** (`congelada_alvo_ausente`).
+  Nos ultimos 200 s da sessao foram 385 linhas congeladas contra 527
+  ajustando. Se a queda derrubar o alvo antes de a exposicao ter subido, o
+  controlador espera um alvo que nao consegue ver porque a exposicao esta
+  baixa: nao ha caminho de volta e a sessao morre em 75 s.
+
+No amanhecer de 09-04 isso nao mordeu porque o desvanecimento levou uns 4 min e
+o controlador acompanhou (1154 -> 8054 -> 14268 -> 18000 us) ate o beacon
+realmente acabar. O encerramento foi correto.
+
+O modo de falha e "a sessao termina cedo", nao movimento perigoso: na perda o
+mount para e nao ha busca cega.
+
+Mitigacoes, em ordem de preferencia:
+
+1. **Subir o piso da exposicao** (mesmo ajuste do item 1). Com ~8000 us em vez
+   de 1154 sobra cerca de 7x de margem antes de perder o alvo numa queda, alem
+   de recuperar os fotons hoje descartados. Um ajuste resolve os dois.
+2. Nao congelar a exposicao na ausencia do alvo: fazer uma rampa de busca
+   limitada para cima, revertendo quando o alvo voltar.
+3. Deixar a subida bem mais rapida que a descida. Hoje ja e assimetrico (10%
+   para cima contra 5% para baixo), mas 10% ainda e lento demais para uma
+   queda abrupta.
+
 ### 2. Vies parado dentro da zona de repouso
 
 Na sessao de 5,9 h existe um deslocamento constante de +0,58 px em Y a noite
