@@ -163,6 +163,97 @@ A análise sombra da sessão de 6 h fica em
 erro lento permaneceu deslocado, mas não prevê quantos comandos seriam enviados:
 uma correção real alteraria todas as medições posteriores.
 
+## Analise das sessoes do tracker (2026-09-06)
+
+Levantamento sobre as sete sessoes de setembro em
+`Codigos/Link UFF/resultados/tracker/sessoes/`. A referencia principal e a
+sessao de 5,9 h `tracker_2026-09-04_23-44-30`, a primeira com o controle por
+pulsos limitados.
+
+### O controle novo funcionou
+
+| | 09-04 00:04 (anterior) | 09-04 23:44 (pulsos limitados) |
+|---|---|---|
+| duracao | 6,5 h | 5,9 h |
+| erro mediano | 1,80 px | **1,02 px** |
+| P95 | 5,78 px | **2,07 px** |
+| abaixo de 2 px | 55,8% | **93,9%** |
+| tempo comandando o mount | 5,18% | **0,04%** |
+
+Erro menor movendo o mount cerca de 100x menos. Na sessao longa nao houve
+deriva acumulada: X = -0,002 px/h e Y = +0,027 px/h, com o mount deslocando ao
+todo 4 arcsec em Az e 11 arcsec em Alt. Sinal valido em 98,6% do tempo.
+
+### 1. A exposicao descarta 95% dos fotons sem ganhar nada
+
+Prioridade mais alta, e a mais barata de testar.
+
+* exposicao mediana de 1154 us num periodo de laco de 26 ms: **duty cycle de
+  4,4%**;
+* pico do beacon em 15 de 255, ou seja 5,7% da escala do sensor.
+
+A estrategia atual e "menor exposicao que mantenha CNR, para preservar FPS".
+Essa premissa foi testada contra a telemetria e **e falsa neste caso**: de 1154
+para 18000 us (16x), o laco fica em 36-38,5 Hz, com correlacao r = -0,05 entre
+exposicao e taxa. O laco e limitado por processamento e pelas chamadas HTTP do
+ASCOM, nao pela exposicao. A 50 fps o periodo do sensor e 20 ms, entao subir a
+exposicao para cerca de 10 ms nao custaria taxa nenhuma.
+
+Ressalva: os dados NAO provam que o centroide melhoraria. Os trechos de
+exposicao alta coincidem com o beacon enfraquecendo na madrugada (o pico cai de
+15 para 10 conforme a exposicao sobe, ou seja causalidade invertida), entao
+estao confundidos. Se o erro atual e dominado por fotons ou por turbulencia
+segue em aberto.
+
+**Teste que resolve, cerca de 20 min e sem mover o mount:** rodar
+`caracterizar_beacon_ids.py` duas vezes, a ~1200 us e a ~10000 us, e comparar a
+dispersao do centroide. Se cair, mexer na autoexposicao (o alvo de CNR, nao o
+teto de 18000 us, que ja esta dimensionado para o periodo de 50 fps). Se nao
+cair, o erro e atmosferico e a exposicao atual esta correta.
+
+### 2. Vies parado dentro da zona de repouso
+
+Na sessao de 5,9 h existe um deslocamento constante de +0,58 px em Y a noite
+inteira. Removendo so esse vies, o erro mediano cairia de 1,02 para 0,78 px
+(-23%).
+
+Nao e desalinhamento fixo: em sete sessoes o vies fica entre 0,03 e 0,23 px na
+maioria, e chega a 0,60-1,04 px em duas. A explicacao que fecha e que **e o
+residuo da zona de repouso**: o controle para assim que o erro entra em
+`HOLD_ENTER_RADIUS_PX = 1.0` e fica onde parou por horas. Os dois viesses
+observados sao menores ou iguais a 1,0 px. Na sessao antiga, agressiva, havia
+correcao suficiente para o residuo se diluir, ao custo de um erro bem pior.
+
+O mount consegue corrigir nessa escala. Nos 89 ciclos de correcao da sessao:
+
+* erro antes do pulso 2,29 px, depois 1,42 px;
+* **90% dos pulsos reduziram o erro**;
+* deslocamento optico por pulso: mediana 1,11 px, p10 0,39 px.
+
+Isso tambem aposenta a duvida deixada pelo diagnostico de micropulsos da
+calibracao (0/8 resolvidos): aquilo falhou por julgar UM pulso contra ~2 px de
+ruido, nao por incapacidade mecanica do mount.
+
+Nao baixar `HOLD_ENTER_RADIUS_PX` no escuro: com passo minimo de 0,4 a 1,1 px,
+mirar em 0,5 px fica no limite e pode oscilar numa sessao longa. O ganho e real
+mas modesto (~0,25 px). O caminho correto e o modo sombra da secao 7 deste
+roteiro, que agora tem evidencia de que encontraria algo.
+
+### 3. Eventos de ausencia curta poluem o log
+
+72 episodios de alvo ausente em 5,9 h, com mediana de 0,26 s; apenas 4 passam
+de 5 s. Mesmo assim cada um gera evento: 18 imagens salvas e 176 suprimidas
+pelo intervalo minimo de 30 s. Valeria so tratar como evento uma ausencia acima
+de cerca de 1 s.
+
+### Ordem sugerida
+
+1. Medir a dispersao do centroide em duas exposicoes com o mount parado.
+2. Filtrar eventos de ausencia curta.
+3. Vies da zona de repouso, e somente via modo sombra, depois de uma
+   calibracao aprovada: uma matriz confiavel muda o quanto se pode confiar nos
+   pulsos pequenos.
+
 ## Referência física aproximada
 
 Com a calibração usada no enlace de 7 km:

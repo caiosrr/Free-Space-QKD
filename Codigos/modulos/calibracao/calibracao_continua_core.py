@@ -1216,16 +1216,35 @@ def main(profile_name: str | None = None) -> None:
                        validated_half_range_deg=SWEEP_HALF_RANGE_DEG,
                        return_to_start=returned)
         print(f"\nA =\n{fit['A']}")
-        print(f"Micropulsos: {sum(p['optically_resolved'] for p in pulse_diagnostics)}/{len(pulse_diagnostics)} "
-              "com resposta distinguivel do ruido; diagnostico apenas, tracker inalterado.")
+        razoes = [
+            a["two_rulers"]["encoder_over_time_ratio"]
+            for a in aggregation_stats
+            if a.get("two_rulers", {}).get("comparable")
+        ]
+        if razoes:
+            print(
+                f"Duas reguas (encoder / tempo x taxa): mediana={np.median(razoes):.3f} | "
+                f"faixa={min(razoes):.3f}-{max(razoes):.3f}. "
+                "Longe de 1 indica telemetria ou taxa do mount, nao o centroide."
+            )
+        transientes = [
+            a["steady_phase"]["transient_seconds"]
+            for a in aggregation_stats
+            if a.get("steady_phase", {}).get("transient_seconds") is not None
+        ]
+        if transientes:
+            print(
+                f"Transiente de partida descartado: mediana={np.median(transientes):.1f}s | "
+                f"maximo={max(transientes):.1f}s"
+            )
         print(
             f"RMS ajuste={fit['rms_residual_px']:.2f}px | "
             f"cond={fit['condition_number']:.2f} | "
             f"frames={summary['raw_frame_sample_count']} -> "
-            f"pares de diferencas locais={summary['sample_count']//2}"
+            f"bins usados={summary['sample_count']}"
         )
         print(
-            f"Frames de vigilancia/tempo total={summary['sweep_sample_rate_hz']:.1f} Hz | "
+            f"Frames por segundo na varredura={summary['sweep_sample_rate_hz']:.1f} Hz | "
             f"captura isolada={summary['capture_rate_hz']:.1f} Hz | "
             f"media={summary['capture_mean_ms']:.1f} ms | p95={summary['capture_p95_ms']:.1f} ms"
         )

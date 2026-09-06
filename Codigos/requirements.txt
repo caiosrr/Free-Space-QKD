@@ -7,3 +7,7 @@ pyvisa-py
 pyusb
 ids_peak
 ids_peak_ipl
+
+# Verificacao de nomes indefinidos e erros de sintaxe (regras em pyproject.toml).
+# A suite de testes roda o Ruff; sem ele, essa checagem e apenas pulada.
+ruff
