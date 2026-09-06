@@ -1,28 +1,42 @@
-import itertools
+"""Movimento PID simultaneo em Az/Alt e a linha de status do console.
+
+Objetivo: levar o mount a um alvo angular e parar. Usado pela calibracao, pelo
+retorno seguro do tracker e pelo autoteste.
+Entradas/saidas: deltas ou alvo absoluto em graus; devolve nada, mas garante
+velocidade zero ao sair.
+Hardware: telescopio via ``mount_ascom``.
+Seguranca: o ``finally`` sempre chama ``stop_axes_safely``.
+
+Os comandos crus do mount ficam em ``mount_ascom.py``.
+"""
+
+from __future__ import annotations
+
 import ctypes
 import sys
 import time
-import requests
-import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
-# ==== Configurações Alpaca ====
-BASE_URL = "http://127.0.0.1:11111/api/v1/telescope/0"
-CLIENT_ID = 1
-_transaction_ids = itertools.count(1)
+import numpy as np
 
-# Sessão HTTP persistente para latência de milissegundos
-session = requests.Session()
+from modulos.controle.mount_ascom import (
+    TOLERANCIA_GRAUS,
+    VEL_MAX_LIMITE,
+    VEL_MIN_LIMITE,
+    calc_error,
+    ensure_connected,
+    ensure_not_tracking,
+    ensure_unparked,
+    move_axis,
+    read_altaz,
+    stop_axes_safely,
+)
 
-# ==== Parâmetros de controle ====
-TOLERANCIA_GRAUS = 0.0005
-VEL_MIN_LIMITE = 0.001042
-VEL_MAX_LIMITE = 6.0
+
 MAX_TEMPO_MOV = 450
 MAX_CORRECOES = 10
 _status_line_len = 0
 _status_slot_active = False
-_ansi_cursor_ok = False
 
 
 class PID:
@@ -45,7 +59,7 @@ class PID:
         self._integral = 0.0
         self._last_error = None
         self._last_time = None
-    
+
     def clamp_integral(self):
         if self.integral_limit is not None:
             self._integral = np.clip(
@@ -82,91 +96,6 @@ class PID:
         self._last_error = error
         self._last_time = now
         return output, error
-
-
-def call(method: str, command: str, timeout: float = 5.0, **extra_args):
-    params = {"ClientID": CLIENT_ID,
-              "ClientTransactionID": next(_transaction_ids)}
-    params.update(extra_args.pop("params", {}))
-
-    resp = session.request(
-        method, f"{BASE_URL}/{command}", params=params,
-        timeout=timeout, **extra_args
-    )
-    resp.raise_for_status()
-    payload = resp.json()
-    if payload.get("ErrorNumber", 0):
-        raise RuntimeError(f"{command}: {payload.get('ErrorMessage')}")
-    return payload.get("Value")
-
-
-def ensure_connected():
-    if not call("GET", "connected"):
-        call("PUT", "connected", data={"Connected": True})
-
-
-def ensure_unparked():
-    try:
-        if call("GET", "atpark"):
-            if call("GET", "canunpark"):
-                call("PUT", "unpark", timeout=10)
-    except Exception:
-        pass
-
-
-def ensure_not_tracking():
-    try:
-        if str(call("GET", "tracking")).lower() in {"true", "1"}:
-            call("PUT", "tracking", data={"Tracking": False})
-    except Exception:
-        pass
-
-
-def read_altaz():
-    az = float(call("GET", "azimuth"))
-    alt = float(call("GET", "altitude"))
-    return az, alt
-
-
-def move_axis(axis: int, rate_deg_per_s: float, mount: bool):
-    if mount and axis == 0:
-        rate_deg_per_s = -rate_deg_per_s # Inverte o sinal para o azimute no mount.
-    call("PUT", "moveaxis", data={"Axis": axis, "Rate": float(rate_deg_per_s)})
-
-
-def stop_axes_safely(attempts: int = 2, timeout: float = 2.0) -> bool:
-    """Tenta zerar cada eixo de forma independente, mesmo se o outro falhar."""
-    failed_axes = []
-    for axis in (0, 1):
-        stopped = False
-        for _ in range(max(1, int(attempts))):
-            try:
-                call(
-                    "PUT",
-                    "moveaxis",
-                    data={"Axis": axis, "Rate": 0.0},
-                    timeout=timeout,
-                )
-                stopped = True
-                break
-            except Exception:
-                continue
-        if not stopped:
-            failed_axes.append(axis)
-    if failed_axes:
-        print(f"ALERTA: nao consegui confirmar parada dos eixos {failed_axes}.")
-        return False
-    return True
-
-
-def calc_error(axis:int, alvo: float, pos: float) -> float:
-    if axis == 0:
-        diff = (alvo - pos) % 360
-        if diff > 180:
-            return diff - 360
-        return diff
-    else:
-        return alvo - pos
 
 
 def _enable_virtual_terminal() -> bool:
@@ -231,8 +160,17 @@ def move_axes_pid_2d(
     *,
     absolute_target: tuple[float, float] | None = None,
     telemetry_callback=None,
+    tolerance_deg: float | None = None,
 ):
-    """Movimento contínuo simultâneo nos dois eixos usando PID e Threads."""
+    """Movimento continuo simultaneo nos dois eixos usando PID e Threads.
+
+    ``tolerance_deg`` permite que um chamador (o ``mount_agent``, por exemplo)
+    afrouxe a chegada sem alterar uma constante global do processo.
+    """
+
+    tolerance = TOLERANCIA_GRAUS if tolerance_deg is None else abs(float(tolerance_deg))
+    if not tolerance > 0.0:
+        raise ValueError("tolerance_deg precisa ser positiva.")
 
     velocity_limit = VEL_MAX_LIMITE
     if max_velocity_deg_s is not None:
@@ -254,25 +192,27 @@ def move_axes_pid_2d(
         delta_az = float(calc_error(0, alvo_az, az0))
         delta_alt = alvo_alt - alt0
 
-    # Travas de segurança físicas para a Altitude
+    # Travas de seguranca fisicas para a Altitude
     if alvo_alt > 90:
-        print("⚠️ Movimento ultrapassa limite superior em altitude. Ajustado para 90°.")
+        print("Movimento ultrapassa limite superior em altitude. Ajustado para 90 graus.")
         alvo_alt = 90.0
     elif alvo_alt < -90:
-        print("⚠️ Movimento ultrapassa limite inferior em altitude. Ajustado para -90°.")
+        print("Movimento ultrapassa limite inferior em altitude. Ajustado para -90 graus.")
         alvo_alt = -90.0
 
     # Instancia dois PIDs independentes
-    pid_az = PID(kp=1.3967, ki=0.0001, kd=0.1015, setpoint=alvo_az, output_limits=(-velocity_limit, velocity_limit), integral_limit=5)
-    pid_alt = PID(kp=1.3967, ki=0.0001, kd=0.1015, setpoint=alvo_alt, output_limits=(-velocity_limit, velocity_limit), integral_limit=5)
+    pid_az = PID(kp=1.3967, ki=0.0001, kd=0.1015, setpoint=alvo_az,
+                 output_limits=(-velocity_limit, velocity_limit), integral_limit=5)
+    pid_alt = PID(kp=1.3967, ki=0.0001, kd=0.1015, setpoint=alvo_alt,
+                  output_limits=(-velocity_limit, velocity_limit), integral_limit=5)
 
     print("\nMovimento PID 2D Iniciado:")
-    print(f"  Alvo Azimute  = {alvo_az:.4f}° (Δ {delta_az:+.4f}°)")
-    print(f"  Alvo Altitude = {alvo_alt:.4f}° (Δ {delta_alt:+.4f}°)")
+    print(f"  Alvo Azimute  = {alvo_az:.4f} deg (delta {delta_az:+.4f})")
+    print(f"  Alvo Altitude = {alvo_alt:.4f} deg (delta {delta_alt:+.4f})")
 
     t0 = time.time()
     tempo_decorrido = 0.0
-    
+
     error_last_az = None
     error_last_alt = None
     inversoes_az = 0
@@ -288,7 +228,6 @@ def move_axes_pid_2d(
                 sample_t = time.perf_counter()
                 tempo_decorrido = time.time() - t0
 
-                # Atualiza os PIDs
                 cmd_az, error_az = pid_az.update(0, az)
                 cmd_alt, error_alt = pid_alt.update(1, alt)
 
@@ -297,16 +236,15 @@ def move_axes_pid_2d(
 
                 if tempo_decorrido > MAX_TEMPO_MOV:
                     _status_clear()
-                    print("\n⚠️ Tempo limite atingido.")
+                    print("\nTempo limite atingido.")
                     break
 
-                # Verifica se ambos chegaram no alvo
-                az_ok = err_abs_az < TOLERANCIA_GRAUS
-                alt_ok = err_abs_alt < TOLERANCIA_GRAUS
+                az_ok = err_abs_az < tolerance
+                alt_ok = err_abs_alt < tolerance
 
                 if az_ok and alt_ok:
                     _status_clear()
-                    print("\n✅ Ambos os eixos dentro da tolerância.")
+                    print("\nAmbos os eixos dentro da tolerancia.")
                     executor.submit(move_axis, 0, 0.0, mount)
                     executor.submit(move_axis, 1, 0.0, mount)
                     break
@@ -316,47 +254,45 @@ def move_axes_pid_2d(
                     inversoes_az += 1
                     if inversoes_az > MAX_CORRECOES:
                         _status_clear()
-                        print("\n⚠️ Excesso de inversões em Azimute. Abortando eixo 0.")
+                        print("\nExcesso de inversoes em Azimute. Abortando eixo 0.")
                         cmd_az = 0.0
                     else:
                         pid_az.reset()
-                        cmd_az = 0.0 # Zera a velocidade momentaneamente para frear
+                        cmd_az = 0.0  # Zera a velocidade momentaneamente para frear
 
                 # Overshoot Altitude
                 if error_last_alt is not None and error_alt * error_last_alt < 0:
                     inversoes_alt += 1
                     if inversoes_alt > MAX_CORRECOES:
                         _status_clear()
-                        print("\n⚠️ Excesso de inversões em Altitude. Abortando eixo 1.")
+                        print("\nExcesso de inversoes em Altitude. Abortando eixo 1.")
                         cmd_alt = 0.0
                     else:
                         pid_alt.reset()
                         cmd_alt = 0.0
 
-                # Zona morta e velocidade mínima Azimute
+                # Zona morta e velocidade minima
                 if az_ok:
                     cmd_az = 0.0
                 elif 0 < abs(cmd_az) < VEL_MIN_LIMITE:
                     cmd_az = VEL_MIN_LIMITE * np.sign(cmd_az)
 
-                # Zona morta e velocidade mínima Altitude
                 if alt_ok:
                     cmd_alt = 0.0
                 elif 0 < abs(cmd_alt) < VEL_MIN_LIMITE:
                     cmd_alt = VEL_MIN_LIMITE * np.sign(cmd_alt)
 
-                # --- DISPARO CONCORRENTE ---
                 future_az = None
                 future_alt = None
-                
+
                 if not (az_ok and az_parado):
                     future_az = executor.submit(move_axis, 0, cmd_az, mount)
                     az_parado = az_ok
-                    
+
                 if not (alt_ok and alt_parado):
                     future_alt = executor.submit(move_axis, 1, cmd_alt, mount)
                     alt_parado = alt_ok
-                
+
                 # Aguarda as threads confirmarem envio antes de prosseguir o loop
                 if future_az:
                     future_az.result()
@@ -371,15 +307,15 @@ def move_axes_pid_2d(
                         cmd_az_deg_s=float(cmd_az), cmd_alt_deg_s=float(cmd_alt),
                     ))
 
-                # Interface visual compacta
                 _status_write(
-                    f"Az E:{error_az:+.4f} V:{cmd_az:+.4f} | Alt E:{error_alt:+.4f} V:{cmd_alt:+.4f}"
+                    f"Az E:{error_az:+.4f} V:{cmd_az:+.4f} | "
+                    f"Alt E:{error_alt:+.4f} V:{cmd_alt:+.4f}"
                 )
 
                 error_last_az = error_az
                 error_last_alt = error_alt
 
-                # Ajusta o tempo de descanso do loop com base no maior erro atual
+                # Ajusta o descanso do loop conforme o maior erro atual
                 max_err = max(err_abs_az, err_abs_alt)
                 if max_err > 1.0:
                     dt_sleep = 0.1
@@ -391,12 +327,15 @@ def move_axes_pid_2d(
                 time.sleep(dt_sleep)
 
         finally:
-            # Parada dura sequencial para emergências e fim de execução
+            # Parada dura sequencial para emergencias e fim de execucao
             stop_axes_safely()
 
             _status_clear()
             azf, altf = read_altaz()
-            print(f"\nPos final: Az={azf:.4f}°, Alt={altf:.4f}° | Tempo total: {tempo_decorrido:.2f}s")
+            print(
+                f"\nPos final: Az={azf:.4f} deg, Alt={altf:.4f} deg | "
+                f"Tempo total: {tempo_decorrido:.2f}s"
+            )
 
 
 def main():
@@ -404,24 +343,23 @@ def main():
     ensure_unparked()
     ensure_not_tracking()
 
-    print("=== Movimento PID 2D Simultâneo ===\n")
+    print("=== Movimento PID 2D Simultaneo ===\n")
     mount = bool(int(input("mount 1, simulador 0: ")))
     while True:
         try:
             az, alt = read_altaz()
-            print(f"Pos atual: Az={az:.3f}°, Alt={alt:.3f}°")
-            
-            # Agora pedimos o deslocamento pros dois eixos de uma vez
-            delta_az = float(input("Delta Azimute (graus ±): ").strip())
-            delta_alt = float(input("Delta Altitude (graus ±): ").strip())
-            
+            print(f"Pos atual: Az={az:.3f} deg, Alt={alt:.3f} deg")
+
+            delta_az = float(input("Delta Azimute (graus +/-): ").strip())
+            delta_alt = float(input("Delta Altitude (graus +/-): ").strip())
+
             if delta_az == 0.0 and delta_alt == 0.0:
                 print("Nenhum movimento ordenado.")
                 continue
-                
+
             move_axes_pid_2d(mount, delta_az, delta_alt)
             print()
-            
+
         except KeyboardInterrupt:
             print("\nSaindo...")
             break

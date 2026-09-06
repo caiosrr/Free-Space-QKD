@@ -1,44 +1,38 @@
-"""Camera, selecao da ilha e ROI usados pelo tracker."""
+"""Camera, selecao da ilha e ROI usados pelo tracker.
 
-import itertools
+Objetivo: aplicar a ROI ao redor da ilha travada e entregar frames ja
+normalizados ao laco de aquisicao.
+Entradas/saidas: pixels da ROI; nao move o mount.
+Hardware: IDS peak ou ASI/ASCOM, conforme o backend selecionado.
+
+A captura, a normalizacao e o cliente ASCOM sao os mesmos usados pela
+calibracao: este modulo nao mantem uma segunda copia deles.
+"""
+
 import os
-import time
 from pathlib import Path
 
 import cv2
 import numpy as np
-import requests
 
 cv2.setUseOptimized(True)
 
-from modulos.configuracoes.camera_asi import ALPACA_ADDRESS, DEVICE_NUMBER
-from modulos.configuracoes.camera_asi import EXPOSURE_SECONDS as ASI_EXPOSURE_SECONDS
 from modulos.configuracoes.camera_asi import GAIN as ASI_GAIN
 from modulos.configuracoes.tracker import TRACKER_MAX_SPOT_JUMP_PX
 from modulos.controle.alvo_alinhamento import AlvoAlinhamento, roi_incluindo_alvo
+from modulos.controle.cameras.alpaca import call
 from modulos.controle.cameras.backend import backend_name
 from modulos.visao import detector_ilhas as foco_temp
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-BASE_URL = f"http://{ALPACA_ADDRESS}/api/v1/camera/{DEVICE_NUMBER}"
-CLIENT_ID = 1
-IMAGE_READY_POLL_S = 0.001
-IMAGE_READY_SPIN_POLLS = 3
-_transaction_ids = itertools.count(1)
-session = requests.Session()
 
-EXPOSURE_SECONDS = (
-    float(os.environ.get("QKD_IDS_EXPOSURE_US", "7276")) * 1e-6
-    if backend_name() == "ids"
-    else ASI_EXPOSURE_SECONDS
-)
-ROTATE_IMAGE_180 = os.environ.get("QKD_ROTATE_IMAGE_180", "1") != "0"
-IDS_MATRIX_PREFIX = "ids_foco_temp" if ROTATE_IMAGE_180 else "ids_raw_foco_temp"
+# Uma unica fonte para exposicao e orientacao, compartilhada com a calibracao.
+EXPOSURE_SECONDS = foco_temp.EXPOSURE_SECONDS
+ROTATE_IMAGE_180 = foco_temp.ROTATE_IMAGE_180
+IDS_MATRIX_PREFIX = foco_temp.IDS_MATRIX_PREFIX
 TRACKER_OUTPUT_DIR = Path(
     os.environ.get("QKD_TRACKER_OUTPUT_DIR", ROOT_DIR / "resultados" / "debug")
 )
-LAST_RAW_TRACKER_FRAME = None
-LAST_CAPTURE_STATS = {}
 
 
 def _measure_locked_island(frame):
@@ -46,26 +40,6 @@ def _measure_locked_island(frame):
     if cm is None:
         return None
     return float(cm[0]), float(cm[1])
-
-
-def call(method: str, command: str, timeout: float = 5.0, **extra_args):
-    params = {
-        "ClientID": CLIENT_ID,
-        "ClientTransactionID": next(_transaction_ids),
-    }
-    params.update(extra_args.pop("params", {}))
-    resp = session.request(
-        method,
-        f"{BASE_URL}/{command}",
-        params=params,
-        timeout=timeout,
-        **extra_args,
-    )
-    resp.raise_for_status()
-    payload = resp.json()
-    if payload.get("ErrorNumber", 0):
-        raise RuntimeError(f"{command}: {payload.get('ErrorMessage')}")
-    return payload.get("Value")
 
 
 def _ids_camera():
@@ -346,7 +320,10 @@ def connect_camera() -> None:
     print("Conectando a camera...")
     call("PUT", "connected", data={"Connected": True})
     call("PUT", "gain", data={"Gain": int(ASI_GAIN)})
-    print(f"Camera ASI configurada: ganho={ASI_GAIN}, exposicao={EXPOSURE_SECONDS * 1e6:.1f} us")
+    print(
+        f"Camera ASI configurada: ganho={ASI_GAIN}, "
+        f"exposicao={EXPOSURE_SECONDS * 1e6:.1f} us"
+    )
 
 
 def disconnect_camera() -> None:
@@ -357,84 +334,19 @@ def disconnect_camera() -> None:
     call("PUT", "connected", data={"Connected": False})
 
 
-def start_exposure(duration_seconds: float, light: bool = True) -> None:
-    call("PUT", "startexposure", data={"Duration": duration_seconds, "Light": light})
-
-
-def wait_until_image_ready(
-    poll_interval: float = IMAGE_READY_POLL_S,
-    timeout: float = 5.0,
-) -> None:
-    deadline = time.time() + timeout
-    spin_polls = IMAGE_READY_SPIN_POLLS
-    while time.time() < deadline:
-        ready = bool(call("GET", "imageready"))
-        if ready:
-            return
-        if spin_polls > 0:
-            spin_polls -= 1
-            continue
-        time.sleep(poll_interval)
-    raise TimeoutError("Tempo limite esperando ImageReady = True")
-
-
-def fetch_image_array() -> np.ndarray:
-    from modulos.controle.cameras.alpaca import fetch_image_array as fetch_image_array_fast
-
-    return fetch_image_array_fast()
-
-
 def capture_frame(exposure_seconds: float) -> np.ndarray:
-    global LAST_RAW_TRACKER_FRAME, LAST_CAPTURE_STATS
+    """Captura e normaliza pelo mesmo caminho usado na calibracao.
 
-    if backend_name() == "ids":
-        frame = _ids_camera().capture(exposure_seconds).astype(np.float32)
-    else:
-        from modulos.controle.cameras.alpaca import record_capture_time
-
-        capture_started = time.perf_counter()
-        start_exposure(exposure_seconds, light=True)
-        wait_until_image_ready()
-        frame = fetch_image_array().astype(np.float32)
-        record_capture_time(time.perf_counter() - capture_started)
-
-    min_val = float(frame.min())
-    max_val = float(frame.max())
-    median_val = float(np.median(frame))
-    std_val = float(np.std(frame))
-    pedestal = median_val + (0.5 * std_val)
-    if max_val <= pedestal:
-        norm = np.zeros_like(frame, dtype=np.uint8)
-    else:
-        norm = np.clip((frame - pedestal) / (max_val - pedestal + 1e-6), 0, 1)
-        norm = (norm * 255).astype(np.uint8)
-
-    if ROTATE_IMAGE_180:
-        norm = np.rot90(norm, 2)
-        frame = np.rot90(frame, 2)
-
-    # O detector de identidade usa o sinal bruto para comparar pico, area e
-    # formato. Mantemos esses dados sincronizados com CADA frame do tracker;
-    # assim ele nao reaproveita por engano o frame da selecao inicial.
-    LAST_RAW_TRACKER_FRAME = frame
-    LAST_CAPTURE_STATS = {
-        "raw_min": min_val,
-        "raw_max": max_val,
-        "raw_median": median_val,
-        "raw_std": std_val,
-        "pedestal": float(pedestal),
-        "norm_max": float(norm.max()),
-        "norm_nonzero": int(np.count_nonzero(norm)),
-    }
-    foco_temp.LAST_RAW_FRAME = frame
-    foco_temp.LAST_CAPTURE_STATS = dict(LAST_CAPTURE_STATS)
-    return norm
+    Herda dai as tentativas de captura e o piso ``RAW_SIGNAL_MIN``, que a
+    versao antiga deste modulo nao tinha; um beacon fraco passa a ser tratado
+    igual nos dois programas.
+    """
+    return foco_temp.capture_frame(exposure_seconds, light=True)
 
 
 def latest_raw_frame() -> np.ndarray | None:
-    """Retorna o frame bruto sincronizado com a ultima imagem normalizada."""
-    return LAST_RAW_TRACKER_FRAME
-
+    """Frame bruto sincronizado com a ultima imagem normalizada."""
+    return foco_temp.LAST_RAW_FRAME
 
 
 def current_roi_size(default_size: int) -> tuple[int, int]:

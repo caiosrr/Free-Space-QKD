@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 import numpy as np
 
-import modulos.controle.Tracker as tracker
-import modulos.controle.mount_control as mount_control
+import modulos.controle.tracker_sessao as tracker
+import modulos.controle.mount_pid as mount_pid
 import modulos.controle.tracker_aquisicao as tracker_aquisicao
 import modulos.controle.tracker_autoteste as tracker_autoteste
 import modulos.controle.tracker_camera as tracker_camera
@@ -799,7 +799,7 @@ class TrackerSafetyTests(unittest.TestCase):
         self.assertTrue(np.allclose(fitted["A"], expected))
 
     def test_return_pid_accepts_a_separate_speed_limit(self):
-        parameters = inspect.signature(mount_control.move_axes_pid_2d).parameters
+        parameters = inspect.signature(mount_pid.move_axes_pid_2d).parameters
         self.assertIn("max_velocity_deg_s", parameters)
 
     def test_return_to_start_is_limited_and_verified(self):

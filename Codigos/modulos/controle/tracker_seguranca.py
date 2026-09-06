@@ -11,12 +11,12 @@ from modulos.configuracoes.tracker import (
     RETURN_TOLERANCE_DEG,
     WATCHDOG_READ_FAILURES,
 )
-from modulos.controle.mount_control import (
+from modulos.controle.mount_ascom import (
     calc_error,
-    move_axes_pid_2d,
     read_altaz,
     stop_axes_safely,
 )
+from modulos.controle.mount_pid import move_axes_pid_2d
 from modulos.controle.tracker_estado import TrackerState
 
 

@@ -91,7 +91,7 @@ class ContinuousCalibrationTests(unittest.TestCase):
             for i, sample in enumerate(run):
                 sample.y_px += 6.0 * (-1 if i % 2 else 1)
         result = continuous._validate_holdout(
-            runs, {"A": expected, "rms_residual_px": 10.0}, label="holdout_local"
+            runs, {"A": expected, "rms_residual_px": 10.0}, label="holdout"
         )
         self.assertFalse(result["ok"])
         self.assertTrue(any("residuo alto" in x for x in result["failures"]))
@@ -100,7 +100,7 @@ class ContinuousCalibrationTests(unittest.TestCase):
         expected = np.array([[5000., 500.], [300., 7000.]])
         result = continuous._validate_holdout(
             self._synthetic_runs(expected), {"A": expected, "rms_residual_px": 0.5},
-            label="holdout_local",
+            label="holdout",
         )
         self.assertTrue(result["ok"], result["failures"])
 
@@ -144,20 +144,12 @@ class ContinuousCalibrationTests(unittest.TestCase):
         roles = [spec.role for spec in profile.specs]
 
         self.assertEqual(roles.count("fit"), 4)
-        self.assertEqual(roles.count("holdout_local"), 4)
-        self.assertEqual(roles.count("holdout_amplo"), 0)
+        self.assertEqual(roles.count("holdout"), 4)
+        self.assertEqual(set(roles), {"fit", "holdout"})
         self.assertTrue(
             all(
-                spec.half_range_deg == continuous.LOCAL_HALF_RANGE_DEG
+                spec.half_range_deg == continuous.SWEEP_HALF_RANGE_DEG
                 for spec in profile.specs
-                if spec.role == "fit"
-            )
-        )
-        self.assertTrue(
-            all(
-                spec.half_range_deg > continuous.LOCAL_HALF_RANGE_DEG
-                for spec in profile.specs
-                if spec.role == "holdout_amplo"
             )
         )
 
@@ -259,34 +251,38 @@ class ContinuousCalibrationTests(unittest.TestCase):
         trend = continuous._sweep_motion_trend(np.zeros(4), np.array([[1., 2.], [2., 8.], [3., 1.], [4., 9.]]))
         np.testing.assert_array_equal(trend, [0.0, 0.0])
 
-    def test_rejected_sweep_saves_raw_and_bins_after_stopping(self):
-        rejected = continuous._aggregate_sweep_frames(self._stepped_telemetry_captures(oscillation=8.0))
+    def test_sweep_saves_raw_frames_only_after_stopping_the_axes(self):
+        """Os frames crus vao para o disco depois da parada, nunca antes."""
         frame = self._spot_frame(40, 40)
         positions = [(0., 0.)] * 47 + [(0.008, 0.)] * 2
         spec = continuous.SweepSpec("fit_az_pos", 0, 1, 0.008, "fit")
         original_write = continuous._write_csv
-        with tempfile.TemporaryDirectory() as tmp, \
-                patch.object(continuous, "_baseline_anchor", return_value=(40., 40.)), \
-                patch.object(continuous, "move_axis"), \
-                patch.object(continuous, "stop_axes_safely") as stop, \
-                patch.object(continuous, "read_altaz", side_effect=positions), \
-                patch.object(continuous, "_capture_valid_cm", return_value=(frame, (40., 40., 10., False), {})), \
-                patch.object(continuous, "_aggregate_sweep_frames", return_value=rejected):
+        with tempfile.TemporaryDirectory() as tmp,                 patch.object(continuous, "move_axis"),                 patch.object(continuous, "stop_axes_safely", return_value=True) as stop,                 patch.object(continuous, "read_altaz", side_effect=positions),                 patch.object(continuous, "_capture_valid_cm", return_value=(frame, (40., 40., 10., False), {})):
             def write_after_stop(path, runs):
                 stop.assert_called_once()
                 original_write(path, runs)
 
             with patch.object(continuous, "_write_csv", side_effect=write_after_stop):
-                with self.assertRaisesRegex(RuntimeError, "dispersao residual excessiva"):
-                    continuous._run_one_sweep(
-                        spec=spec, initial_az=0., initial_alt=0., signature={},
-                        center_anchor=(40., 40.), audit_dir=Path(tmp),
-                    )
+                continuous._run_one_sweep(
+                    spec=spec, initial_az=0., initial_alt=0., signature={},
+                    center_anchor=(40., 40.), audit_dir=Path(tmp), baseline=False,
+                )
             raw = (Path(tmp) / "fit_az_pos_frames.csv").read_text(encoding="utf-8-sig")
-            bins = (Path(tmp) / "fit_az_pos_bins.csv").read_text(encoding="utf-8-sig")
             self.assertEqual(len(raw.splitlines()), 25)
-            self.assertEqual(len(bins.splitlines()), 9)
-            self.assertIn("raw_centroid_spread_px", bins)
+
+    def test_sweep_refuses_too_few_valid_samples(self):
+        """Uma varredura curta demais nao pode alimentar a matriz."""
+        frame = self._spot_frame(40, 40)
+        # Uma leitura inicial mais duas por iteracao; para em ~16 amostras,
+        # abaixo do minimo exigido para alimentar a matriz.
+        positions = [(0., 0.)] * 30 + [(0.008, 0.)] * 10
+        spec = continuous.SweepSpec("fit_az_pos", 0, 1, 0.008, "fit")
+        with tempfile.TemporaryDirectory() as tmp,                 patch.object(continuous, "move_axis"),                 patch.object(continuous, "stop_axes_safely", return_value=True),                 patch.object(continuous, "read_altaz", side_effect=positions),                 patch.object(continuous, "_capture_valid_cm", return_value=(frame, (40., 40., 10., False), {})):
+            with self.assertRaisesRegex(RuntimeError, "amostras validas"):
+                continuous._run_one_sweep(
+                    spec=spec, initial_az=0., initial_alt=0., signature={},
+                    center_anchor=(40., 40.), audit_dir=Path(tmp), baseline=False,
+                )
 
     def test_capture_failure_preserves_partial_frames(self):
         frame = self._spot_frame(40, 40)

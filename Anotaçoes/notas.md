@@ -1,20 +1,38 @@
 # Notas de continuidade do Free-Space-QKD
 
-Atualizado em 2026-08-26. Este documento guarda somente o estado atual,
-decisoes tecnicas ainda validas, roteiro de estudo e ideias futuras.
+Este documento guarda decisoes tecnicas, resultados medidos e ideias futuras.
+As secoes com data descrevem o que era verdade naquela data e nao sao
+atualizadas depois; o estado corrente do codigo esta nos README e nos arquivos
+de `Codigos/modulos/configuracoes/`.
+
+Reorganizacao de 2026-09-05: modulos renomeados, calibracao antiga removida e
+os caminhos abaixo atualizados. Onde uma secao datada citar um caminho que nao
+existe mais, vale o mapa do "Fluxo principal".
 
 ## Estado atual do projeto
 
 ### Fluxo principal
 
-1. `foco_multiplos/centro_massa.py` detecta e seleciona a fonte.
-2. `calibracoes/calibracao_continua.py` mede a relacao angular-pixel.
-3. `controle/Tracker.py` carrega a matriz, acompanha a ilha e controla o mount.
-4. `controle/mount_control.py` concentra movimento local e parada segura.
-5. `controle/alvo_alinhamento.py` guarda coordenadas, ROI e assinatura da ilha;
-   e uma biblioteca interna, nao um programa para executar.
+Todos os caminhos sao relativos a `Codigos/`.
 
-Os drivers ficam em `controle/cameras/`:
+1. `modulos/visao/detector_ilhas.py` detecta e seleciona a fonte.
+2. `modulos/calibracao/calibracao_continua_core.py` mede a relacao angular-pixel.
+3. `modulos/controle/tracker_sessao.py` carrega a matriz, acompanha a ilha e
+   orquestra a sessao; os detalhes ficam nos modulos `tracker_*`.
+4. `modulos/controle/mount_ascom.py` concentra os comandos crus do mount (ler,
+   mover, parar) e `modulos/controle/mount_pid.py` o movimento ate um alvo.
+5. `modulos/controle/alvo_alinhamento.py` guarda coordenadas, ROI e assinatura
+   da ilha; e uma biblioteca interna, nao um programa para executar.
+
+Infraestrutura compartilhada:
+
+* `modulos/controle/ascom.py`: unico cliente HTTP do ASCOM Remote/Alpaca,
+  usado por camera e mount;
+* `modulos/visao/centroide.py`: unico centro de massa em abertura circular,
+  usado pela media temporal do tracker e pela integracao da calibracao;
+* `modulos/configuracoes/`: camera ASI, camera IDS, endereco Alpaca e tracker.
+
+Os drivers ficam em `modulos/controle/cameras/`:
 
 * `alpaca.py`: ASI pelo ASCOM/Alpaca;
 * `ids_peak.py`: IDS pelo SDK peak;
@@ -84,20 +102,59 @@ A analise completa e os graficos estao em
 
 O executavel principal e:
 
-`python .\calibracoes\calibracao_continua.py --camera zwo --perfil robusto`
+`python .\programas_principais\calibracao.py --camera zwo --perfil robusto`
 
-Tambem aceita `--camera ids` e `--perfil rapido`.
+Tambem aceita `--camera ids` e `--perfil rapido`; sem argumentos, pergunta.
 
-* `rapido`: quatro varreduras locais de `0.008 deg`;
-* `robusto`: quatro varreduras para ajuste, quatro holdouts locais e quatro
-  testes de `0.014 deg`;
-* somente os dados locais entram na matriz do tracker;
-* a amplitude maior verifica linearidade, mas nao altera o ajuste local;
+* `rapido`: quatro varreduras continuas de ajuste;
+* `robusto`: quatro de ajuste mais quatro de validacao independente;
+* a matriz vem da FASE DE VELOCIDADE CONSTANTE de cada varredura;
 * cada movimento parte da origem absoluta e o encerramento tenta restaura-la;
 * matrizes ativas so mudam depois da validacao e confirmacao do operador.
 
+### Por que a calibracao por passos curtos foi abandonada (2026-09-05)
+
+A sessao `calibracao_2026-09-05_23-52-46_robusto` foi rejeitada com uma
+assinatura muito clara: cosseno entre direcoes de 0,995 a 0,9999, mas razao de
+escala de 1,7x (az) e 2,4x (alt). Direcao certa, escala errada -- ou seja, erro
+na regua, nao no alvo. Turbulencia seria isotropica e espalharia as duas coisas.
+
+O que a auditoria mostrou:
+
+* a telemetria angular do mount e quantizada em exatamente 1 arcsec e atualiza
+  em degraus de 1 a 4 arcsec a cerca de 2 Hz. Um passo de 1,5 s recebia apenas
+  2 a 4 atualizacoes;
+* para o MESMO angulo relatado de 11 arcsec, o deslocamento optico observado
+  variou de 9,1 px a 29,5 px (fator 3,2x);
+* o eixo leva cerca de 1 s para vencer o atrito estatico a 0,002 grau/s (menos
+  de 2x a velocidade minima do mount). Nos primeiros 0,6 s a velocidade optica
+  tinha 52% de dispersao e 20x de espalhamento; depois de 0,6 s, 27% e 2,85x.
+  Como o passo inteiro durava 1,5 s, cerca de 40% de cada medida era transiente;
+* as referencias paradas estavam boas: 1,86 px de dispersao mediana e 0,14 px/s
+  de deriva. A turbulencia respondia por talvez 10% do erro, nao pelos 240%;
+* trocar a regua do encoder por tempo x taxa comandada nao resolvia: 32% de
+  dispersao nos dois casos, porque o movimento real tambem nao era reprodutivel
+  nessa escala.
+
+Conclusao: a estrategia era delicada demais. A excitacao ficou menor que a
+quantizacao e o transiente do proprio mount. A substituicao aumenta a amplitude
+em 15x e ajusta so a fase estavel. Numa simulacao com esses mesmos defeitos
+medidos, a dispersao da escala cai de 35% para cerca de 6% e a matriz e
+recuperada com menos de 1% de erro.
+
+Foram removidos, no total, quatro estimadores que ja nao eram alcancaveis por
+nenhum perfil ou que ficaram obsoletos: patamares monotonicos
+(`_run_reference_sweep`), diferencas A-B-A (`reference_difference`), passos
+locais pareados (`_run_local_sequence` e `modulos/calibracao/resposta_local.py`)
+e o diagnostico de micropulsos. Ficam no historico do Git; se algum precisar
+voltar, ressuscite tambem seus testes.
+
+Sobre os micropulsos: eles nunca foram conclusivos. Os 8 pulsos de 0,12 s na
+velocidade minima davam 0,45 arcsec, abaixo do quantum de 1 arcsec da
+telemetria e abaixo do ruido de ~2 px. Resultado: 0/8 resolvidos opticamente.
+
 A calibracao por pontos foi preservada apenas como
-`calibracoes/legado/calibracao_estrela.py`.
+`diversos/legado/calibracao_por_pontos.py`.
 
 ### Desempenho de camera
 
@@ -142,7 +199,7 @@ Evitar comentarios como `# calcula a mediana` antes de `np.median(...)`.
 
 #### Dia 1 — Centro de massa e ilhas
 
-Arquivo: `foco_multiplos/centro_massa.py`.
+Arquivo: `modulos/visao/detector_ilhas.py`.
 
 Estudar:
 
@@ -156,7 +213,7 @@ Estudar:
 
 #### Dia 2 — Calibracao e algebra linear
 
-Arquivo: `calibracoes/calibracao_continua_core.py`.
+Arquivo: `modulos/calibracao/calibracao_continua_core.py`.
 
 Estudar:
 
@@ -171,7 +228,7 @@ Estudar:
 
 #### Dia 3 — Movimento do mount
 
-Arquivo: `controle/mount_control.py`.
+Arquivos: `modulos/controle/mount_ascom.py` e `modulos/controle/mount_pid.py`.
 
 Estudar:
 
@@ -185,7 +242,7 @@ Estudar:
 
 #### Dia 4 — Tracker
 
-Arquivo: `controle/Tracker.py`.
+Arquivo: `modulos/controle/tracker_sessao.py` e os modulos `tracker_*`.
 
 Estudar:
 
@@ -204,7 +261,7 @@ Estudar:
 
 #### Dia 5 — Cameras e integracao
 
-Pasta: `controle/cameras/`.
+Pasta: `modulos/controle/cameras/`.
 
 Estudar:
 
@@ -285,9 +342,9 @@ regiao maior:
 5. Selecionar a matriz mais proxima ou interpolar apenas entre vizinhos validos.
 6. Recusar extrapolacao quando nao houver um no confiavel.
 
-Infraestrutura implementada em `controle/mapa_jacobianas.py`: a calibracao
+Infraestrutura implementada em `modulos/controle/mapa_jacobianas.py`: a calibracao
 continua aprovada pode acrescentar um no ao mapa, e o alinhador em
-`foco_multiplos/alinhamento_continuo.py` seleciona a Jacobiana pela posicao
+`modulos/visao/alinhamento_continuo.py` seleciona a Jacobiana pela posicao
 absoluta. Em sobreposicoes validadas, interpola `A` e recalcula `A_inv`; fora da
 cobertura, recusa movimento. Ainda e necessario produzir e validar nos de
 bancada antes de considerar uma faixa angular grande operacional.
@@ -302,7 +359,7 @@ permanece parado.
 
 O mount deve corrigir deriva lenta do centro medio do beacon, nao perseguir a
 turbulencia rapida. Antes de alterar o controle, usar o caracterizador em
-`Link UFF/caracterizacao_beacon/` para medir a perturbacao e comparar janelas
+`programas_principais/caracterizar_beacon_ids.py` para medir a perturbacao e comparar janelas
 temporais. A primeira versao foi implementada em 26/08/2026 com janela
 deslizante de `2 s`, escolhida a partir da aquisicao noturna de 8 h. A estrategia
 e hibrida:
@@ -328,7 +385,7 @@ somente a mesma identidade perto da ultima posicao e nao movimenta o mount para
 buscar. Apos `75 s`, a sessao termina mantendo o mount parado; especificamente
 nesse caso nao ha retorno automatico cego para a posicao inicial.
 O CSV registra as transicoes e o tracker salva o frame do inicio e da
-recuperacao de cada perda, limitado a 100 PNGs por sessao.
+recuperacao de cada perda, limitado por TRACKER_EVENT_IMAGE_LIMIT em configuracoes/tracker.py.
 
 Na IDS, o detector ainda recebe a ROI inteira de `256 x 256 px`, mas o centro da
 imagem media e calculado somente numa abertura de raio `48 px` ao redor da
@@ -350,7 +407,7 @@ Ja implementado no tracker temporal:
 * reaparecimento: cinco frames coerentes e reconstrucao da media;
 * perda superior a `75 s`: encerra parado, sem retorno ou busca cegos;
 * salto instantaneo maior que o limite: rejeitado antes da soma;
-* primeiro PNG normalizado da perda e da recuperacao, com teto de 100 imagens;
+* primeiro PNG normalizado da perda e da recuperacao, com teto definido em configuracoes/tracker.py;
 * CSV com tamanho/janela da media, recuperacao, tempo sem sinal, exposicao, pico
   bruto do alvo, saturacao externa e outliers.
 
@@ -420,10 +477,11 @@ muitos frames consecutivos continuam correlacionados. O objetivo e baixa
 latencia e uma media temporal confiavel, nao perseguir a turbulencia quadro a
 quadro.
 
-#### Exposicao adaptativa experimental
+#### Exposicao adaptativa
 
-Ideia futura, retirada do fluxo principal durante a simplificacao do tracker.
-Antes de voltar, deve ser validada num programa separado e sem movimento. O
+Implementada e ATIVA para a IDS: ver `AUTO_EXPOSURE_*` em
+`Codigos/modulos/configuracoes/tracker.py` e `modulos/controle/tracker_exposicao.py`.
+O paragrafo abaixo e o registro do desenho original, de quando ainda era ideia. O
 ajuste usaria o pico bruto da ilha travada, saturacao fora do alvo, limites e
 intervalo minimo; ficaria congelado durante perda/recuperacao e limparia a media
 temporal depois de cada mudanca. Faixa inicial a estudar: `1000-20000 us`, alvo

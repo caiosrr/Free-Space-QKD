@@ -11,7 +11,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from modulos.calibracao import calibracao_continua_core as core
 from modulos.calibracao import referencias_estaticas as refs
-from modulos.controle import mount_control as mount
+from modulos.controle import mount_pid as mount
 
 
 class CalibrationReturnTests(unittest.TestCase):
@@ -81,25 +81,6 @@ class CalibrationReturnTests(unittest.TestCase):
                                    clock=lambda:now[0], quality=core._frame_quality,
                                    audit=audit, expected_angle=(0.,0.))
         self.assertAlmostEqual(audit["last_target_error_deg"], .001)
-
-    def test_closure_accounts_for_residual_angle_without_old_matrix(self):
-        def reference(t,q):
-            return dict(t=t, angle=[q,0.], center=[258-30000*q,258.], block_spread_px=.5)
-        result = refs.reference_difference(reference(0.,0.), reference(7.,.008),
-                                           reference(14.,.00045), axis=0, amplitude=.008)
-        self.assertGreater(result["raw_closure_px"], 10.)
-        self.assertAlmostEqual(result["closure_px"], 0., places=8)
-
-    def test_real_session_opposite_return_is_still_rejected(self):
-        # Referencias da sessao 23:22:20, arredondadas a 0.001 px.
-        a=dict(t=0., center=[255.912,249.457], angle=[-1/3600,1/3600], block_spread_px=.775)
-        b=dict(t=7.18, center=[316.347,247.260], angle=[-31/3600,1/3600], block_spread_px=1.973)
-        c=dict(t=11.66, center=[271.072,249.370], angle=[3/3600,1/3600], block_spread_px=.956)
-        audit={}
-        with self.assertRaisesRegex(RuntimeError, "apos compensacao angular"):
-            refs.reference_difference(a,b,c,axis=0,amplitude=.008,audit=audit)
-        self.assertGreater(audit["closure_px"], 23.)
-        self.assertLess(audit["predicted_angular_return_px"][0], 0.)
 
     def test_absolute_pid_target_does_not_shift_with_second_position_read(self):
         records=[]

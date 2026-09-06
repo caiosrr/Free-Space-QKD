@@ -574,7 +574,7 @@ def run_session(args: argparse.Namespace) -> Path:
         metadata = {
             "program": "caracterizar_beacon_ids",
             "started_at": started_wall,
-            "mount_control": False,
+            "mount_movido": False,
             "camera": "IDS",
             "camera_settings": {
                 "exposure_us": camera_config.EXPOSURE_US,
@@ -978,7 +978,7 @@ def run_session(args: argparse.Namespace) -> Path:
             "mean_all_frame_count": all_mean.count,
             "mean_valid_frame_count": valid_mean.count,
             "mean_normalized_valid_frame_count": normalized_valid_mean.count,
-            "mount_control": False,
+            "mount_movido": False,
         }
         json_write(session_dir / "resumo.json", summary)
         if camera_connected:

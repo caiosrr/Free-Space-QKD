@@ -24,7 +24,7 @@ from modulos.controle.tracker_camera import (
     reset_camera_roi,
     set_camera_roi,
 )
-from modulos.controle.mount_control import VEL_MAX_LIMITE, VEL_MIN_LIMITE
+from modulos.controle.mount_ascom import VEL_MAX_LIMITE, VEL_MIN_LIMITE
 from modulos.controle.tracker_controle import MeasurementPDTrim
 
 try:

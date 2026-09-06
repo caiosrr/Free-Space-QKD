@@ -11,7 +11,8 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-import modulos.controle.mount_control as mount_control
+import modulos.controle.mount_ascom as mount_ascom
+import modulos.controle.mount_pid as mount_pid
 
 
 class MountAgentState:
@@ -22,37 +23,38 @@ class MountAgentState:
         self.last_move = None
         self.last_error = None
 
+    def _select(self) -> None:
+        """Aponta a camada ASCOM para o mount deste agente."""
+        mount_ascom.set_mount_address(self.base_url)
+
     def ensure_ready(self) -> None:
-        mount_control.BASE_URL = self.base_url
-        mount_control.ensure_connected()
-        mount_control.ensure_unparked()
-        mount_control.ensure_not_tracking()
+        self._select()
+        mount_ascom.ensure_connected()
+        mount_ascom.ensure_unparked()
+        mount_ascom.ensure_not_tracking()
 
     def read_altaz(self):
-        mount_control.BASE_URL = self.base_url
-        return mount_control.read_altaz()
+        self._select()
+        return mount_ascom.read_altaz()
 
     def stop(self) -> None:
-        mount_control.BASE_URL = self.base_url
-        mount_control.move_axis(0, 0.0, True)
-        mount_control.move_axis(1, 0.0, True)
+        self._select()
+        mount_ascom.move_axis(0, 0.0, True)
+        mount_ascom.move_axis(1, 0.0, True)
 
     def move_relative(self, delta_az: float, delta_alt: float, tolerance: float) -> dict:
-        mount_control.BASE_URL = self.base_url
-        az0, alt0 = mount_control.read_altaz()
+        self._select()
+        az0, alt0 = mount_ascom.read_altaz()
         target_az = (az0 + delta_az) % 360.0
         target_alt = alt0 + delta_alt
 
-        old_tolerance = mount_control.TOLERANCIA_GRAUS
-        mount_control.TOLERANCIA_GRAUS = tolerance
-        try:
-            mount_control.move_axes_pid_2d(True, delta_az, delta_alt)
-        finally:
-            mount_control.TOLERANCIA_GRAUS = old_tolerance
+        # A tolerancia vai como argumento: nao ha mais constante global mutavel
+        # que possa ficar afrouxada para todo o processo se algo falhar.
+        mount_pid.move_axes_pid_2d(True, delta_az, delta_alt, tolerance_deg=tolerance)
 
-        azf, altf = mount_control.read_altaz()
-        final_err_az = mount_control.calc_error(0, target_az, azf)
-        final_err_alt = mount_control.calc_error(1, target_alt, altf)
+        azf, altf = mount_ascom.read_altaz()
+        final_err_az = mount_ascom.calc_error(0, target_az, azf)
+        final_err_alt = mount_ascom.calc_error(1, target_alt, altf)
 
         return {
             "ok": abs(final_err_az) <= tolerance and abs(final_err_alt) <= tolerance,
@@ -142,7 +144,7 @@ def make_handler(state: MountAgentState):
                 if path == "/move_relative":
                     delta_az = float(payload.get("delta_az_deg", 0.0))
                     delta_alt = float(payload.get("delta_alt_deg", 0.0))
-                    tolerance = float(payload.get("tolerance_deg", mount_control.TOLERANCIA_GRAUS))
+                    tolerance = float(payload.get("tolerance_deg", mount_ascom.TOLERANCIA_GRAUS))
 
                     with state.lock:
                         result = state.move_relative(delta_az, delta_alt, tolerance)
@@ -169,7 +171,7 @@ def main() -> None:
     parser.add_argument("--label", default="mount-agent", help="Human-readable mount label.")
     parser.add_argument(
         "--base-url",
-        default=mount_control.BASE_URL,
+        default=mount_ascom.mount_address(),
         help="Local ASCOM/Alpaca telescope URL, e.g. http://127.0.0.1:11111/api/v1/telescope/0",
     )
     args = parser.parse_args()

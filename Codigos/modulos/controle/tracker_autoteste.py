@@ -19,7 +19,8 @@ from modulos.configuracoes.tracker import (
     PREFLIGHT_SHIFT_X_PX,
     PREFLIGHT_SHIFT_Y_PX,
 )
-from modulos.controle.mount_control import move_axes_pid_2d, stop_axes_safely
+from modulos.controle.mount_ascom import stop_axes_safely
+from modulos.controle.mount_pid import move_axes_pid_2d
 from modulos.controle.tracker_estado import TrackerState
 from modulos.controle.tracker_seguranca import solicitar_parada
 

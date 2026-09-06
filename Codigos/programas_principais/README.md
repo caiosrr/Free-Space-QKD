@@ -11,6 +11,14 @@ arquivos daqui sao iniciadores; a implementacao fica nas pastas internas.
 | `calibracao.py` | Gera a matriz angular-pixel com ZWO SDK ou IDS | Sim |
 | `tracker.py` | Executa o tracker principal com ASI/ASCOM ou IDS | Sim |
 
+Cada programa aceita argumentos e, sem eles, pergunta o que precisa:
+
+```powershell
+python .\programas_principais\centro_de_massa.py --camera ids
+python .\programas_principais\calibracao.py --camera ids --perfil robusto
+python .\programas_principais\tracker.py --camera ids --horas 0.5 --sem-autoteste
+```
+
 ## Ordem recomendada
 
 1. Testar a camera.
@@ -38,82 +46,67 @@ Os parametros da ASI ficam em `../modulos/configuracoes/camera_asi.py`. Os da ID
 em `../modulos/configuracoes/camera_ids.py`. Resultados IDS continuam em
 `../Link UFF/resultados/`.
 
-## Auditoria da calibracao continua
+## Calibracao por varredura continua
 
-O estimador usa tres deslocamentos incrementais de 0,002 grau por sentido/eixo,
-com duas referencias paradas antes e duas depois de cada atuacao. Os dois
-periodos sem movimento permitem estimar deriva local separadamente da resposta.
-Cada referencia espera 0,8 s de acomodacao e mede pelo menos 2 s
-de imagens. Faz medias de imagem por blocos de 0,4 s e usa a mediana dos centros
-dos blocos, sem tratar frames consecutivos como amostras independentes.
-Acima de 120 FPS, a referencia guarda uma subamostragem temporal para limitar
-memoria, sem encurtar os 2 s. A auditoria distingue frames capturados e retidos.
+Cada sentido de cada eixo recebe UMA varredura continua longa. A matriz e
+ajustada somente sobre a fase de velocidade constante dessa varredura.
 
-A coleta exige >=20 frames validos, >=60% de validade na janela recente e
-quatro blocos utilizaveis. Pode esperar ate 12 s por referencia; nao busca outra
-ilha nem muda a exposicao. Os JSONs `*_antes_*.json`, `*_passo_*_depois_*.json` guardam
-posicoes, blocos e motivos de rejeicao, inclusive nas tentativas malsucedidas.
+Por que assim, e nao por passos curtos: a sessao de 2026-09-05 mediu que este
+mount reporta a posicao em degraus de 1 a 4 arcsec a cerca de 2 Hz, quantizados
+em 1 arcsec, e que o eixo leva cerca de 1 s para vencer o atrito estatico. Num
+passo de 0,002 grau (7 arcsec, 1,5 s) isso deixava 30 a 60% de erro no angulo e
+ate 20x de espalhamento na velocidade optica: para o MESMO angulo relatado de
+11 arcsec, o deslocamento observado variou de 9 a 29 px. A turbulencia nao era o
+fator limitante (referencias paradas com 1,9 px de dispersao e 0,14 px/s de
+deriva, contra respostas de 10 a 35 px).
 
-O modelo local e `posicao = origem + deriva*tempo + resposta*degrau`, aplicado
-a pixels e angulos medidos. Nao usa o angulo nominal do comando como medicao.
-A deriva aproximadamente linear e identificada pelos periodos sem comando;
-discordancia entre a deriva anterior e posterior aumenta o indicador de ruido.
-Isso nao elimina mudancas abruptas nem permite separar toda atmosfera da mecanica.
-Cada sentido precisa de pelo menos dois dos tres passos com resposta distinguivel
-da variacao sem comando; os passos recusados e seus motivos ficam na auditoria.
-O retorno angular continua obrigatorio, mas o fechamento optico e so diagnostico.
-O holdout compara tambem os dois sentidos entre si, evitando aprovar sentidos
-muito diferentes apenas porque cada um esta proximo da matriz intermediaria.
+A correcao e aumentar o braco de alavanca. Com amplitude de 0,030 grau
+(108 arcsec) a 0,004 grau/s, cada fonte de erro cai na proporcao da amplitude:
+a quantizacao de 1 arcsec sai de 10-30% para cerca de 1%, o transiente de
+partida sai de 40% para poucos por cento e ainda e descartado, e a turbulencia
+sai de 10-20% para cerca de 1%.
 
-`amostras.csv` e `*_diferencas.csv` representam cada deslocamento como dois pontos
-virtuais +/-metade da diferenca, com `sample_kind=paired_local_step_difference`.
-Nao sao coordenadas reais da camera. RMS no resumo/holdout e do deslocamento
-COMPLETO (`residual_basis=full_local_step_displacement`), nao da metade virtual.
-`*_resposta_local.json` preserva diferencas brutas/corrigidas, deriva, ruido e recusas.
-As referencias posteriores sao reutilizadas antes do proximo passo; isso nao
-constitui novas amostras independentes. `stationary_aggregation` conta cada
-referencia adquirida uma vez, incluindo diagnosticos e retorno.
-O perfil robusto usa 4 sequencias de ajuste e 4 independentes, sem testes amplos;
-o rapido usa apenas as 4 de ajuste. Estimativa robusta: 5-8 min, podendo alongar
-com perdas. O raio declarado e conservador: 0,002 grau, sem validar grandes saltos.
+### Como cada varredura funciona
 
-Em cada sequencia de ajuste, dois micropulsos de 0,12 s na velocidade minima do
-tracker medem inversao e repeticao no mesmo sentido. A parada nao espera uma
-captura. Tempos de envio/parada sao auditados, nao equivalem a duracao mecanica.
-`micropulse_diagnostics` compara resposta observada com previsao nominal da matriz.
-Se a resposta for menor que duas vezes o indicador de ruido, fica inconclusiva.
-Micropulsos NAO entram na matriz e NAO alteram ganhos ou comandos do tracker.
-Exposicao permanece fixa; nao e um teste de autoexposicao.
+1. Referencia parada antes, para medir ruido e deriva local.
+2. Movimento continuo num sentido so, ate o que vier primeiro: a amplitude
+   angular, o orcamento de 320 px ou um dos watchdogs. O orcamento em pixels
+   protege a borda da ROI sem precisar conhecer a escala, que e justamente o
+   que estamos medindo.
+3. Deteccao automatica da fase estavel: mede-se a velocidade optica da segunda
+   metade da varredura e descarta-se todo o inicio abaixo de 90% dela. O tempo
+   descartado e registrado como `transient_seconds`, entao da para acompanhar o
+   atrito do mount ao longo das noites.
+4. Os frames da fase estavel sao agrupados em bins angulares de 1,8 arcsec
+   (dois quanta da telemetria) com pelo menos 3 frames cada, e cada bin vira uma
+   amostra do ajuste.
+5. Referencia parada depois, e retorno a posicao absoluta inicial.
 
-As varreduras continuam com os watchdogs de movimento e perda de sinal. Os CSVs
-`*_frames.csv` e `*_bins.csv` sao diagnosticos, nao entram na matriz; o primeiro
-segundo do movimento fica fora dos bins de diagnostico. Os frames ja adquiridos
-sao salvos mesmo quando a captura e interrompida, depois de solicitar a parada.
+A varredura exige pelo menos 3 s de fase estavel e 8 bins validos. Abaixo disso
+ela e recusada em vez de produzir uma escala ruim em silencio.
 
-`raw_centroid_spread_px` inclui o movimento durante cada bin. Ja
-`centroid_spread_px` desconta uma tendencia linear robusta da varredura inteira
-antes de medir a dispersao; nao e uma medida exclusiva de turbulencia.
-`bin_duration_s` e `trend_x_px_s`/`trend_y_px_s` permitem auditar esse desconto.
-Essa tendencia pertence apenas ao diagnostico dinamico. As referencias paradas
-exigem dispersao P90 dos centros dos blocos <=5 px e variacao angular entre
-blocos <=0,00056 grau. Ida/volta e validacoes independentes continuam necessarias.
+### Duas reguas independentes
 
-A calibracao usa ROI de pelo menos 512 px (limitada pelo sensor), independente
-da ROI menor do tracker. Ida/volta e holdout exigem razao entre escalas <= 1,35
-e cosseno entre direcoes >= 0,98. O holdout reprova residuo RMS acima de 3 px
-quando tambem excede 25% da resposta mediana prevista. Esses limites iniciais
-precisam de validacao experimental; uma rejeicao preserva a matriz ativa.
+Cada varredura reporta a escala medida de duas formas: pelo angulo relatado
+pelo mount e por tempo x taxa comandada. As duas cobrem o mesmo deslocamento
+optico. A matriz usa somente a primeira, mas a razao entre elas fica na
+auditoria e no resumo: se ela fugir de 1, o problema esta na telemetria ou na
+taxa do mount, e nao na deteccao do centroide.
+
+### Validacao
+
+O perfil `robusto` faz 4 varreduras de ajuste e 4 de validacao independente; o
+`rapido` faz apenas as 4 de ajuste. Ida e volta e holdout exigem razao entre
+escalas <= 1,35 e cosseno entre direcoes >= 0,98. O holdout reprova residuo RMS
+acima de 3 px quando tambem excede 25% da resposta mediana prevista. Uma
+rejeicao preserva a matriz ativa.
 
 O retorno usa alvo absoluto fixo no PID e exige pelo menos 1,5 s de leituras
-dentro de 0,0005 grau do alvo (1,8 arcsec), com variacao <=1 arcsec na janela.
-Cada verificacao dura no maximo 4 s, com ate duas tentativas de retorno.
-No retorno local, o alvo e a origem angular inicial da sessao; a referencia optica
-tambem exige permanencia dentro da tolerancia durante sua janela de coleta.
-Isso confirma a telemetria do driver, nao substitui uma verificacao mecanica.
+dentro de 0,0005 grau do alvo, com variacao <= 1 arcsec na janela. Isso confirma
+a telemetria do driver, nao substitui uma verificacao mecanica.
 
-`*_retorno.json` registra alvos, pedidos de movimento, leituras/comandos do PID
-e leituras apos parar. `*_fechamento.json` registra retorno observado em pixels,
-deslocamento previsto pela diferenca angular e residuo, inclusive nas rejeicoes.
+A calibracao usa ROI de 1024 px (limitada pelo sensor), independente da ROI
+menor do tracker, para caber a excursao da varredura longe da borda.
 
 ## Correcoes limitadas e teste acompanhado
 

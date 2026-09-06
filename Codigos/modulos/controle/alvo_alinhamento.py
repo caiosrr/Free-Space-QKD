@@ -13,9 +13,12 @@ from pathlib import Path
 import numpy as np
 
 from modulos.artefatos import display_path, json_candidates, json_output_path
+from modulos.configuracoes import camera_ids as ids_config
 
 
-ROTATE_IMAGE_180 = os.environ.get("QKD_ROTATE_IMAGE_180", "1") != "0"
+ROTATE_IMAGE_180 = os.environ.get(
+    "QKD_ROTATE_IMAGE_180", "1" if ids_config.ROTATE_IMAGE_180 else "0"
+) != "0"
 TARGET_FILENAME = (
     "alvo_alinhamento_camera.json"
     if ROTATE_IMAGE_180

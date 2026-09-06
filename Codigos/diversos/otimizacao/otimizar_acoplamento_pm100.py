@@ -11,7 +11,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from modulos.artefatos import json_output_path
-from modulos.controle import mount_control
+from modulos.controle import mount_ascom, mount_pid
 from modulos.controle.mount_agent_client import call_json
 
 
@@ -229,7 +229,7 @@ class CouplingOptimizer:
     def move_receiver(self, axis: str, delta_deg: float) -> None:
         delta_az = delta_deg if axis == "az" else 0.0
         delta_alt = delta_deg if axis == "alt" else 0.0
-        mount_control.move_axes_pid_2d(True, delta_az, delta_alt)
+        mount_pid.move_axes_pid_2d(True, delta_az, delta_alt)
 
     def move_emitter(self, axis: str, delta_deg: float) -> None:
         if self.emitter_agent_url is None:
@@ -321,10 +321,10 @@ def main() -> None:
     print(f"PM100: {pm.idn}")
     print(f"VISA resource: {pm.resource_name}")
 
-    mount_control.ensure_connected()
-    mount_control.ensure_unparked()
-    mount_control.ensure_not_tracking()
-    receiver_az, receiver_alt = mount_control.read_altaz()
+    mount_ascom.ensure_connected()
+    mount_ascom.ensure_unparked()
+    mount_ascom.ensure_not_tracking()
+    receiver_az, receiver_alt = mount_ascom.read_altaz()
     print(f"Receiver local: Az={receiver_az:.6f} deg | Alt={receiver_alt:.6f} deg")
 
     if args.emitter_agent_url:
@@ -356,7 +356,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nOtimização interrompida.")
     finally:
-        mount_control.stop_axes_safely()
+        mount_ascom.stop_axes_safely()
         if args.emitter_agent_url:
             try:
                 call_agent(args.emitter_agent_url, "/stop", {})

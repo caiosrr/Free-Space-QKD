@@ -1,4 +1,4 @@
-"""Escadas simuladas: offsets de retorno, ruido e validacao fora do ajuste."""
+"""Passos simulados: offsets de retorno, ruido e validacao fora do ajuste."""
 import sys
 import unittest
 from pathlib import Path
@@ -11,8 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from modulos.calibracao import calibracao_continua_core as core
 
 
-class StaircaseTests(unittest.TestCase):
+class LocalStepFitTests(unittest.TestCase):
     A = np.array([[-6200., 500.], [300., 7500.]])
+    # Fracoes do passo local usadas apenas para gerar dados sinteticos.
+    FRACTIONS = (0.25, 0.50, 0.75, 1.0)
 
     def make_runs(self, *, noise=0., holdout_scale=1., drift=0.):
         rng = np.random.default_rng(902)
@@ -21,7 +23,7 @@ class StaircaseTests(unittest.TestCase):
             # Uma referencia diferente em cada retorno nao altera a derivada.
             origin = rng.uniform(100., 160., 2)
             samples = []
-            for j, fraction in enumerate(core.STATIONARY_FRACTIONS):
+            for j, fraction in enumerate(self.FRACTIONS):
                 q = np.zeros(2)
                 q[spec.axis] = fraction * spec.half_range_deg * spec.command_sign
                 scale = holdout_scale if spec.role != 'fit' else 1.
@@ -32,7 +34,6 @@ class StaircaseTests(unittest.TestCase):
                     role=spec.role, half_range_deg=spec.half_range_deg,
                     frames_combined=80, centroid_spread_px=1.,
                     sample_kind='stationary_monotonic_plateau'))
-            core._validate_stationary_staircase(samples, spec)
             runs.append(samples)
         return runs
 
@@ -60,23 +61,6 @@ class StaircaseTests(unittest.TestCase):
         fit = core._robust_fit(*core._center_runs(runs[:4], include_weights=True))
         self.assertFalse(core._validate_fit(runs[:4], fit)['ok'])
 
-    def test_stationary_outlier_is_not_hidden_by_return_removal(self):
-        run = self.make_runs()[0]
-        run[2].y_px += 30.
-        with self.assertRaisesRegex(RuntimeError, 'nao lineares'):
-            core._validate_stationary_staircase(run, core.calibration_profile('robusto').specs[0])
-
-    def test_wrong_order_and_other_axis_motion_rejected(self):
-        spec = core.calibration_profile('robusto').specs[0]
-        run = self.make_runs()[0]
-        run[2].delta_az_deg = run[1].delta_az_deg
-        with self.assertRaisesRegex(RuntimeError, 'nao monotonicos'):
-            core._validate_stationary_staircase(run, spec)
-        run = self.make_runs()[0]
-        run[-1].delta_alt_deg = .001
-        with self.assertRaisesRegex(RuntimeError, 'ortogonal'):
-            core._validate_stationary_staircase(run, spec)
-
     def test_short_movement_failure_stops_before_audit(self):
         spec = core.SweepSpec('step', 0, 1, .002, 'fit')
         with tempfile.TemporaryDirectory() as tmp, \
@@ -86,8 +70,7 @@ class StaircaseTests(unittest.TestCase):
                 patch.object(core, 'stop_axes_safely', return_value=True) as stop:
             with self.assertRaisesRegex(RuntimeError, 'camera desconectada'):
                 core._run_one_sweep(spec=spec, initial_az=0., initial_alt=0., signature={},
-                                    center_anchor=(100.,100.), audit_dir=Path(tmp),
-                                    baseline=False, validate_dynamic=False)
+                                    center_anchor=(100.,100.), audit_dir=Path(tmp), baseline=False)
             stop.assert_called_once()
             self.assertTrue((Path(tmp)/'step_frames.csv').exists())
 
@@ -98,23 +81,8 @@ class StaircaseTests(unittest.TestCase):
                 patch.object(core, 'stop_axes_safely', return_value=True):
             with self.assertRaisesRegex(RuntimeError, 'ja atingido'):
                 core._run_one_sweep(spec=spec, initial_az=0., initial_alt=0., signature={},
-                                    center_anchor=(100.,100.), baseline=False, validate_dynamic=False)
+                                    center_anchor=(100.,100.), baseline=False)
             move.assert_not_called()
-
-    def test_short_step_does_not_require_full_sweep_bins(self):
-        spec = core.SweepSpec('step', 0, 1, .002, 'fit')
-        positions = [(0., 0.)] + [(float(q), 0.) for q in np.linspace(0., .002, 11) for _ in range(2)]
-        frame = np.zeros((8,8), dtype=np.uint8)
-        with patch.object(core, 'read_altaz', side_effect=positions), \
-                patch.object(core, 'move_axis'), \
-                patch.object(core, 'stop_axes_safely', return_value=True) as stop, \
-                patch.object(core, '_capture_valid_cm', return_value=(frame, (4.,4.,10.,False), {})):
-            _, _, raw, stats = core._run_one_sweep(
-                spec=spec, initial_az=0., initial_alt=0., signature={}, center_anchor=(4.,4.),
-                baseline=False, validate_dynamic=False)
-            self.assertEqual(len(raw), 11)
-            self.assertIn('dynamic_warning', stats)
-            stop.assert_called_once()
 
     def test_opposite_motion_aborts_and_stops(self):
         spec = core.SweepSpec('step', 0, 1, .002, 'fit')
@@ -124,7 +92,7 @@ class StaircaseTests(unittest.TestCase):
                 patch.object(core, '_capture_valid_cm', return_value=(np.zeros((8,8)), None, {})):
             with self.assertRaisesRegex(RuntimeError, 'sentido angular oposto'):
                 core._run_one_sweep(spec=spec, initial_az=0., initial_alt=0., signature={},
-                                    center_anchor=(4.,4.), baseline=False, validate_dynamic=False)
+                                    center_anchor=(4.,4.), baseline=False)
             stop.assert_called_once()
 
     def test_failed_stop_is_not_silently_accepted(self):
@@ -134,7 +102,7 @@ class StaircaseTests(unittest.TestCase):
                 patch.object(core, 'stop_axes_safely', return_value=False):
             with self.assertRaisesRegex(RuntimeError, 'Parada nao confirmada'):
                 core._run_one_sweep(spec=spec, initial_az=0., initial_alt=0., signature={},
-                                    center_anchor=(4.,4.), baseline=False, validate_dynamic=False)
+                                    center_anchor=(4.,4.), baseline=False)
             move.assert_not_called()
 
 

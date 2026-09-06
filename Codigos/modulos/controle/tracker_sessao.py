@@ -34,7 +34,7 @@ from modulos.configuracoes.tracker import (
     roi_size_for_backend,
 )
 from modulos.controle.cameras.backend import backend_name
-from modulos.controle.mount_control import (
+from modulos.controle.mount_ascom import (
     ensure_connected,
     ensure_not_tracking,
     ensure_unparked,
@@ -96,17 +96,21 @@ def carregar_matriz_calibracao() -> tuple[np.ndarray, str]:
     )
 
 
-def _ler_tempo_sessao() -> float:
-    text = input(
-        f"Tempo maximo da sessao em horas [{MAX_SESSION_HOURS:g}]: "
-    ).strip()
-    hours = float(text.replace(",", ".")) if text else MAX_SESSION_HOURS
+def _ler_tempo_sessao(session_hours: float | None = None) -> float:
+    if session_hours is None:
+        text = input(
+            f"Tempo maximo da sessao em horas [{MAX_SESSION_HOURS:g}]: "
+        ).strip()
+        session_hours = float(text.replace(",", ".")) if text else MAX_SESSION_HOURS
+    hours = float(session_hours)
     if hours <= 0.0:
         raise ValueError("O tempo maximo da sessao precisa ser positivo.")
     return hours
 
 
-def _ler_autoteste_temporario() -> bool:
+def _ler_autoteste_temporario(executar: bool | None = None) -> bool:
+    if executar is not None:
+        return bool(executar)
     choice = input(
         "Executar autoteste TEMPORARIO de recuperacao antes da sessao? (s/N): "
     ).strip().lower()
@@ -115,8 +119,15 @@ def _ler_autoteste_temporario() -> bool:
     return choice in {"s", "sim"}
 
 
-def main() -> None:
-    """Seleciona uma ilha e a mantem no alvo ate o fim da sessao."""
+def main(
+    session_hours: float | None = None,
+    executar_autoteste: bool | None = None,
+) -> None:
+    """Seleciona uma ilha e a mantem no alvo ate o fim da sessao.
+
+    Os dois argumentos vem da linha de comando do iniciador; quando sao ``None``
+    o programa pergunta, como antes.
+    """
     logger = None
     return_result = None
     finish_reason = "encerramento_normal"
@@ -132,12 +143,12 @@ def main() -> None:
         connect_camera()
         foco.set_focus_mode("dual")
 
-        session_hours = _ler_tempo_sessao()
+        session_hours = _ler_tempo_sessao(session_hours)
         A_inv, matrix_path = carregar_matriz_calibracao()
         target = escolher_referencia_tracker()
         if target.focus_signature is None:
             raise RuntimeError("A selecao manual nao produziu uma assinatura da ilha.")
-        executar_autoteste = _ler_autoteste_temporario()
+        executar_autoteste = _ler_autoteste_temporario(executar_autoteste)
 
         state = TrackerState(exposure_us=EXPOSURE_SECONDS * 1e6)
         initial_az, initial_alt = read_altaz()

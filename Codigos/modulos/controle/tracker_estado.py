@@ -104,6 +104,3 @@ class TrackerState:
             self.stop = True
             return True
 
-
-# Nome antigo mantido para nao quebrar scripts externos durante a transicao.
-SharedState = TrackerState

@@ -1,7 +1,7 @@
 # Modulos de controle
 
 O tracker e iniciado por `programas_principais/tracker.py`. O arquivo
-`Tracker.py` mostra o fluxo completo da sessao sem misturar os detalhes dos
+`tracker_sessao.py` mostra o fluxo completo da sessao sem misturar os detalhes dos
 algoritmos.
 
 ## Roteiro do tracker
@@ -40,16 +40,23 @@ mount aceita, a malha usa micropulsos na velocidade minima. Cada pulso e seguido
 por 2 s de acomodacao para que a proxima decisao use uma nova media temporal.
 
 Esse modulo e temporario. Para remove-lo depois dos testes, retire o prompt e
-as chamadas em `Tracker.py`, os campos `preflight_*` de `tracker_estado.py` e as
+as chamadas em `tracker_sessao.py`, os campos `preflight_*` de `tracker_estado.py` e as
 constantes `PREFLIGHT_*` da configuracao.
 
 ## Arquivos auxiliares
 
 - `tracker_controle.py`: matematica do controlador PD e do trim lento.
-- `mount_control.py`: unica camada que envia comandos ao mount.
+- `tracker_loop.py`: mantem o estado derivado num unico `EstadoControle`, que
+  volta ao repouso inteiro em perda de sinal, freio ou acomodacao.
+- `mount_ascom.py`: unica camada que envia comandos ao mount (ler, mover, parar).
+- `mount_pid.py`: movimento ate um alvo angular e a linha de status do console.
+- `ascom.py`: cliente HTTP unico do ASCOM Remote/Alpaca, compartilhado com a camera.
 - `alvo_alinhamento.py`: estrutura e persistencia do alvo selecionado.
 - `cameras/`: backends ASCOM/Alpaca, IDS peak e ZWO SDK.
 
-Para estudar ou alterar o comportamento, comece por `Tracker.py` e siga apenas
+A captura e a normalizacao de frames vem de `modulos/visao/detector_ilhas.py`,
+as mesmas usadas pela calibracao; `tracker_camera.py` nao mantem uma copia.
+
+Para estudar ou alterar o comportamento, comece por `tracker_sessao.py` e siga apenas
 o modulo correspondente ao assunto. Ganhos e limites de seguranca permanecem
 centralizados em `modulos/configuracoes/tracker.py`.

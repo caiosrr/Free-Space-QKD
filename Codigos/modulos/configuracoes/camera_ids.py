@@ -40,9 +40,6 @@ MATRICES_OUTPUT_DIR = RESULTS_DIR / "matrizes"
 TRACKER_OUTPUT_DIR = RESULTS_DIR / "tracker"
 BEACON_CHARACTERIZATION_OUTPUT_DIR = RESULTS_DIR / "caracterizacao_beacon"
 
-# Alias mantido para compatibilidade com scripts locais que importavam OUTPUT_DIR.
-OUTPUT_DIR = RESULTS_DIR
-
 
 def apply_environment() -> None:
     """Propaga esta configuracao para o backend compartilhado."""

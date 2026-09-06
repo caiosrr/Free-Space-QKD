@@ -6,15 +6,10 @@ da IDS fica com os demais modulos internos.
 
 ## Configuracao
 
-Edite `../modulos/configuracoes/camera_ids.py` para alterar:
-
-```python
-EXPOSURE_US = 7276.0
-FRAME_RATE_FPS = 20.0
-ANALOG_GAIN = 1.0
-DIGITAL_GAIN = 1.0
-ROTATE_IMAGE_180 = False
-```
+Os valores em uso ficam em `../modulos/configuracoes/camera_ids.py`. Abra o
+arquivo para ver ou alterar exposicao, FPS, ganhos e orientacao. Este README
+nao repete os numeros de proposito: um valor copiado aqui envelhece sem aviso e
+passa a contradizer o codigo.
 
 Feche o IDS peak Cockpit antes de executar Python, pois a camera pode estar em
 uso exclusivo.
@@ -26,13 +21,14 @@ A partir da pasta `Codigos`:
 ```powershell
 python .\programas_principais\testar_camera_ids.py
 python .\programas_principais\caracterizar_beacon_ids.py --minutes 10
-python .\programas_principais\centro_de_massa.py
-python .\programas_principais\calibracao.py
-python .\programas_principais\tracker.py
+python .\programas_principais\centro_de_massa.py --camera ids
+python .\programas_principais\calibracao.py --camera ids --perfil robusto
+python .\programas_principais\tracker.py --camera ids --horas 0.5
 ```
 
-Nos tres ultimos, escolha IDS quando o programa perguntar pela camera. Todos
-podem ser abertos diretamente e executados pelo botao Play do VS Code.
+Nos tres ultimos, `--camera ids` substitui a pergunta inicial. Todos tambem
+podem ser abertos e executados pelo botao Play do VS Code, respondendo aos
+prompts.
 
 ## Resultados
 
@@ -45,16 +41,18 @@ Todos os artefatos IDS continuam isolados em `Link UFF/resultados/`:
 - `matrizes/`: matrizes lidas pelo alinhamento e tracker;
 - `tracker/`: CSV, resumo e imagens de eventos.
 
-O tracker IDS nao usa matrizes da ASI como fallback. Com
-`ROTATE_IMAGE_180 = False`, procura matrizes com prefixo
-`ids_raw_foco_temp_`; ao mudar a orientacao, calibre novamente.
+O tracker IDS nao usa matrizes da ASI como fallback. O prefixo procurado
+depende de `ROTATE_IMAGE_180`: com `False`, procura `ids_raw_foco_temp_`; com
+`True`, `ids_foco_temp_`. Ao mudar a orientacao, calibre novamente.
 
 ## Operacao segura
 
 O tracker seleciona manualmente uma ilha e usa a matriz da calibracao continua.
-Ele calcula o erro sobre uma media temporal de `2 s`, para imediatamente em
-perda de sinal e exige cinco frames coerentes para recuperar. Depois de `75 s`
-sem sinal, encerra sem busca ou retorno cego.
+Ele calcula o erro sobre uma media temporal, para imediatamente em perda de
+sinal e exige varios frames coerentes para recuperar. Os tempos de media, de
+recuperacao e o limite de ausencia estao em
+`../modulos/configuracoes/tracker.py`; depois desse limite, encerra sem busca
+ou retorno cego.
 
 A IDS usa ROI nativa e alinha tamanho/offset aos incrementos exigidos pela
 U3-3680XCP-NIR. Falhas persistentes de captura encerram o programa para impedir

@@ -14,14 +14,19 @@ from typing import Any
 
 import numpy as np
 
+from modulos.configuracoes import camera_ids as ids_config
 
-DEFAULT_FPS = float(os.environ.get("QKD_IDS_FPS", "20"))
-DEFAULT_EXPOSURE_US = float(os.environ.get("QKD_IDS_EXPOSURE_US", "7276"))
-DEFAULT_ANALOG_GAIN = float(os.environ.get("QKD_IDS_ANALOG_GAIN", "1"))
-DEFAULT_DIGITAL_GAIN = float(os.environ.get("QKD_IDS_DIGITAL_GAIN", "1"))
-DEFAULT_DEVICE_INDEX = int(os.environ.get("QKD_IDS_DEVICE", "0"))
-CAPTURE_TIMEOUT_MS = int(os.environ.get("QKD_IDS_TIMEOUT_MS", "5000"))
-BUFFER_COUNT = max(3, int(os.environ.get("QKD_IDS_BUFFER_COUNT", "8")))
+
+# O padrao de cada parametro vem de configuracoes/camera_ids.py. Assim, se um
+# programa esquecer de chamar apply_environment(), a camera ainda usa o valor
+# documentado, e nao um literal escondido diferente do arquivo de configuracao.
+DEFAULT_FPS = float(os.environ.get("QKD_IDS_FPS", ids_config.FRAME_RATE_FPS))
+DEFAULT_EXPOSURE_US = float(os.environ.get("QKD_IDS_EXPOSURE_US", ids_config.EXPOSURE_US))
+DEFAULT_ANALOG_GAIN = float(os.environ.get("QKD_IDS_ANALOG_GAIN", ids_config.ANALOG_GAIN))
+DEFAULT_DIGITAL_GAIN = float(os.environ.get("QKD_IDS_DIGITAL_GAIN", ids_config.DIGITAL_GAIN))
+DEFAULT_DEVICE_INDEX = int(os.environ.get("QKD_IDS_DEVICE", ids_config.DEVICE_INDEX))
+CAPTURE_TIMEOUT_MS = int(os.environ.get("QKD_IDS_TIMEOUT_MS", ids_config.CAPTURE_TIMEOUT_MS))
+BUFFER_COUNT = max(3, int(os.environ.get("QKD_IDS_BUFFER_COUNT", ids_config.BUFFER_COUNT)))
 MIN_FRAME_WAIT_TIMEOUT_MS = 500
 
 

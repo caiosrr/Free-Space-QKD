@@ -30,13 +30,14 @@ from modulos.controle.alvo_alinhamento import escolher_posicao_inicial_ou_centro
 from modulos.artefatos import display_path, matrix_candidates
 from modulos.configuracoes.camera_asi import EXPOSURE_SECONDS as ASI_EXPOSURE_SECONDS
 from modulos.configuracoes.camera_asi import GAIN as ASI_GAIN
-from modulos.controle.mount_control import (
+from modulos.configuracoes import camera_ids as ids_config
+from modulos.controle.mount_ascom import (
     ensure_connected,
     ensure_not_tracking,
     ensure_unparked,
-    move_axes_pid_2d,
     stop_axes_safely,
 )
+from modulos.controle.mount_pid import move_axes_pid_2d
 
 
 CAMERA_BACKEND = backend_name()
@@ -55,10 +56,11 @@ LOCK_NEAR_CONTINUITY_PX = 24.0
 # Calcula o threshold numa janela movel em torno da luz travada. Assim uma
 # fachada ou outra ilha fora da vizinhanca nao apaga uma luz mais fraca.
 LOCK_SEARCH_MARGIN_PX = 20.0
-lim_px = 2.0
+# Tolerancia de centralizacao da rotina iterativa, em pixels.
+CENTRALIZACAO_TOLERANCIA_PX = 2.0
 if CAMERA_BACKEND == "ids":
-    CAMERA_GAIN = float(os.environ.get("QKD_IDS_ANALOG_GAIN", "1"))
-    EXPOSURE_SECONDS = float(os.environ.get("QKD_IDS_EXPOSURE_US", "7276")) * 1e-6
+    CAMERA_GAIN = float(os.environ.get("QKD_IDS_ANALOG_GAIN", ids_config.ANALOG_GAIN))
+    EXPOSURE_SECONDS = float(os.environ.get("QKD_IDS_EXPOSURE_US", ids_config.EXPOSURE_US)) * 1e-6
 elif CAMERA_BACKEND == "zwo_sdk":
     CAMERA_GAIN = float(os.environ.get("QKD_ZWO_GAIN", str(ASI_GAIN)))
     EXPOSURE_SECONDS = float(
@@ -67,7 +69,9 @@ elif CAMERA_BACKEND == "zwo_sdk":
 else:
     CAMERA_GAIN = ASI_GAIN
     EXPOSURE_SECONDS = ASI_EXPOSURE_SECONDS
-ROTATE_IMAGE_180 = os.environ.get("QKD_ROTATE_IMAGE_180", "1") != "0"
+ROTATE_IMAGE_180 = os.environ.get(
+    "QKD_ROTATE_IMAGE_180", "1" if ids_config.ROTATE_IMAGE_180 else "0"
+) != "0"
 IDS_MATRIX_PREFIX = "ids_foco_temp" if ROTATE_IMAGE_180 else "ids_raw_foco_temp"
 CAPTURE_HTTP_ATTEMPTS = 3
 CAPTURE_RETRY_SLEEP_S = 0.75
@@ -1146,7 +1150,10 @@ def _save_confirmed_dual_focus_target(
 ) -> Path | None:
     if FOCUS_MODE != "dual":
         return None
-    if abs(measured_x - target_x) > lim_px or abs(measured_y - target_y) > lim_px:
+    if (
+        abs(measured_x - target_x) > CENTRALIZACAO_TOLERANCIA_PX
+        or abs(measured_y - target_y) > CENTRALIZACAO_TOLERANCIA_PX
+    ):
         return None
     signature = get_focus_signature()
     if signature is None:
@@ -1253,7 +1260,7 @@ def centralizacao_iterativa() -> None:
             radius_px = float(np.hypot(dx, dy))
             print(f"\nDeslocamento atual (cm - alvo): dx = {dx:+.3f}, dy = {dy:+.3f} px")
 
-            if abs(dx) <= lim_px and abs(dy) <= lim_px:
+            if abs(dx) <= CENTRALIZACAO_TOLERANCIA_PX and abs(dy) <= CENTRALIZACAO_TOLERANCIA_PX:
                 print("Dentro da tolerancia em pixels. Encerrando correcoes.")
                 break
 

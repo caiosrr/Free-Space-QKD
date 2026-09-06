@@ -1,43 +1,44 @@
-"""Inicia a calibracao continua com a camera ZWO ou IDS."""
+"""Inicia a calibracao continua com a camera ZWO ou IDS.
 
-import os
+Sem argumentos, pergunta camera e perfil. Com argumentos, roda direto:
+
+    python programas_principais/calibracao.py --camera ids --perfil robusto
+"""
+
 import sys
 from pathlib import Path
-
 
 CODIGOS_DIR = Path(__file__).resolve().parent.parent
 if str(CODIGOS_DIR) not in sys.path:
     sys.path.insert(0, str(CODIGOS_DIR))
 
+import argparse
+import os
 
-def configurar() -> tuple[str, str]:
-    camera = input("Camera (1=ZWO SDK, 2=IDS) [1]: ").strip() or "1"
-    perfil = input("Perfil (1=robusto, 2=rapido) [1]: ").strip() or "1"
-    if perfil not in {"1", "2"}:
+from programas_principais._iniciador import aplicar_camera, perguntar_camera
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--camera", choices=["zwo", "ids"], default=None)
+    parser.add_argument("--perfil", choices=["robusto", "rapido"], default=None)
+    return parser.parse_args()
+
+
+def perguntar_perfil() -> str:
+    escolha = input("Perfil (1=robusto, 2=rapido) [1]: ").strip() or "1"
+    if escolha not in {"1", "2"}:
         raise ValueError("Escolha 1 para robusto ou 2 para rapido.")
-    nome_perfil = "robusto" if perfil == "1" else "rapido"
-
-    if camera == "2":
-        from modulos.configuracoes import camera_ids
-
-        camera_ids.apply_environment()
-        nome_camera = "IDS"
-    elif camera == "1":
-        from modulos.configuracoes.camera_asi import EXPOSURE_US, GAIN
-
-        os.environ["QKD_CAMERA_BACKEND"] = "zwo_sdk"
-        os.environ["QKD_ZWO_EXPOSURE_US"] = str(EXPOSURE_US)
-        os.environ["QKD_ZWO_GAIN"] = str(GAIN)
-        nome_camera = "ZWO SDK"
-    else:
-        raise ValueError("Escolha 1 para ZWO SDK ou 2 para IDS.")
-
-    os.environ["QKD_CALIBRATION_PROFILE"] = nome_perfil
-    return nome_camera, nome_perfil
+    return "robusto" if escolha == "1" else "rapido"
 
 
 if __name__ == "__main__":
-    camera, perfil = configurar()
+    args = parse_args()
+    escolha = args.camera or perguntar_camera({"1": "zwo", "2": "ids"}, "1")
+    camera = aplicar_camera(escolha)
+    perfil = args.perfil or perguntar_perfil()
+    os.environ["QKD_CALIBRATION_PROFILE"] = perfil
+
     print(f"Iniciando calibracao {perfil} com {camera}.")
     from modulos.calibracao.calibracao_continua_core import main
 

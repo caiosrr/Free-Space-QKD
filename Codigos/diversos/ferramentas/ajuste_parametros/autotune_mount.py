@@ -13,19 +13,18 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from modulos.artefatos import display_path, json_output_path
-from modulos.controle.mount_control import (
-    MAX_CORRECOES,
+from modulos.controle.mount_ascom import (
     TOLERANCIA_GRAUS,
     VEL_MAX_LIMITE,
     VEL_MIN_LIMITE,
-    PID,
+    calc_error,
     ensure_connected,
     ensure_not_tracking,
     ensure_unparked,
     move_axis,
     read_altaz,
-    calc_error,
 )
+from modulos.controle.mount_pid import MAX_CORRECOES, PID
 
 # ===== Configuracao da busca =====
 SAFE_MAX_DELTA_DEG = 20.0

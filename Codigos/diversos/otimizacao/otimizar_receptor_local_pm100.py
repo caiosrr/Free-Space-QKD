@@ -11,7 +11,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from modulos.artefatos import json_output_path
-from modulos.controle import mount_control
+from modulos.controle import mount_ascom, mount_pid
 from modulos.controle.alvo_alinhamento import salvar_alvo
 from modulos.visao import detector_ilhas as foco_temp
 from diversos.otimizacao.otimizar_acoplamento_pm100 import PM100Reader
@@ -104,7 +104,7 @@ def measure_pm(
 def move_local(delta_az: float, delta_alt: float, settle_s: float) -> None:
     if delta_az == 0.0 and delta_alt == 0.0:
         return
-    mount_control.move_axes_pid_2d(True, delta_az, delta_alt)
+    mount_pid.move_axes_pid_2d(True, delta_az, delta_alt)
     time.sleep(settle_s)
 
 
@@ -334,7 +334,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Otimiza acoplamento movendo apenas o mount receptor local e lendo o PM100."
     )
-    parser.add_argument("--base-url", default=mount_control.BASE_URL)
+    parser.add_argument("--base-url", default=mount_ascom.mount_address())
     parser.add_argument("--pm-resource", default=None)
     parser.add_argument("--wavelength-nm", type=float, default=DEFAULT_WAVELENGTH_NM)
     parser.add_argument("--settle-s", type=float, default=DEFAULT_SETTLE_S)
@@ -351,10 +351,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    mount_control.BASE_URL = args.base_url
-    mount_control.ensure_connected()
-    mount_control.ensure_unparked()
-    mount_control.ensure_not_tracking()
+    mount_ascom.set_mount_address(args.base_url)
+    mount_ascom.ensure_connected()
+    mount_ascom.ensure_unparked()
+    mount_ascom.ensure_not_tracking()
 
     pm = PM100Reader(args.wavelength_nm, args.pm_resource)
     print(f"PM100: {pm.idn}")
@@ -379,8 +379,8 @@ def main() -> None:
         print("\nOtimizacao interrompida pelo usuario.")
     finally:
         try:
-            mount_control.move_axis(0, 0.0, True)
-            mount_control.move_axis(1, 0.0, True)
+            mount_ascom.move_axis(0, 0.0, True)
+            mount_ascom.move_axis(1, 0.0, True)
         except Exception:
             pass
         if not args.no_save_camera_target:

@@ -8,21 +8,20 @@ from __future__ import annotations
 
 import threading
 import time
-import itertools
 
 import numpy as np
-import requests
 from alpaca.camera import Camera
 from alpaca.exceptions import InvalidValueException
 
-from modulos.configuracoes.camera_asi import ALPACA_ADDRESS, DEVICE_NUMBER
+from modulos.configuracoes.alpaca import ALPACA_ADDRESS, CAMERA_DEVICE_NUMBER
+from modulos.controle.ascom import camera_device
 
 
-_camera = Camera(ALPACA_ADDRESS, DEVICE_NUMBER)
-_base_url = f"http://{ALPACA_ADDRESS}/api/v1/camera/{DEVICE_NUMBER}"
-_client_id = 1
-_transaction_ids = itertools.count(1)
-_session = requests.Session()
+IMAGE_READY_POLL_S = 0.001
+IMAGE_READY_SPIN_POLLS = 3
+
+_camera = Camera(ALPACA_ADDRESS, CAMERA_DEVICE_NUMBER)
+call = camera_device.call
 _lock = threading.Lock()
 _imagebytes_supported: bool | None = None
 _stats = {
@@ -33,26 +32,6 @@ _stats = {
     "transfer_max_seconds": 0.0,
     "capture_seconds": 0.0,
 }
-
-
-def call(method: str, command: str, timeout: float = 5.0, **extra_args):
-    params = {
-        "ClientID": _client_id,
-        "ClientTransactionID": next(_transaction_ids),
-    }
-    params.update(extra_args.pop("params", {}))
-    response = _session.request(
-        method,
-        f"{_base_url}/{command}",
-        params=params,
-        timeout=timeout,
-        **extra_args,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    if payload.get("ErrorNumber", 0):
-        raise RuntimeError(f"{command}: {payload.get('ErrorMessage')}")
-    return payload.get("Value")
 
 
 def connect() -> None:
@@ -77,11 +56,23 @@ def start_exposure(duration_seconds: float, light: bool = True) -> None:
     )
 
 
-def wait_until_image_ready(poll_interval: float = 0.001, timeout: float = 5.0) -> None:
+def wait_until_image_ready(
+    poll_interval: float = IMAGE_READY_POLL_S,
+    timeout: float = 5.0,
+) -> None:
+    """Consulta ImageReady sem dormir nas primeiras tentativas.
+
+    Em exposicoes curtas o frame costuma ficar pronto antes do primeiro sleep;
+    gastar alguns polls seguidos reduz a latencia de cada captura.
+    """
     deadline = time.time() + timeout
+    spin_polls = IMAGE_READY_SPIN_POLLS
     while time.time() < deadline:
         if bool(call("GET", "imageready")):
             return
+        if spin_polls > 0:
+            spin_polls -= 1
+            continue
         time.sleep(poll_interval)
     raise TimeoutError("Tempo limite esperando ImageReady = True")
 

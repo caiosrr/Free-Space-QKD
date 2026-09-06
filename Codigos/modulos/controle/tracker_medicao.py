@@ -9,6 +9,7 @@ from collections import deque
 
 import numpy as np
 
+from modulos.visao.centroide import centroide_em_abertura
 from modulos.configuracoes.tracker import (
     TEMPORAL_APERTURE_RADIUS_PX,
     TEMPORAL_INPUT_JUMP_PX,
@@ -121,34 +122,19 @@ class TemporalFrameEstimator:
         centers = np.asarray([(item[2], item[3]) for item in self._entries], dtype=float)
         expected_x, expected_y = np.median(centers, axis=0)
         mean_frame = self._weighted_sum / self._weight_sum
-        h, w = mean_frame.shape
-        radius = self.aperture_radius_px
-        x0 = max(0, int(np.floor(expected_x - radius)))
-        x1 = min(w, int(np.ceil(expected_x + radius + 1)))
-        y0 = max(0, int(np.floor(expected_y - radius)))
-        y1 = min(h, int(np.ceil(expected_y + radius + 1)))
-        local = mean_frame[y0:y1, x0:x1].astype(np.float32, copy=True)
-        if local.size == 0:
-            return None
-
-        yy, xx = np.indices(local.shape, dtype=np.float32)
-        local_x = expected_x - x0
-        local_y = expected_y - y0
-        circle = ((xx - local_x) ** 2 + (yy - local_y) ** 2) <= radius**2
-        pedestal = float(np.median(local[circle])) if np.any(circle) else 0.0
-        weights = np.clip(local - pedestal, 0.0, None)
-        weights[~circle] = 0.0
-        peak = float(weights.max())
-        if peak <= 0.0:
-            return None
-        weights[weights < (peak * self.threshold_percent)] = 0.0
-        total = float(weights.sum())
-        if total <= 0.0:
+        center = centroide_em_abertura(
+            mean_frame,
+            expected_x,
+            expected_y,
+            radius_px=self.aperture_radius_px,
+            threshold_percent=self.threshold_percent,
+        )
+        if center is None:
             return None
 
         return {
-            "x_px": float(x0 + ((xx * weights).sum() / total)),
-            "y_px": float(y0 + ((yy * weights).sum() / total)),
+            "x_px": center[0],
+            "y_px": center[1],
             # Usada apenas pelo display. O controle continua consumindo somente
             # o centro calculado acima.
             "mean_frame": mean_frame,
@@ -156,7 +142,6 @@ class TemporalFrameEstimator:
             "window_span_s": span_s,
             "centroid_std_x_px": float(np.std(centers[:, 0])),
             "centroid_std_y_px": float(np.std(centers[:, 1])),
-            "mean_peak": peak,
         }
 
 

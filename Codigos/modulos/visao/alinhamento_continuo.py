@@ -19,15 +19,15 @@ import numpy as np
 from modulos.artefatos import display_path, matrix_candidates
 from modulos.controle.alvo_alinhamento import escolher_posicao_inicial_ou_centro
 from modulos.controle.mapa_jacobianas import MapaJacobianas, SelecaoJacobiana
-from modulos.controle.mount_control import (
+from modulos.controle.mount_ascom import (
     calc_error,
     ensure_connected,
     ensure_not_tracking,
     ensure_unparked,
-    move_axes_pid_2d,
     read_altaz,
     stop_axes_safely,
 )
+from modulos.controle.mount_pid import move_axes_pid_2d
 
 
 AMOSTRAS_POR_MEDICAO = 5

@@ -13,6 +13,8 @@ from typing import Any
 
 import numpy as np
 
+from modulos.configuracoes import camera_asi as asi_config
+
 
 class ZwoSdkCamera:
     def __init__(self) -> None:
@@ -72,9 +74,9 @@ class ZwoSdkCamera:
             self.device = self.asi.Camera(index)
             self.info = dict(self.device.get_camera_property())
             self.reset_roi()
-            self.set_gain(float(os.environ.get("QKD_ZWO_GAIN", "100")))
+            self.set_gain(float(os.environ.get("QKD_ZWO_GAIN", asi_config.GAIN)))
             self._set_exposure_us(
-                int(round(float(os.environ.get("QKD_ZWO_EXPOSURE_US", "700"))))
+                int(round(float(os.environ.get("QKD_ZWO_EXPOSURE_US", asi_config.EXPOSURE_US))))
             )
             bandwidth = os.environ.get("QKD_ZWO_USB_BANDWIDTH", "").strip()
             if bandwidth:
