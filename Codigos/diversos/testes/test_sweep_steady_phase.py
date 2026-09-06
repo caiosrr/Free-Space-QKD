@@ -5,8 +5,10 @@ vencer o atrito estatico, e nesse trecho a velocidade optica chega a variar 20x.
 """
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -80,6 +82,38 @@ class SteadyPhaseTests(unittest.TestCase):
         amostras = varredura(duracao=2.0, transiente_s=1.5)
         inicio, fim, _ = core._janela_fase_estavel(amostras)
         self.assertLess(fim - inicio, core.SWEEP_MIN_STEADY_SECONDS)
+
+
+class AnchorAfterSweepTests(unittest.TestCase):
+    """A ancora precisa acompanhar a luz, senao a referencia seguinte cega.
+
+    Regressao da sessao de 2026-09-06: com a ancora presa ao ponto de partida,
+    a referencia depois da varredura procurava a ilha ~200 px longe e falhava
+    com 332 frames de "sem_candidato" ate estourar o timeout de 12 s.
+    """
+
+    def test_ancora_acompanha_a_luz_ate_o_fim_da_varredura(self):
+        frame = np.zeros((8, 8), dtype=np.uint8)
+        # A luz caminha 3 px por frame: chega ao limite angular antes do
+        # orcamento de pixels, como numa varredura real.
+        posicoes = [(0., 0.)] + [(q, 0.) for q in np.linspace(0, 0.031, 100) for _ in (0, 1)]
+        centros = [(100.0 + 3.0 * i, 200.0) for i in range(300)]
+        spec = core.SweepSpec("fit_az_pos", 0, 1, 0.030, "fit")
+
+        def captura():
+            x, y = centros.pop(0)
+            return frame, (x, y, 10.0, False), {}
+
+        with tempfile.TemporaryDirectory() as tmp,                 patch.object(core, "move_axis"),                 patch.object(core, "stop_axes_safely", return_value=True),                 patch.object(core, "read_altaz", side_effect=posicoes),                 patch.object(core, "_capture_valid_cm", side_effect=captura):
+            captures, ancora = core._run_one_sweep(
+                spec=spec, initial_az=0., initial_alt=0., signature={},
+                center_anchor=(100.0, 200.0), audit_dir=Path(tmp), baseline=False,
+            )
+
+        ultimo = captures[-1][0]
+        self.assertEqual(ancora, (ultimo.x_px, ultimo.y_px))
+        # E, sobretudo, nao pode ter ficado no ponto de partida.
+        self.assertGreater(abs(ancora[0] - 100.0), 100.0)
 
 
 class TwoRulersTests(unittest.TestCase):

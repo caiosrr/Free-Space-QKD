@@ -570,7 +570,11 @@ def _run_one_sweep(*, spec: SweepSpec, initial_az: float, initial_alt: float,
             f"{spec.name}: somente {len(captures)} amostras validas; "
             f"minimo={MIN_VALID_SWEEP_SAMPLES}."
         )
-    return captures, center_anchor
+    # A ancora precisa ser a posicao onde a luz REALMENTE parou: depois da
+    # varredura ela esta a centenas de pixels do ponto de partida, e a
+    # referencia seguinte trava o detector em torno dela.
+    ultimo = captures[-1][0]
+    return captures, (float(ultimo.x_px), float(ultimo.y_px))
 
 
 def _velocidade_optica(amostras: list[SweepSample]) -> float:
@@ -670,7 +674,14 @@ def _duas_reguas(amostras: list[SweepSample], axis: int) -> dict:
 
 def _take_stationary_reference(signature, expected, initial_az, initial_alt, audit_path,
                                *, expected_angle=None):
-    audit = {"settle_seconds": REFERENCE_SETTLE_S, "expected_angle_deg": expected_angle}
+    audit = {
+        "settle_seconds": REFERENCE_SETTLE_S,
+        "expected_angle_deg": expected_angle,
+        # Sem isto, um "sem_candidato" nao diz se a ilha sumiu ou se o detector
+        # estava travado no lugar errado.
+        "expected_center_px": [float(expected[0]), float(expected[1])],
+        "max_jump_px": TRACKER_MAX_SPOT_JUMP_PX,
+    }
     def final_measurement(frames, centers):
         result = measure_integrated_beacon(frames, centers)
         preview = result.pop('preview')
