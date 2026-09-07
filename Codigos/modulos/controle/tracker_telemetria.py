@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 
 from modulos.artefatos import display_path
+from modulos.configuracoes import optica
 from modulos.configuracoes.tracker import (
     AUTO_EXPOSURE_BACKGROUND_HIGH,
     AUTO_EXPOSURE_BACKGROUND_INCREASE_LIMIT,
@@ -80,7 +81,7 @@ class TrackerCsvLogger:
     FIELDNAMES = [
         "data_hora", "tempo_decorrido_s", "estado", "sinal_encontrado",
         "x_cm_px", "y_cm_px", "alvo_x_px", "alvo_y_px", "erro_x_px",
-        "erro_y_px", "distancia_px", "erro_x_filtrado_px", "erro_y_filtrado_px",
+        "erro_y_px", "distancia_px", "distancia_alvo_m", "erro_x_filtrado_px", "erro_y_filtrado_px",
         "frames_na_media", "janela_media_s", "frames_recuperacao",
         "alvo_detectado", "tempo_sem_sinal_s", "tempo_aparencia_instavel_s",
         "exposicao_us", "auto_exposicao_ativa",
@@ -290,6 +291,11 @@ class TrackerCsvLogger:
             "alvo_x_px": number(target_x, 3), "alvo_y_px": number(target_y, 3),
             "erro_x_px": number(dx, 3), "erro_y_px": number(dy, 3),
             "distancia_px": number(np.hypot(dx, dy), 3),
+            # O mesmo erro no plano do alvo. Os limiares do controle continuam
+            # em pixels, amarrados a resolucao do mount; isto e para leitura.
+            "distancia_alvo_m": number(
+                optica.px_para_metros(float(np.hypot(dx, dy))), 4
+            ),
             "erro_x_filtrado_px": number(state_values["dx_filt_px"], 3),
             "erro_y_filtrado_px": number(state_values["dy_filt_px"], 3),
             "frames_na_media": int(state_values["temporal_frame_count"]),

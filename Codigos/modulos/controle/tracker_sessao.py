@@ -66,7 +66,9 @@ from modulos.controle.tracker_seguranca import (
     retornar_posicao_inicial,
 )
 from modulos.controle.tracker_telemetria import TrackerCsvLogger
+from modulos.configuracoes import optica
 from modulos.visao import detector_ilhas as foco
+from modulos.visao import diagnostico
 
 
 WINDOW_SIZE = roi_size_for_backend(backend_name())
@@ -142,6 +144,13 @@ def main(
         ensure_not_tracking()
         connect_camera()
         foco.set_focus_mode("dual")
+        # Com a autoexposicao trabalhando perto de 1150 us, o pico do beacon
+        # fica na casa de 15 contagens: um unico pixel quente desloca o centro
+        # de massa. A mascara e medida por programas_principais/diagnosticar.py.
+        if diagnostico.carregar_mascara_se_existir():
+            print("Mascara de pixels ruins: ATIVA")
+        else:
+            print("Mascara de pixels ruins: ausente (rode diagnosticar.py --calibrar-pixels)")
 
         session_hours = _ler_tempo_sessao(session_hours)
         A_inv, matrix_path = carregar_matriz_calibracao()
@@ -185,6 +194,9 @@ def main(
             )
         )
         print(f"Calibracao continua: {matrix_path}")
+        print(f"Escala optica: {optica.resumo()}")
+        for aviso in optica.avisos():
+            print(f"  ATENCAO: {aviso}")
         print(f"Posicao inicial: Az={initial_az:.6f} deg | Alt={initial_alt:.6f} deg")
         print(
             f"Seguranca: limites Az/Alt=+/-{MAX_OFFSET_AZ_DEG:g}/"

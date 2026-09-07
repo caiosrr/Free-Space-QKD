@@ -10,6 +10,7 @@ arquivos daqui sao iniciadores; a implementacao fica nas pastas internas.
 | `centro_de_massa.py` | Seleciona a ilha e abre observacao/alinhamento de baixa frequencia | Depende da opcao escolhida |
 | `calibracao.py` | Gera a matriz angular-pixel com ZWO SDK ou IDS | Sim |
 | `tracker.py` | Executa o tracker principal com ASI/ASCOM ou IDS | Sim |
+| `diagnosticar.py` | Mede sinal, SNR, escala e pixels defeituosos | Nao |
 
 Cada programa aceita argumentos e, sem eles, pergunta o que precisa:
 
@@ -20,6 +21,18 @@ python .\programas_principais\tracker.py --camera ids --horas 0.5 --sem-autotest
 ```
 
 ## Ordem recomendada
+
+0. Diagnosticar sinal e, uma vez por montagem, medir os pixels defeituosos:
+
+   ```powershell
+   python .\programas_principais\diagnosticar.py --camera ids --calibrar-pixels
+   python .\programas_principais\diagnosticar.py --camera ids --exposicao 1200 10000
+   ```
+
+   A mascara e medida com o feixe BLOQUEADO e a objetiva tampada; depois disso
+   o tracker a carrega sozinho. Com o beacon perto de 15 contagens, um unico
+   pixel quente de 25 contagens ja faz o detector perder o alvo, entao esta
+   medida vale por si so.
 
 1. Testar a camera.
 2. Caracterizar ou observar o beacon sem movimento.

@@ -163,6 +163,54 @@ A análise sombra da sessão de 6 h fica em
 erro lento permaneceu deslocado, mas não prevê quantos comandos seriam enviados:
 uma correção real alteraria todas as medições posteriores.
 
+## Ideias trazidas do tracker externo (2026-09-07)
+
+Comparacao com o `Tracker amnd`, que resolve o mesmo problema com estrategia
+diferente: erro em metros no alvo, pulso de duracao fixa no eixo dominante,
+serial LX200 direto, sem matriz de calibracao. O controle dele e mais fraco que
+o nosso (sem matriz, so um eixo por vez, sem watchdog nem retorno seguro, media
+de 6 frames contra a janela de 2 s). O que ele tem de melhor e a infraestrutura
+em volta. Foram adotadas as IDEIAS, com implementacao propria.
+
+### Implementado
+
+* **Mascara de pixels defeituosos** (`modulos/visao/pixels_ruins.py`). Medida
+  com o feixe bloqueado, marca hot/cold a 5 sigma sobre desvio robusto e
+  substitui cada defeito pela mediana 3x3 vetorizada. Verificado ponta a ponta:
+  no regime real (pico 15, fundo 2) **um pixel quente de apenas 25 contagens ja
+  faz o detector PERDER o alvo**, porque a normalizacao divide pelo maximo do
+  frame e rebaixa a mancha abaixo do limiar. Nao e erro de centro, e ausencia.
+  Isso e compativel com os 72 episodios curtos de ausencia em 5,9 h.
+* **Escala fisica** (`modulos/configuracoes/optica.py`). pixel/EFL/distancia dao
+  arcsec/px e cm/px no alvo; a telemetria ganha `distancia_alvo_m`. Os limiares
+  do controle seguem em pixels, amarrados a resolucao do mount. `avisos()`
+  denuncia explicitamente milimetro escrito onde se esperava metro.
+* **`diagnosticar.py`**: sinal, fundo, amplitude, SNR, saturacao, fracao da
+  escala do sensor em uso, taxa, **duty cycle de fotons** e dispersao do
+  centroide. Aceita varias exposicoes e compara. E a ferramenta que responde o
+  item 1 sem gastar uma sessao.
+* **Incerteza do centroide por frame** (`sigma_centroide_px`, raio RMS sobre a
+  raiz do sinal integrado). Separa "mancha larga por turbulencia" de "sinal
+  fraco demais para localizar o centro"; a dispersao empirica ja registrada
+  mede o efeito combinado.
+
+### Adiado de proposito
+
+Precisam de bancada acompanhada, entao nao entram numa sessao desassistida:
+
+* **Re-aquisicao automatica.** A deles chama auto-deteccao cega, que pega o
+  maximo global do sensor: na nossa cena, com fachadas, travaria em qualquer
+  luz. A versao correta aqui e re-aquisicao pela ASSINATURA da ilha ja travada,
+  que temos e eles nao. Mexe no tratamento de perda de sinal.
+* **ROI auto-curativa.** Recentralizar a ROI perto da borda exige rebasear o
+  alvo e a ancora para o novo sistema de coordenadas. E o tipo de mudanca que
+  falha em silencio deslocando tudo por um offset.
+* **Produtor/consumidor na aquisicao.** As notas ja pedem medir antes de mudar
+  a arquitetura; a referencia deles e uma fila de 4 com descarte.
+* **Hot-reload de configuracao.** Util em sessao de 6 h, mas hoje as constantes
+  sao importadas diretamente por cada modulo; tornar isso recarregavel e um
+  refactor amplo.
+
 ## Analise das sessoes do tracker (2026-09-06)
 
 Levantamento sobre as sete sessoes de setembro em

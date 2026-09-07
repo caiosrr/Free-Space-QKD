@@ -28,6 +28,7 @@ from modulos.controle.cameras.backend import (
 )
 from modulos.controle.alvo_alinhamento import escolher_posicao_inicial_ou_centro, salvar_alvo
 from modulos.artefatos import display_path, matrix_candidates
+from modulos.visao import pixels_ruins
 from modulos.configuracoes.camera_asi import EXPOSURE_SECONDS as ASI_EXPOSURE_SECONDS
 from modulos.configuracoes.camera_asi import GAIN as ASI_GAIN
 from modulos.configuracoes import camera_ids as ids_config
@@ -86,6 +87,10 @@ WORSE_ABORT_MARGIN_PX = 6.0
 ROLLBACK_ON_WORSE = True
 LAST_CAPTURE_STATS = {}
 LAST_RAW_FRAME = None
+# Mascara de pixels defeituosos do sensor inteiro, medida com o feixe bloqueado
+# por programas_principais/diagnosticar.py. None = nenhuma aplicada.
+BAD_PIXEL_MASK = None
+BAD_PIXEL_ORIGIN_XY = (0, 0)
 LAST_FOCUS_DEBUG = {}
 FOCUS_LOCK = {
     "active": False,
@@ -250,6 +255,7 @@ def capture_frame(
     for attempt in range(1, CAPTURE_HTTP_ATTEMPTS + 1):
         try:
             frame = capture_raw_frame(exposure_seconds, light=light).astype(np.float32)
+            frame = aplicar_pixels_ruins(frame)
 
             min_val = float(frame.min())
             max_val = float(frame.max())
@@ -293,6 +299,31 @@ def capture_frame(
                 time.sleep(CAPTURE_RETRY_SLEEP_S)
 
     raise last_exc
+
+
+def definir_mascara_pixels_ruins(mascara, origem_xy=(0, 0)) -> None:
+    """Ativa a correcao de pixels defeituosos para as proximas capturas.
+
+    ``origem_xy`` e o canto da ROI dentro do sensor: a mascara e sempre do
+    sensor inteiro e precisa ser fatiada para o recorte em uso.
+    """
+    global BAD_PIXEL_MASK, BAD_PIXEL_ORIGIN_XY
+    BAD_PIXEL_MASK = None if mascara is None else np.asarray(mascara, dtype=bool)
+    BAD_PIXEL_ORIGIN_XY = (int(origem_xy[0]), int(origem_xy[1]))
+
+
+def aplicar_pixels_ruins(frame: np.ndarray) -> np.ndarray:
+    """Corrige defeitos conhecidos; devolve o frame intacto se nao houver mascara."""
+    if BAD_PIXEL_MASK is None:
+        return frame
+    try:
+        recorte = pixels_ruins.fatiar(BAD_PIXEL_MASK, BAD_PIXEL_ORIGIN_XY, frame.shape)
+        return pixels_ruins.corrigir(frame, recorte)
+    except Exception as exc:
+        # Um defeito na mascara nao pode impedir a sessao de continuar.
+        print(f"Aviso: correcao de pixels ruins desativada ({exc}).")
+        definir_mascara_pixels_ruins(None)
+        return frame
 
 
 def _as_gray_float(frame: np.ndarray) -> np.ndarray:
@@ -389,6 +420,8 @@ def _candidate_debug(candidate: dict, primary: dict | None, secondary: dict | No
         "bbox_w": int(candidate.get("bbox_w", 0)),
         "bbox_h": int(candidate.get("bbox_h", 0)),
         "compactness": float(candidate.get("compactness", 0.0)),
+        "raio_rms_px": float(candidate.get("raio_rms_px", 0.0)),
+        "sigma_centroide_px": float(candidate.get("sigma_centroide_px", 0.0)),
         "toca_borda": bool(candidate["toca_borda"]),
         "similarity_primary": float(_similarity(candidate, primary)) if primary is not None else None,
         "similarity_secondary": float(_similarity(candidate, secondary)) if secondary is not None else None,
@@ -597,6 +630,19 @@ def _find_focus_candidates(
 
         x_cm = float((xx * weights).sum() / total)
         y_cm = float((yy * weights).sum() / total)
+
+        # Raio RMS ponderado e incerteza do centroide daquele frame. A
+        # incerteza cai com a raiz do sinal integrado: ela separa "a mancha
+        # esta larga por turbulencia" de "o sinal esta fraco demais para
+        # localizar o centro". A dispersao empirica ja registrada mede o
+        # efeito combinado; esta aqui e a contribuicao do proprio frame.
+        raio_rms = float(
+            np.sqrt(
+                (((xx - x_cm) ** 2 + (yy - y_cm) ** 2) * weights).sum() / total
+            )
+        )
+        sigma_centroide = raio_rms / max(float(np.sqrt(raw_total)), 1.0)
+
         ix = int(np.clip(round(x_cm), 0, image_w - 1))
         iy = int(np.clip(round(y_cm), 0, image_h - 1))
         toca_borda = bool(
@@ -618,6 +664,8 @@ def _find_focus_candidates(
                 "bbox_w": bbox_w,
                 "bbox_h": bbox_h,
                 "compactness": compactness,
+                "raio_rms_px": raio_rms,
+                "sigma_centroide_px": sigma_centroide,
             }
         )
 
