@@ -29,6 +29,7 @@ from modulos.controle.mount_ascom import (
 from modulos.controle.mount_pid import move_axes_pid_2d
 from modulos.controle.mapa_jacobianas import registrar_no
 from modulos.visao import detector_ilhas as foco
+from modulos.visao import diagnostico
 from modulos.visao.centroide import centroide_em_abertura, combinar_frames
 from modulos.calibracao.referencias_estaticas import (
     REFERENCE_WINDOW_S, REFERENCE_SETTLE_S, REFERENCE_TIMEOUT_S, REFERENCE_MIN_FRAMES,
@@ -1122,6 +1123,20 @@ def main(profile_name: str | None = None) -> None:
         target_local = _local_target_from_raw(actual_w, actual_h, actual_x, actual_y, raw_x, raw_y)
         if not (0 <= target_local[0] < actual_w and 0 <= target_local[1] < actual_h):
             raise RuntimeError("O alinhamento da ROI deixou a luz fora do recorte.")
+
+        # A mascara vale ainda mais aqui do que no tracker: a ROI da calibracao
+        # e 4x maior em area, entao a chance de conter um defeito e 4x maior, e
+        # a exposicao mais longa deixa a corrente escura no seu pior. Um pixel
+        # quente dentro da abertura entraria no centroide que define a matriz.
+        mascara_pixels = diagnostico.mascara_gravada()
+        if mascara_pixels is not None:
+            foco.definir_mascara_pixels_ruins(mascara_pixels, (actual_x, actual_y))
+            print(
+                f"Mascara de pixels ruins: {int(mascara_pixels.sum())} defeitos, "
+                f"ancorada na ROI ({actual_x}, {actual_y})."
+            )
+        else:
+            print("Mascara de pixels ruins: ausente.")
         initial_position = read_altaz()
         initial_az, initial_alt = initial_position
         summary.update(initial_az_deg=initial_az, initial_alt_deg=initial_alt,
