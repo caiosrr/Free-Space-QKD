@@ -17,7 +17,7 @@
     "viewer-meta", "live-frame", "beacon-overlay", "camera-label",
     "measurement-rate", "coordinates", "sigma",
     "radial-error", "radial-metric",
-    "scale", "scale-rest", "tick-rest", "tick-wake", "pointer",
+    "scale", "tick-rest", "tick-wake", "scale-bar",
     "error-x", "error-y", "sigma-inline", "state-detail",
     "actuation", "mount-command", "angular-error", "mount-offset",
     "quality", "exposure", "calibration",
@@ -185,24 +185,23 @@
     desenharVisor(s);
   }
 
-  // escala com marcas, no lugar de uma barra de progresso
+  // barra crescente sobre trilho, com as marcas de repouso e retomada fixas
   function desenharEscala(s) {
     const rest = s.hold_enter_radius_px || 1;
     const wake = s.hold_exit_radius_px || 2;
     const max = Math.max(wake * 1.75, 3.5);
     const pos = (v) => `${Math.max(0, Math.min(100, (v / max) * 100))}%`;
 
-    ui["scale-rest"].style.left = "0";
-    ui["scale-rest"].style.width = pos(rest);
     ui["tick-rest"].style.left = pos(rest);
     ui["tick-rest"].firstElementChild.textContent = `${fmt(rest, 1)} repouso`;
     ui["tick-wake"].style.left = pos(wake);
     ui["tick-wake"].firstElementChild.textContent = `${fmt(wake, 1)} retoma`;
 
     const v = s.radial_error_px;
-    ui["pointer"].style.left = v == null || !isFinite(v) ? "0%" : pos(v);
-    ui["pointer"].style.borderTopColor =
-      v == null ? tone("--ink-3") : v <= rest ? tone("--rest") : v <= wake ? tone("--sodium") : tone("--fault");
+    const semLeitura = v == null || !isFinite(v);
+    ui["scale-bar"].style.width = semLeitura ? "0%" : pos(v);
+    ui["scale-bar"].style.backgroundColor =
+      semLeitura ? tone("--ink-3") : v <= rest ? tone("--rest") : v <= wake ? tone("--sodium") : tone("--fault");
   }
 
   // ── visor ─────────────────────────────────────────────────────────

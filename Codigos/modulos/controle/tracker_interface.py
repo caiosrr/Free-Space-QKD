@@ -123,7 +123,12 @@ class TrackerDisplay:
                         "radial_error_px": (
                             radial_error if state["has_signal"] else None
                         ),
-                        "hold_enter_radius_px": HOLD_ENTER_RADIUS_PX,
+                        # O raio ATIVO, nao a constante: com o A/B ligado ele
+                        # alterna durante a sessao e a marca de repouso do
+                        # painel precisa acompanhar.
+                        "hold_enter_radius_px": (
+                            state.get("hold_enter_radius_px") or HOLD_ENTER_RADIUS_PX
+                        ),
                         "hold_exit_radius_px": HOLD_EXIT_RADIUS_PX,
                         "recovery_target_frames": TEMPORAL_RECOVERY_VALID_FRAMES,
                         # Escala fisica e rotulos: o painel mostra o erro em
