@@ -297,6 +297,7 @@ def escolher_referencia_tracker() -> AlvoAlinhamento:
     selection = foco_temp.escolher_ilha_manualmente(
         capture_frame(EXPOSURE_SECONDS),
         max_jump_px=TRACKER_MAX_SPOT_JUMP_PX,
+        recapturar=lambda: capture_frame(EXPOSURE_SECONDS),
     )
     print(
         "Ilha selecionada: "

@@ -890,6 +890,8 @@ def _escolher_candidato_no_recorte(
                 state["threshold"] = min(0.90, state["threshold"] + 0.02)
                 recalculate()
             if key in (ord("r"), ord("R")):
+                # Devolve o controle a escolher_ilha_manualmente, que recaptura
+                # quando sabe como, e reabre o recorte.
                 return None
             if key == 27:
                 raise KeyboardInterrupt("Selecao manual cancelada.")
@@ -920,8 +922,16 @@ def escolher_ilha_manualmente(
     frame: np.ndarray,
     threshold_percent: float | None = None,
     max_jump_px: float = 95.0,
+    recapturar=None,
 ) -> dict:
-    """Recorta a busca, mostra as ilhas locais e trava a que o usuario clicar."""
+    """Recorta a busca, mostra as ilhas locais e trava a que o usuario clicar.
+
+    ``recapturar`` e uma funcao sem argumentos que devolve um frame novo. Quando
+    informada, a tecla R alem de refazer o recorte tambem CAPTURA DE NOVO. Sem
+    ela a selecao inteira acontece sobre um unico frame congelado, e basta esse
+    frame ter pego uma cintilacao, um aviao ou um instante de turbulencia forte
+    para a ilha travada nascer torta, sem o operador ter como pedir outro.
+    """
     frame_gray = _as_gray_float(frame)
     threshold = DUAL_THRESHOLD_PERCENT if threshold_percent is None else threshold_percent
     while True:
@@ -930,6 +940,11 @@ def escolher_ilha_manualmente(
         if result is not None:
             candidate, candidates, threshold = result
             break
+        if recapturar is not None:
+            novo = recapturar()
+            if novo is not None:
+                frame_gray = _as_gray_float(novo)
+                print("Frame recapturado.")
 
     signature = _lock_manual_candidate(
         candidate,
@@ -939,6 +954,9 @@ def escolher_ilha_manualmente(
     return {
         "x_px": float(candidate["x_cm"]),
         "y_px": float(candidate["y_cm"]),
+        # O frame em que a escolha realmente aconteceu. Com R ele pode nao ser
+        # o que entrou na funcao, e quem chama precisa medir neste.
+        "frame": frame_gray,
         "selection_roi": {
             "start_x": int(search_roi[0]),
             "start_y": int(search_roi[1]),

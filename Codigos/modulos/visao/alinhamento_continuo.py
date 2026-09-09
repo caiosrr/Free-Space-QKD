@@ -268,7 +268,11 @@ def executar(foco) -> None:
         selecao_manual = foco.escolher_ilha_manualmente(
             frame,
             max_jump_px=MAX_SALTO_ILHA_PX,
+            recapturar=lambda: foco.capture_frame(foco.EXPOSURE_SECONDS, light=True),
         )
+        # A selecao pode ter recapturado com R; o centro de massa tem de sair
+        # do frame que o operador realmente viu, nao do primeiro.
+        frame = selecao_manual.get("frame", frame)
         cm = foco.centro_massa(frame)
         if cm is None:
             raise RuntimeError("A ilha selecionada nao foi confirmada no frame inicial.")

@@ -48,7 +48,12 @@
     const pad = (n) => String(n).padStart(2, "0");
     return `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
   };
-  const setTone = (el, kind) => { el.className = el.className.replace(/\bis-\w+/g, "").trim() + ` is-${kind}`; };
+  // kind nulo apenas limpa a cor: um valor sem leitura semantica (CNR ausente,
+  // por exemplo) nao deve herdar a cor do estado anterior.
+  const setTone = (el, kind) => {
+    const base = el.className.split(" ").filter((c) => c && !c.startsWith("is-")).join(" ");
+    el.className = kind ? `${base} is-${kind}` : base;
+  };
 
   function resizeCanvas(canvas) {
     const rect = canvas.getBoundingClientRect();
@@ -167,7 +172,13 @@
     ui["quality"].textContent = fase + razoes;
     setTone(ui["quality"], fase === "normal" ? "rest" : s.target_present ? "act" : "fault");
 
-    ui["exposure"].textContent = `${fmt(s.exposure_us, 0)} µs`;
+    // Exposicao e CNR juntos: sozinho, nenhum dos dois diz se o beacon esta
+    // bem exposto. 740 us pode ser folgado ou apertado dependendo do contraste
+    // que ele entrega, e e o par que o operador precisa ler de relance.
+    const cnr = Number.isFinite(s.auto_exposure_cnr) ? s.auto_exposure_cnr : null;
+    ui["exposure"].textContent =
+      `${fmt(s.exposure_us, 0)} µs` + (cnr === null ? "" : ` · CNR ${cnr.toFixed(1)}`);
+    setTone(ui["exposure"], cnr === null ? null : cnr < 8 ? "fault" : "rest");
     ui["calibration"].textContent = s.calibration_name || "contínua";
     ui["last-update"].textContent = `atualizado ${new Date().toLocaleTimeString("pt-BR")}`;
 

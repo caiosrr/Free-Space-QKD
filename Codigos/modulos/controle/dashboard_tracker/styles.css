@@ -23,9 +23,13 @@
   --rule:      #2b2318;
   --rule-soft: #1d1810;
 
-  --ink:   #f1e7d6;
-  --ink-2: #a8977c;
-  --ink-3: #6d5e48;
+  /* Contraste medido contra --ground (#0b0906). Os tons antigos (#a8977c e
+     #6d5e48) sumiam num monitor de bancada visto por AnyDesk, que reamostra a
+     tela e come justamente o contraste baixo. Rotulo pode ser discreto; DADO,
+     nao. */
+  --ink:   #faf3e6;
+  --ink-2: #cbbb9e;
+  --ink-3: #94836a;
 
   /* sodio e a cor primaria; o resto e semantico e usado com parcimonia */
   --sodium: #f0a830;
@@ -43,14 +47,20 @@
 
 html, body {
   margin: 0;
-  min-width: 1150px;
+  min-width: 1240px;
   background: var(--ground);
 }
+
+/* Uma so alavanca de tamanho. O painel roda numa maquina de bancada olhada por
+   AnyDesk, que reduz a tela inteira: o que na mesa parecia confortavel chega
+   pequeno do outro lado. Tudo que e texto sai daqui, entao mexer neste valor
+   escala a pagina inteira sem quebrar o arranjo. */
+html { font-size: 16px; }
 
 body {
   color: var(--ink);
   font-family: var(--sans);
-  font-size: 13px;
+  font-size: 1rem;
   line-height: 1.4;
   -webkit-font-smoothing: antialiased;
 }
@@ -62,7 +72,7 @@ body {
   display: block;
   color: var(--ink-3);
   font-family: var(--serif);
-  font-size: 12px;
+  font-size: .875rem;
   font-style: italic;
   letter-spacing: .01em;
 }
@@ -88,22 +98,22 @@ body {
 .masthead h1 {
   margin: 0;
   font-family: var(--serif);
-  font-size: 19px;
+  font-size: 1.35rem;
   font-weight: 400;
   letter-spacing: .01em;
 }
 .masthead h1 b { font-weight: 600; }
-.masthead .route { color: var(--ink-2); font-family: var(--mono); font-size: 12px; letter-spacing: .06em; }
+.masthead .route { color: var(--ink-2); font-family: var(--mono); font-size: .875rem; letter-spacing: .06em; }
 .masthead .route em { color: var(--ink-3); font-style: normal; }
 
 .masthead .clock { margin-left: auto; display: flex; align-items: baseline; gap: var(--s5); }
 .masthead .clock > div { display: flex; align-items: baseline; gap: var(--s2); }
-.masthead .clock .num { font-size: 14px; }
+.masthead .clock .num { font-size: 1.15rem; }
 
 /* a palavra do estado carrega a cor; sem pilula, sem caixa */
 #system-state {
   font-family: var(--serif);
-  font-size: 17px;
+  font-size: 1.3rem;
   font-style: italic;
   color: var(--ink-2);
 }
@@ -113,7 +123,7 @@ body {
 main {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(520px, 1.5fr) minmax(360px, .82fr);
+  grid-template-columns: minmax(520px, 1.5fr) minmax(410px, .86fr);
   gap: var(--s5);
   padding: var(--s4) var(--s5);
 }
@@ -125,8 +135,8 @@ main {
 
 .viewer { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: var(--s2); }
 .viewer-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s4); }
-.viewer-head h2 { margin: 0; font-family: var(--serif); font-size: 15px; font-weight: 400; }
-.viewer-head .num { color: var(--ink-3); font-size: 11px; }
+.viewer-head h2 { margin: 0; font-family: var(--serif); font-size: 1.1rem; font-weight: 400; }
+.viewer-head .num { color: var(--ink-2); font-size: .85rem; }
 
 .frame {
   position: relative;
@@ -138,7 +148,7 @@ main {
 #live-frame { width: 100%; height: 100%; display: block; object-fit: contain; image-rendering: pixelated; }
 #beacon-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 
-.corner { position: absolute; z-index: 2; color: var(--ink-3); font: 11px var(--mono); letter-spacing: .04em; }
+.corner { position: absolute; z-index: 2; color: var(--ink-2); font: .8rem var(--mono); letter-spacing: .04em; }
 .corner.tl { top: 9px; left: 11px; }
 .corner.tr { top: 9px; right: 11px; display: flex; align-items: center; gap: 6px; }
 .corner.bl { bottom: 9px; left: 11px; }
@@ -146,15 +156,15 @@ main {
 .live-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--sodium); animation: breathe 3s ease-in-out infinite; }
 @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 
-.viewer-foot { display: flex; gap: var(--s5); color: var(--ink-2); font-size: 12px; }
+.viewer-foot { display: flex; gap: var(--s5); color: var(--ink-2); font-size: .9rem; }
 .viewer-foot b { color: var(--ink); font-family: var(--mono); font-weight: 500; }
 
 /* ── GRAFICO: sem moldura, direto no fundo ─────────────────────────── */
 
 .chart { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--s2); border-top: 1px solid var(--rule); padding-top: var(--s3); }
 .chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s4); }
-.chart-head h2 { margin: 0; font-family: var(--serif); font-size: 15px; font-weight: 400; }
-.keys { display: flex; gap: var(--s4); font: 12px var(--mono); }
+.chart-head h2 { margin: 0; font-family: var(--serif); font-size: 1.1rem; font-weight: 400; }
+.keys { display: flex; gap: var(--s4); font: .9rem var(--mono); }
 .keys span::before { content: ""; display: inline-block; width: 15px; height: 2px; margin: 0 6px 4px 0; background: currentColor; }
 .keys .kx { color: var(--sodium); }
 .keys .ky { color: var(--rest); }
@@ -167,41 +177,41 @@ main {
 .headline .value b {
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
-  font-size: 58px;
+  font-size: 4rem;
   font-weight: 500;
   line-height: .9;
   letter-spacing: -.03em;
   color: var(--ink);
 }
-.headline .value i { color: var(--ink-2); font-size: 16px; font-style: normal; }
-.headline .value em { margin-left: auto; color: var(--ink-3); font-family: var(--mono); font-size: 12px; font-style: normal; }
+.headline .value i { color: var(--ink-2); font-size: 1.2rem; font-style: normal; }
+.headline .value em { margin-left: auto; color: var(--ink-3); font-family: var(--mono); font-size: .9rem; font-style: normal; }
 
 /* escala com marcas, como face de instrumento — nao uma barra de progresso */
 .scale { position: relative; height: 26px; margin-top: var(--s1); }
 .scale-line { position: absolute; left: 0; right: 0; top: 8px; height: 1px; background: var(--rule); }
 .scale-span { position: absolute; top: 8px; height: 1px; background: var(--rest); }
 .tick { position: absolute; top: 3px; width: 1px; height: 11px; background: var(--rule); }
-.tick b { position: absolute; top: 13px; left: 0; transform: translateX(-50%); color: var(--ink-3); font: 10px var(--mono); font-weight: 400; white-space: nowrap; }
+.tick b { position: absolute; top: 13px; left: 0; transform: translateX(-50%); color: var(--ink-3); font: .8rem var(--mono); font-weight: 400; white-space: nowrap; }
 .pointer { position: absolute; top: 0; width: 0; height: 0; margin-left: -5px; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 7px solid var(--sodium); transition: left .35s ease; }
 
 .axes { display: flex; gap: var(--s5); padding-top: var(--s3); border-top: 1px solid var(--rule-soft); }
 .axes > div { display: flex; align-items: baseline; gap: var(--s2); }
-.axes .num { font-size: 15px; }
+.axes .num { font-size: 1.25rem; }
 .axes .kx { color: var(--sodium); }
 .axes .ky { color: var(--rest); }
 
 .note { display: grid; gap: 3px; padding-top: var(--s3); border-top: 1px solid var(--rule-soft); }
-.note p { margin: 0; color: var(--ink-2); font-size: 12.5px; }
+.note p { margin: 0; color: var(--ink); font-size: .95rem; }
 
 /* lista de definicao: rotulo a esquerda, valor a direita, fio entre linhas */
 .readings { display: grid; gap: 0; padding-top: var(--s3); border-top: 1px solid var(--rule-soft); }
-.readings > div { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s4); padding: 6px 0; border-bottom: 1px solid var(--rule-soft); }
+.readings > div { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s4); padding: 8px 0; border-bottom: 1px solid var(--rule-soft); }
 .readings > div:last-child { border-bottom: 0; }
-.readings b { color: var(--ink-2); font-family: var(--mono); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; text-align: right; }
+.readings b { color: var(--ink); font-family: var(--mono); font-size: .95rem; font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
 
 /* ── RODAPE ────────────────────────────────────────────────────────── */
 
-.colophon { display: flex; align-items: baseline; gap: var(--s3); padding: var(--s3) var(--s5); border-top: 1px solid var(--rule); color: var(--ink-3); font-size: 11.5px; }
+.colophon { display: flex; align-items: baseline; gap: var(--s3); padding: var(--s3) var(--s5); border-top: 1px solid var(--rule); color: var(--ink-3); font-size: .85rem; }
 .colophon .label { display: inline; }
 .colophon .num { margin-left: auto; }
 
@@ -216,6 +226,6 @@ main {
 }
 
 @media (max-width: 1420px) {
-  main { grid-template-columns: minmax(460px, 1.35fr) minmax(340px, .8fr); gap: var(--s4); }
-  .headline .value b { font-size: 48px; }
+  main { grid-template-columns: minmax(440px, 1.3fr) minmax(390px, .84fr); gap: var(--s4); }
+  .headline .value b { font-size: 3.2rem; }
 }

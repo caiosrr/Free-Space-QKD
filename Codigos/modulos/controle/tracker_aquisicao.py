@@ -212,16 +212,12 @@ def executar_aquisicao(
         )
         exposure_event = ""
         if exposure_decision.changed:
-            previous_exposure_us = current_exposure_us
             current_exposure_us = exposure_decision.exposure_us
             exposure_adjustments += 1
             exposure_event = f"autoexposicao_{exposure_decision.reason}"
-            print(
-                f"\nAutoexposicao: {previous_exposure_us:.0f} -> "
-                f"{current_exposure_us:.0f} us | "
-                f"CNR={exposure_decision.cnr_median or 0.0:.1f} | "
-                f"fundo={exposure_decision.background_percentile:.1f}"
-            )
+            # Sem print: a exposicao muda dezenas de vezes por sessao e o
+            # terminal e onde o operador acompanha o que exige acao. Exposicao,
+            # CNR e motivo aparecem ao vivo no painel e ficam no CSV.
         if candidate_valid:
             if quality.accepted:
                 last_trusted_center = (float(instant_center[0]), float(instant_center[1]))

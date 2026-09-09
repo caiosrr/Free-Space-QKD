@@ -159,7 +159,19 @@ AUTO_EXPOSURE_LOSS_SEARCH_RETURN_SECONDS = 20.0
 # exposicao precisa CAIR -- ficaria sem para onde ir, encurtando justamente a
 # janela que se quer caracterizar.
 AUTO_EXPOSURE_MIN_US = 200.0
-AUTO_EXPOSURE_MAX_US = 18000.0
+# O teto tambem e trava de seguranca, nao um alvo: em operacao normal o
+# controlador vive muito abaixo dele (737-817 us a noite inteira em 09/09). Ele
+# so importa nos extremos -- beacon fraco, tempo ruim, ceu carregado -- e ali um
+# teto baixo tira a unica saida que existe.
+#
+# O custo de subir e taxa de quadros, e ele e pequeno: medido em 09/09, o
+# periodo do laco fica em 28 ms constante de 750 a 7500 us de exposicao, ou
+# seja, quem manda e a leitura do sensor, nao a integracao. Em 60 ms de
+# exposicao o periodo iria para ~88 ms, ainda ~11 Hz, muito acima dos 2 Hz que a
+# media temporal de 2 s exige (TEMPORAL_MIN_VALID_FRAMES em TEMPORAL_WINDOW).
+# A rampa da busca tambem continua cabendo: de 200 a 60000 us sao 19 degraus de
+# 1,35x a cada 3 s, cerca de 57 s, contra os 600 s do limite de perda.
+AUTO_EXPOSURE_MAX_US = 60000.0
 AUTO_EXPOSURE_CNR_LOW = 8.0
 AUTO_EXPOSURE_CNR_HIGH = 16.0
 # Piso ABSOLUTO de sinal, em contagens acima do fundo local. O CNR e uma medida
