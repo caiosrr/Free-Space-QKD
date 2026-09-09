@@ -268,6 +268,13 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
         fine_az.reset()
         fine_alt.reset()
         slow_bias.reset()
+        # A janela longa tambem: depois de uma parada ela estaria cheia do erro
+        # ANTERIOR ao evento. Numa ocultacao de navio, que agora pode durar
+        # minutos, ela mandaria corrigir para onde o feixe estava, nao para onde
+        # esta. Os quatro pontos que chamam repousar sao raros (perda de sinal,
+        # dois freios e a acomodacao de cada pulso), entao isto nao impede o
+        # estimador de aquecer em operacao normal.
+        slow_bias_longo.reset()
         directional_error.reset()
         correction_gate.reset()
 
@@ -589,11 +596,10 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
 
                 if cmd_az == 0.0 and cmd_alt == 0.0 and pulse_cycle.confirm_stopped(time.perf_counter()):
                     # Nao reutilizar medianas/derivadas anteriores ao movimento.
+                    # repousar() ja zera a janela longa. Sem isso ela ainda
+                    # estaria cheia do erro anterior a correcao e mandaria
+                    # corrigir de novo o que ja foi corrigido: catraca.
                     repousar("acomodacao_pos_movimento")
-                    # A janela longa ainda esta cheia do erro ANTERIOR a
-                    # correcao. Sem zerar, ela mandaria corrigir de novo o que
-                    # ja foi corrigido, e o mount entraria em catraca.
-                    slow_bias_longo.reset()
                     target_cmd_az = target_cmd_alt = 0.0
                     err_az = err_alt = 0.0
                     prev_radius_px = prev_dx_filt_px = prev_dy_filt_px = None
