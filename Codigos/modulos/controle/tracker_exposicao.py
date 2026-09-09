@@ -19,6 +19,8 @@ from modulos.configuracoes.tracker import (
     AUTO_EXPOSURE_MIN_TARGET_LEVEL,
     AUTO_EXPOSURE_MIN_TRUSTED_FRACTION,
     AUTO_EXPOSURE_LOSS_SEARCH_INTERVAL_SECONDS,
+    AUTO_EXPOSURE_LOSS_SEARCH_BACKGROUND_LIMIT,
+    AUTO_EXPOSURE_LOSS_SEARCH_RETURN_SECONDS,
     AUTO_EXPOSURE_LOSS_SEARCH_SECONDS,
     AUTO_EXPOSURE_LOSS_SEARCH_STEP_FRACTION,
     AUTO_EXPOSURE_MIN_US,
@@ -183,6 +185,8 @@ class AutoExposureController:
         loss_search_s: float = AUTO_EXPOSURE_LOSS_SEARCH_SECONDS,
         loss_search_step: float = AUTO_EXPOSURE_LOSS_SEARCH_STEP_FRACTION,
         loss_search_interval_s: float = AUTO_EXPOSURE_LOSS_SEARCH_INTERVAL_SECONDS,
+        loss_search_background_limit: float = AUTO_EXPOSURE_LOSS_SEARCH_BACKGROUND_LIMIT,
+        loss_search_return_s: float = AUTO_EXPOSURE_LOSS_SEARCH_RETURN_SECONDS,
         started_at: float = 0.0,
     ):
         self.enabled = bool(enabled)
@@ -206,6 +210,8 @@ class AutoExposureController:
         self.loss_search_s = float(loss_search_s)
         self.loss_search_step = float(loss_search_step)
         self.loss_search_interval_s = float(loss_search_interval_s)
+        self.loss_search_background_limit = float(loss_search_background_limit)
+        self.loss_search_return_s = float(loss_search_return_s)
         self.current_exposure_us = float(
             np.clip(initial_exposure_us, self.minimum_us, self.maximum_us)
         )
@@ -221,6 +227,9 @@ class AutoExposureController:
         self._untrusted_safety_used = False
         self._last_loss_search_t = float(started_at)
         self._loss_search_active = False
+        self._loss_search_from_us = None
+        self._loss_search_ceiling_t = None
+        self._loss_search_exhausted = False
 
     def _purge(self, now: float) -> None:
         cutoff = now - self.history_seconds
@@ -323,6 +332,18 @@ class AutoExposureController:
             reason=reason,
         )
 
+    def _encerrar_busca(self, *, exhausted: bool) -> None:
+        """Fecha a busca por alvo ausente.
+
+        ``exhausted`` marca a hipotese como refutada: a busca so volta a rodar
+        depois que um alvo confiavel reaparecer. Sem isso ela reiniciaria no
+        tick seguinte e a rampa viraria um ciclo sobe-desce sem fim.
+        """
+        self._loss_search_active = False
+        self._loss_search_from_us = None
+        self._loss_search_ceiling_t = None
+        self._loss_search_exhausted = bool(exhausted)
+
     def _rollback(self, now: float, summary: dict) -> ExposureDecision:
         previous = float(self._last_change_previous_exposure)
         changed = abs(previous - self.current_exposure_us) >= 1.0
@@ -421,27 +442,70 @@ class AutoExposureController:
             # cria um impasse, porque so uma exposicao maior traria o alvo de
             # volta. Subir em degraus e seguro: sem alvo o mount ja esta parado,
             # e a cena escura garante que nao estamos fugindo de saturacao.
+            #
+            # A busca e uma HIPOTESE COM PRAZO, nao uma rampa livre: tem teto
+            # relativo ao ponto de partida e desfaz o proprio caminho quando
+            # falha. Veja o comentario de AUTO_EXPOSURE_LOSS_SEARCH_MAX_GROWTH.
             if (
                 not target_present
                 and scene_ready
-                and not unsafe_scene
-                and summary["background"] <= self.background_increase_limit
+                and not self._loss_search_exhausted
                 and (self._loss_search_active or untrusted_s >= self.loss_search_s)
                 and now - self._last_loss_search_t >= self.loss_search_interval_s
-                and self.current_exposure_us < self.maximum_us
             ):
+                if self._loss_search_from_us is None:
+                    self._loss_search_from_us = self.current_exposure_us
+                    self._loss_search_ceiling_t = None
                 # Cada mudanca zera _untrusted_since; sem esta trava a rampa
                 # esperaria loss_search_s de novo a cada degrau e chegaria tarde.
                 self._loss_search_active = True
-                self._last_loss_search_t = now
-                return self._apply_factor(
-                    1.0 + self.loss_search_step,
-                    reason="busca_alvo_ausente_cena_escura",
-                    summary=summary,
-                    allow_rollback=False,
-                    now=now,
-                    max_fraction=self.loss_search_step,
+                fator = 1.0 + self.loss_search_step
+                # O fundo sobe junto com a exposicao. Olhar o fundo de AGORA
+                # deixa a rampa avancar ate estourar a propria cena em que ela
+                # procura o alvo, e ai nao ha contraste em lugar nenhum do
+                # quadro. Projetamos o fundo do degrau seguinte.
+                fundo_previsto = summary["background"] * fator
+                cena_no_limite = unsafe_scene or (
+                    fundo_previsto > self.loss_search_background_limit
                 )
+                if not cena_no_limite and self.current_exposure_us < self.maximum_us:
+                    self._last_loss_search_t = now
+                    self._loss_search_ceiling_t = None
+                    return self._apply_factor(
+                        fator,
+                        reason="busca_alvo_ausente_cena_escura",
+                        summary=summary,
+                        allow_rollback=False,
+                        now=now,
+                        max_fraction=self.loss_search_step,
+                    )
+                # A busca acabou sem reencontrar o alvo. O que fazer com a
+                # exposicao depende de QUEM parou a rampa.
+                if not cena_no_limite:
+                    # Parou no teto do hardware com a cena ainda escura. Nada foi
+                    # estragado, e uma exposicao alta e o melhor lugar para
+                    # esperar um beacon fraco: fica onde esta.
+                    self._encerrar_busca(exhausted=True)
+                    return self._decision(summary, reason="busca_alvo_ausente_no_teto")
+                # Parou porque a propria rampa clareou a cena. Damos um tempo no
+                # topo, porque o alvo pode reaparecer no degrau mais alto, e
+                # entao a desfazemos: uma cena estourada nao devolve o beacon,
+                # so impede qualquer reaquisicao daqui em diante.
+                if self._loss_search_ceiling_t is None:
+                    self._loss_search_ceiling_t = now
+                elif now - self._loss_search_ceiling_t >= self.loss_search_return_s:
+                    partida_us = self._loss_search_from_us
+                    self._encerrar_busca(exhausted=True)
+                    if partida_us and abs(partida_us - self.current_exposure_us) >= 1.0:
+                        self._last_loss_search_t = now
+                        return self._apply_factor(
+                            partida_us / self.current_exposure_us,
+                            reason="busca_alvo_ausente_sem_exito",
+                            summary=summary,
+                            allow_rollback=False,
+                            now=now,
+                            max_fraction=1.0,
+                        )
             reason = (
                 "congelada_anomalia_optica"
                 if target_present
@@ -451,7 +515,7 @@ class AutoExposureController:
 
         self._untrusted_since = None
         self._untrusted_safety_used = False
-        self._loss_search_active = False
+        self._encerrar_busca(exhausted=False)
         if unsafe_scene and now - self._last_safety_t >= self.safety_update_s:
             self._last_safety_t = now
             return self._apply_factor(

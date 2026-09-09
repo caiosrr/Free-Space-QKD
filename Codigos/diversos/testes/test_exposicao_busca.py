@@ -211,3 +211,101 @@ class PisoDeSinalTests(unittest.TestCase):
         )
 
         self.assertGreater(AUTO_EXPOSURE_MIN_TARGET_LEVEL, AUTO_EXPOSURE_CNR_HIGH)
+
+
+class BuscaNaoPodeEstourarACenaTests(unittest.TestCase):
+    """Regressao da sessao 2026-09-09_06-07-49.
+
+    A busca criada para o impasse de 06/09 tinha o defeito espelhado. Ela olhava
+    o fundo de AGORA para decidir se podia subir, mas a rampa e multiplicativa e
+    leva o fundo junto: partindo de 764 us com fundo 23, oito degraus levaram a
+    exposicao a 7584 us e o fundo a 255 contagens em 23 s. Com o quadro inteiro
+    saturado o alvo nao tinha contraste em lugar nenhum, e a reducao nao roda sem
+    alvo confiavel: a exposicao ficou presa no topo por 4 min ate a sessao morrer
+    no limite de 90 s. Antes o impasse era no piso; depois passou a ser no teto.
+
+    Estes testes usam uma cena cujo fundo ESCALA com a exposicao, que e o que os
+    testes anteriores nao faziam: com fundo fixo em 2 contagens nenhuma rampa
+    estoura nada e o defeito passava despercebido.
+    """
+
+    FUNDO_POR_US = 23.0 / 764.0  # medido na sessao: 23 contagens a 764 us
+
+    def rodar(self, ctrl, *, ciclos, passo=0.1, inicio=0.0, presente=False):
+        """Alimenta o controlador com a cena que a exposicao ATUAL produziria."""
+        historico = []
+        for i in range(ciclos):
+            fundo = min(255.0, ctrl.current_exposure_us * self.FUNDO_POR_US)
+            decisao = ctrl.observe(
+                inicio + i * passo,
+                cena(fundo=fundo),
+                target_center=(32.0, 32.0) if presente else None,
+                target_diameter_px=8.0,
+                trusted_target=False,
+                target_present=presente,
+            )
+            historico.append((ctrl.current_exposure_us, fundo, decisao.reason))
+        return historico
+
+    def test_a_rampa_nao_satura_a_cena_que_ela_vasculha(self):
+        from modulos.configuracoes.tracker import (
+            AUTO_EXPOSURE_LOSS_SEARCH_BACKGROUND_LIMIT,
+        )
+
+        ctrl = AutoExposureController(764.0, enabled=True, started_at=0.0)
+        historico = self.rodar(ctrl, ciclos=600)
+        fundo_maximo = max(fundo for _, fundo, _ in historico)
+        self.assertLess(
+            fundo_maximo,
+            AUTO_EXPOSURE_LOSS_SEARCH_BACKGROUND_LIMIT * 1.35,
+            f"a busca levou o fundo a {fundo_maximo:.0f} contagens; com a cena "
+            "estourada nenhuma reaquisicao e possivel",
+        )
+        self.assertLess(fundo_maximo, 200.0, "cena praticamente saturada")
+
+    def test_a_busca_desfaz_a_rampa_quando_falha(self):
+        """A busca e uma hipotese com prazo, nao um caminho so de ida."""
+        ctrl = AutoExposureController(764.0, enabled=True, started_at=0.0)
+        historico = self.rodar(ctrl, ciclos=1500)
+        pico = max(exp for exp, _, _ in historico)
+        self.assertGreater(pico, 764.0, "a busca precisa ter subido de fato")
+        self.assertIn("busca_alvo_ausente_sem_exito", [r for _, _, r in historico])
+        self.assertAlmostEqual(
+            ctrl.current_exposure_us, 764.0, delta=1.0,
+            msg=f"apos falhar a busca subiu ate {pico:.0f} us e parou em "
+                f"{ctrl.current_exposure_us:.0f} us, em vez de voltar a 764 us",
+        )
+
+    def test_a_busca_nao_reinicia_sozinha_depois_de_falhar(self):
+        """Senao a rampa vira um ciclo sobe-desce que nunca termina."""
+        ctrl = AutoExposureController(764.0, enabled=True, started_at=0.0)
+        historico = self.rodar(ctrl, ciclos=3000)
+        retornos = [r for _, _, r in historico].count("busca_alvo_ausente_sem_exito")
+        self.assertEqual(
+            retornos, 1,
+            f"a busca falhou e recomecou {retornos} vezes; deve esperar um alvo "
+            "confiavel antes de tentar de novo",
+        )
+        self.assertAlmostEqual(ctrl.current_exposure_us, 764.0, delta=1.0)
+
+    def test_alvo_confiavel_rearma_a_busca(self):
+        """Depois de reencontrar o alvo, uma nova perda merece nova tentativa."""
+        ctrl = AutoExposureController(764.0, enabled=True, started_at=0.0)
+        self.rodar(ctrl, ciclos=1500)
+        self.assertTrue(ctrl._loss_search_exhausted)
+        ctrl.observe(
+            200.0, cena(fundo=23.0, pico=60.0),
+            target_center=(32.0, 32.0), target_diameter_px=8.0,
+            trusted_target=True, target_present=True,
+        )
+        self.assertFalse(ctrl._loss_search_exhausted)
+
+    def test_cena_escura_ainda_varre_a_faixa_inteira(self):
+        """A correcao nao pode desfazer o conserto de 06/09.
+
+        Numa noite de verdade o fundo e de poucas contagens e a rampa continua
+        podendo ir ate o teto: o limite e o fundo produzido, nao a exposicao.
+        """
+        ctrl = AutoExposureController(1000.0, enabled=True, started_at=0.0)
+        alimentar(ctrl, cena(fundo=2.0), presente=False, confiavel=False, ciclos=4000)
+        self.assertEqual(ctrl.current_exposure_us, ctrl.maximum_us)

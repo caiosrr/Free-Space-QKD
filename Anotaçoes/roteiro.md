@@ -348,3 +348,118 @@ Com a calibração usada no enlace de 7 km:
 Esses valores representam uma estimativa de erro de apontamento. A perda óptica
 real também depende da divergência do feixe, abertura, alinhamento entre os
 canais e acoplamento na fibra.
+
+## Sessão 2026-09-09 06:07–09:09 (3h02 de 5h previstas)
+
+Primeira sessão longa com o piso de sinal, a busca por alvo ausente e o modo
+sombra ativos ao mesmo tempo. Ela atravessou o amanhecer inteiro sem perder o
+beacon e morreu depois, por um defeito da própria busca.
+
+### O que funcionou
+
+- **Amanhecer:** de 06:07 às 08:52 a detecção ficou em 100%. O fundo subiu de 7
+  para 40 contagens com o sol e o pico do beacon ficou parado em 29–33
+  contagens, com CNR entre 14 e 19. A autoexposição segurou tudo isso mexendo
+  muito pouco: 737–817 µs o tempo todo.
+- **Piso de sinal:** a exposição nunca desceu abaixo de 737 µs
+  (`piso_de_sinal_atingido` 217 vezes). Sem ele teria ido para a faixa dos
+  400 µs, onde o contraste era de ~16 contagens — o mesmo regime da sessão de
+  06/09 que morreu.
+- **Ausências curtas:** 18 episódios ≥ 1 s em 3 h, ou **5,9/h**, contra 176/h em
+  06/09. Só 2 deles aconteceram antes do colapso final.
+- **Apontamento:** o mount andou 5 arcsec no total em 3 h. A ilha ficou em torno
+  de (127, 128) e nunca tocou a borda. A perda do beacon **não** foi deriva.
+
+### O que matou a sessão
+
+Às 09:05:11 o beacon sumiu de verdade, com a exposição em 764 µs e o fundo em
+23 contagens (o pico vinha estável em ~30 e simplesmente parou de aparecer).
+Passados os 8 s de espera, a busca por alvo ausente disparou — corretamente,
+pelas regras dela. O problema é o que veio depois:
+
+- A rampa é **multiplicativa e leva o fundo junto com o sinal**. Em 23 s ela
+  subiu 764 → 1031 → 1392 → 1879 → 2537 → 3425 → 4624 → 6242 → 7584 µs, e o
+  fundo foi junto: 23 → 32 → 45 → 57 → 78 → 107 → 141 → 187 → 235 → 255.
+- Com o quadro inteiro em 255 o alvo não tinha contraste em lugar nenhum. As
+  "detecções" a partir das 09:06 são ilhas espúrias num campo branco.
+- A redução de emergência (`reducao_emergencial_cena_saturando`) disparou **uma
+  única vez** (6242 → 5618 µs), porque `_untrusted_safety_used` trava por
+  episódio. A busca imediatamente desfez a correção subindo para 7584 µs.
+- Daí em diante a exposição ficou congelada no topo por 4 minutos: a redução só
+  roda com alvo confiável, e não havia alvo. A sessão morreu no limite de 90 s.
+
+15 das 18 ausências ≥ 1 s da sessão estão espremidas entre 09:05 e 09:08, ou
+seja, **depois** que a rampa começou. A busca não causou a perda inicial, mas
+transformou uma perda recuperável num buraco sem saída e apagou a evidência do
+que estava acontecendo no céu.
+
+Este é o defeito **espelhado** do de 06/09: lá a exposição travava no piso e só
+subir resolveria; aqui ela travou no teto e só descer resolveria. O conserto de
+um criou o outro.
+
+### Correção aplicada
+
+1. **Limite de fundo próprio da busca**
+   (`AUTO_EXPOSURE_LOSS_SEARCH_BACKGROUND_LIMIT = 120`), avaliado sobre o fundo
+   **previsto** do próximo degrau, não sobre o fundo atual. O fundo de agora já
+   é resultado do degrau anterior e sempre chega tarde. É mais baixo que o
+   limite do controle normal (210) de propósito: ali existe um alvo medido, aqui
+   a busca é cega e precisa preservar a margem em que o alvo apareceria.
+2. **A busca vira uma hipótese com prazo.** Se a rampa parou porque clareou a
+   própria cena, ela espera 20 s no topo (o alvo pode voltar no degrau mais
+   alto) e então **desfaz o caminho**, voltando à exposição de onde partiu.
+3. **Se a rampa parou no teto do hardware com a cena ainda escura, ela fica onde
+   está** (`busca_alvo_ausente_no_teto`). Nada foi estragado, e exposição alta é
+   o melhor lugar para esperar um beacon fraco. Isso preserva o conserto de
+   06/09, que é exatamente esse caso.
+4. **Não reinicia sozinha depois de falhar** — só depois que um alvo confiável
+   reaparecer. Sem isso a rampa viraria um ciclo sobe-desce sem fim.
+
+Replay da cena real de hoje pelo controlador corrigido: a rampa para em ~3400 µs
+com o fundo em 103 contagens (cena ainda legível) e volta a 764 µs aos 43 s,
+dentro da janela de 90 s.
+
+Testes em `diversos/testes/test_exposicao_busca.py`, classe
+`BuscaNaoPodeEstourarACenaTests`. O ponto cego dos testes antigos era usar cena
+de fundo fixo em 2 contagens: nenhuma rampa estoura nada assim, e o defeito
+passava despercebido. Os novos usam uma cena cujo fundo **escala com a
+exposição**.
+
+### Modo sombra — primeira safra de dados
+
+94,4% das linhas com estimativa pronta, ao longo de 3 h:
+
+| viés radial (px) | valor |
+|---|---|
+| mediana | 0,733 |
+| p25 / p75 | 0,427 / 1,099 |
+| p90 | 1,550 |
+| máximo | 5,844 |
+
+- Fração do tempo acima de 0,6 px (gatilho da sombra): **61,1%**
+- Fração do tempo acima de 1,0 px (`HOLD_ENTER_RADIUS_PX` atual): **29,8%**
+- Correções hipotéticas da sombra: 38 (12,5/h)
+- Correções reais executadas: 217 (71,5/h)
+- Erro radial instantâneo: mediana 1,182 px, p90 2,669 px
+- Raio de controle (mediana temporal): 0,888 px
+
+Leitura: existe um viés persistente de ~0,73 px que a zona de repouso de 1,0 px
+deixa passar. Ele é **maior** que o de 06/09 (0,47 px) e de 04/09 (0,60 px), e
+está em 61% do tempo acima do gatilho. As 12,5 correções/h que a sombra pediria
+são um sexto das 71,5/h que o tracker já faz, ou seja, apertar a zona custaria
+pouco em atividade de mount.
+
+Ainda assim, **não apertar ainda**: 0,73 px de viés contra um erro instantâneo
+de mediana 1,18 px significa que o viés é da ordem do próprio ruído de
+turbulência, e a sombra não prova que uma correção o reduziria — só que ele
+existe. O que decide é a distribuição do viés **depois** de uma correção
+hipotética, e para isso a sombra precisa fechar o laço (estimar o efeito, não só
+o erro). Próximo passo natural do modo sombra.
+
+### Pendências que esta sessão não resolve
+
+- Por que o beacon sumiu às 09:05 continua em aberto. Não foi apontamento, não
+  foi deriva, não foi o fundo do céu (o fundo em 764 µs estava em 23 contagens,
+  igual ao das 3 h anteriores). Falta o lado do UFF: o laser continuou ligado?
+- A máscara de pixels ruins ainda foi medida a 18000 µs, não na faixa de
+  operação real (~750 µs). Separar defeito fixo de corrente escura.

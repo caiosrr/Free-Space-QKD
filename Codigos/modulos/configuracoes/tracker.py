@@ -96,6 +96,23 @@ AUTO_EXPOSURE_LOSS_SEARCH_SECONDS = 8.0
 # so dobrava em 64 s, contra os 75 s do limite de perda: chegava tarde demais.
 AUTO_EXPOSURE_LOSS_SEARCH_STEP_FRACTION = 0.35
 AUTO_EXPOSURE_LOSS_SEARCH_INTERVAL_SECONDS = 3.0
+# Fundo maximo que a BUSCA pode produzir, em contagens. Mais baixo que o limite
+# do controle normal (210) de proposito: la existe um alvo medido e sabe-se o
+# que se esta fazendo; aqui a busca e cega e precisa preservar a margem em que
+# o alvo ainda apareceria. A rampa e multiplicativa e leva o fundo junto com o
+# sinal: em 2026-09-09 ela subiu de 764 para 7584 us em 23 s e arrastou o fundo
+# de 23 para 255 contagens. A cena saturou, o alvo perdeu contraste em qualquer
+# ponto do quadro, e a reducao ficou travada porque so roda com alvo confiavel.
+# O tracker morreu dentro do buraco que a propria busca cavou. Com este limite
+# a mesma rampa teria parado perto de 3000 us, com o fundo em ~90 contagens e a
+# cena ainda legivel. O criterio e sobre o fundo PREVISTO do proximo degrau: o
+# fundo de agora ja e resultado do degrau anterior e sempre chega tarde.
+AUTO_EXPOSURE_LOSS_SEARCH_BACKGROUND_LIMIT = 120.0
+# Tempo no teto da busca antes de DESFAZER a rampa. A busca e uma hipotese com
+# prazo: refutada, a exposicao volta ao valor de onde partiu, porque uma cena
+# estourada impede qualquer reaquisicao, inclusive a do operador olhando as
+# imagens de evento.
+AUTO_EXPOSURE_LOSS_SEARCH_RETURN_SECONDS = 20.0
 # O piso e uma trava de seguranca, nao um alvo de projeto: o controlador so
 # desce ate o CNR sair da faixa e para sozinho. Com 1000 us ele ja encostava no
 # piso a noite, de ceu escuro, e ao amanhecer -- quando o fundo sobe e a
@@ -260,6 +277,9 @@ if not (
     and SHADOW_BIAS_TRIGGER_PX > 0
     and 0 < AUTO_EXPOSURE_LOSS_SEARCH_STEP_FRACTION < 1
     and AUTO_EXPOSURE_LOSS_SEARCH_INTERVAL_SECONDS > 0
+    and 0 < AUTO_EXPOSURE_LOSS_SEARCH_BACKGROUND_LIMIT
+    <= AUTO_EXPOSURE_BACKGROUND_INCREASE_LIMIT
+    and AUTO_EXPOSURE_LOSS_SEARCH_RETURN_SECONDS > 0
     and 0 < AUTO_EXPOSURE_CNR_LOW < AUTO_EXPOSURE_CNR_HIGH
     and AUTO_EXPOSURE_MIN_TARGET_LEVEL > 0
     and 0.5 < AUTO_EXPOSURE_MIN_TRUSTED_FRACTION <= 1.0
