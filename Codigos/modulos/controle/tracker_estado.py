@@ -24,6 +24,8 @@ class TrackerState:
     trim_mode_active: bool = False
     hold_active: bool = True
     hold_enter_radius_px: float = 0.0
+    hold_exit_radius_px: float = 0.0
+    control_regime: str = "atual"
     control_dx_px: float = 0.0
     control_dy_px: float = 0.0
     control_radius_px: float = 0.0

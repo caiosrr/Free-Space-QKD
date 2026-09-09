@@ -129,7 +129,9 @@ class TrackerDisplay:
                         "hold_enter_radius_px": (
                             state.get("hold_enter_radius_px") or HOLD_ENTER_RADIUS_PX
                         ),
-                        "hold_exit_radius_px": HOLD_EXIT_RADIUS_PX,
+                        "hold_exit_radius_px": (
+                            state.get("hold_exit_radius_px") or HOLD_EXIT_RADIUS_PX
+                        ),
                         "recovery_target_frames": TEMPORAL_RECOVERY_VALID_FRAMES,
                         # Escala fisica e rotulos: o painel mostra o erro em
                         # centimetros no alvo ao lado dos pixels.

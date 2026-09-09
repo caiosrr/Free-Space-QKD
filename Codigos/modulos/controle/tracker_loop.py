@@ -15,6 +15,13 @@ from modulos.configuracoes.tracker import (
     FAST_ERROR_MIN_LARGE_FRACTION,
     FAST_ERROR_MIN_SAMPLES,
     FAST_ERROR_WINDOW_SECONDS,
+    CONTROL_AB_BLOCK_SECONDS,
+    CONTROL_AB_TEST_ENABLED,
+    CONTROL_SLOW_FRACTION,
+    CONTROL_SLOW_RELEASE_PX,
+    CONTROL_SLOW_TRIGGER_PX,
+    CONTROL_SLOW_WARMUP_SECONDS,
+    CONTROL_SLOW_WINDOW_SECONDS,
     HOLD_ENTER_RADIUS_PX,
     HOLD_RADIUS_AB_ALTERNATE_PX,
     HOLD_RADIUS_AB_BLOCK_SECONDS,
@@ -190,6 +197,13 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
         window_s=SLOW_BIAS_WINDOW_SECONDS,
         warmup_s=SLOW_BIAS_WARMUP_SECONDS,
     )
+    # Estimador longo do regime alternativo. Roda sempre, mas so alimenta o
+    # controle quando o bloco do A/B pede.
+    slow_bias_longo = SlowBiasEstimator(
+        window_s=CONTROL_SLOW_WINDOW_SECONDS,
+        warmup_s=CONTROL_SLOW_WARMUP_SECONDS,
+    )
+    regime_lento = False
     pulse_cycle = BoundedCorrectionCycle(
         VEL_MIN_LIMITE, min_s=1.0 / CONTROL_HZ,
         image_window_s=TEMPORAL_WINDOW_SECONDS,
@@ -225,6 +239,7 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
     # mudando ao longo da noite. Desligado, nada disto acontece.
     ab_started_at = time.perf_counter()
     ab_block = -1
+    ab_bloco_controle = -1
 
     dt_target = 1.0 / CONTROL_HZ
     last_loop_t = time.perf_counter()
@@ -261,6 +276,31 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
             while True:
                 loop_t0 = time.perf_counter()
 
+                if CONTROL_AB_TEST_ENABLED:
+                    bloco_c = int(
+                        (loop_t0 - ab_started_at) // CONTROL_AB_BLOCK_SECONDS
+                    )
+                    if bloco_c != ab_bloco_controle:
+                        ab_bloco_controle = bloco_c
+                        regime_lento = bloco_c % 2 == 1
+                        if regime_lento:
+                            correction_gate.enter_radius_px = CONTROL_SLOW_RELEASE_PX
+                            correction_gate.exit_radius_px = CONTROL_SLOW_TRIGGER_PX
+                            fine_az.correction_fraction = CONTROL_SLOW_FRACTION
+                            fine_alt.correction_fraction = CONTROL_SLOW_FRACTION
+                        else:
+                            correction_gate.enter_radius_px = HOLD_ENTER_RADIUS_PX
+                            correction_gate.exit_radius_px = HOLD_EXIT_RADIUS_PX
+                            fine_az.correction_fraction = FINE_PULSE_CORRECTION_FRACTION
+                            fine_alt.correction_fraction = FINE_PULSE_CORRECTION_FRACTION
+                        correction_gate.reset()
+                        slow_bias_longo.reset()
+                        print()
+                        print(
+                            "A/B de controle: regime "
+                            + ("LENTO (janela longa, ganho alto)" if regime_lento
+                               else "ATUAL (janela de 8 s, ganho baixo)")
+                        )
                 if HOLD_RADIUS_AB_TEST_ENABLED:
                     bloco = int(
                         (loop_t0 - ab_started_at) // HOLD_RADIUS_AB_BLOCK_SECONDS
@@ -336,7 +376,10 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                             shadow_armed = False
                         elif shadow_estimate.radius_px <= SHADOW_BIAS_TRIGGER_PX * 0.5:
                             shadow_armed = True
+                    bias_longo = slow_bias_longo.observe(measurement_ts, dx_filt, dy_filt)
                     bias = slow_bias.observe(measurement_ts, dx_filt, dy_filt)
+                    if regime_lento:
+                        bias = bias_longo
                     estado.slow_dx_px = bias.dx_px
                     estado.slow_dy_px = bias.dy_px
                     estado.slow_radius_px = bias.radius_px
@@ -541,6 +584,10 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                 if cmd_az == 0.0 and cmd_alt == 0.0 and pulse_cycle.confirm_stopped(time.perf_counter()):
                     # Nao reutilizar medianas/derivadas anteriores ao movimento.
                     repousar("acomodacao_pos_movimento")
+                    # A janela longa ainda esta cheia do erro ANTERIOR a
+                    # correcao. Sem zerar, ela mandaria corrigir de novo o que
+                    # ja foi corrigido, e o mount entraria em catraca.
+                    slow_bias_longo.reset()
                     target_cmd_az = target_cmd_alt = 0.0
                     err_az = err_alt = 0.0
                     prev_radius_px = prev_dx_filt_px = prev_dy_filt_px = None
@@ -556,6 +603,8 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     state.trim_mode_active = estado.trim_mode_active
                     state.hold_active = estado.hold_active
                     state.hold_enter_radius_px = correction_gate.enter_radius_px
+                    state.hold_exit_radius_px = correction_gate.exit_radius_px
+                    state.control_regime = "lento" if regime_lento else "atual"
                     state.control_dx_px = estado.control_dx_px
                     state.control_dy_px = estado.control_dy_px
                     state.control_radius_px = estado.control_radius_px

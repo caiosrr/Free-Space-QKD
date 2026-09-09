@@ -21,6 +21,42 @@ FINE_CALIBRATION_RADII_DEG = (0.004, 0.008, 0.016)
 # Zona de repouso com histerese. A malha busca erro menor ou igual a 1 px e so
 # acorda por uma deriva lenta persistente acima de 2 px ou por um erro grande.
 HOLD_ENTER_RADIUS_PX = 1.0
+# ── EXPERIMENTO DE CONTROLE ───────────────────────────────────────────────
+#
+# O regime atual atua sobre o vies de 8 s, que e dominado por turbulencia, e
+# corrige 35% do erro medido. Medido nas duas sessoes de 2026-09-09:
+#
+#   manha: deriva liquida de 15,9 px em 3 h contra ~300 px de movimento pedido
+#          em 217 correcoes. Razao 19:1, ou seja 95% do movimento se cancela:
+#          estava perseguindo turbulencia.
+#   noite: a correcao removeu 27% do erro e 96% dos pulsos deixaram o resto
+#          apontando para o MESMO lado. Um desvio de 1,5 px ficou de pe por
+#          15 min enquanto o tracker corrigia 56 vezes por hora.
+#
+# Mesma raiz nos dois: o sinal errado, com ganho baixo demais. Quando nao ha o
+# que corrigir ele corrige; quando ha, nao alcanca.
+#
+# O regime alternativo estima o desvio numa janela longa, onde a turbulencia
+# promedia (1,3 px por amostra, ~30 amostras independentes em 120 s, entao a
+# estimativa fica com ~0,24 px de incerteza), dispara num limiar baixo e corrige
+# quase tudo. Com a velocidade minima do mount de 0,001042 deg/s medida no
+# proprio equipamento e 8820 px/grau, 1 px de correcao e um pulso de 108,8 ms;
+# o pulso minimo de 22 ms vale 0,20 px. O limiar de 0,6 px fica em 2,5x a
+# incerteza da estimativa e em 3x o menor pulso possivel.
+CONTROL_AB_TEST_ENABLED = False
+CONTROL_AB_BLOCK_SECONDS = 600.0
+CONTROL_SLOW_WINDOW_SECONDS = 120.0
+CONTROL_SLOW_WARMUP_SECONDS = 60.0
+# Limiar de disparo. Cuidado: no regime atual quem dispara e HOLD_EXIT (2,0 px),
+# e HOLD_ENTER (1,0) e onde ele SOLTA. Por isso o erro passeia entre 1 e 2 px
+# sem nada acontecer.
+CONTROL_SLOW_TRIGGER_PX = 0.6
+CONTROL_SLOW_RELEASE_PX = 0.25
+# Fracao do desvio estimado que cada pulso remove. Com a estimativa limpa nao ha
+# motivo para deixar 65% para tras: os dados dizem que ele ultrapassa em 4% dos
+# casos e fica devendo em 96%.
+CONTROL_SLOW_FRACTION = 0.90
+
 # Experimento pareado da zona de repouso. A sombra NAO consegue decidir se vale
 # apertar HOLD_ENTER_RADIUS_PX: ela mede o erro que sobra, mas o efeito de uma
 # correcao que nao aconteceu nao e observavel. So um teste real responde, e ele
@@ -335,6 +371,10 @@ if not (
     and AUTO_EXPOSURE_LOSS_SEARCH_INTERVAL_SECONDS > 0
     and AUTO_EXPOSURE_LOSS_SEARCH_OCCLUSION_SECONDS >= AUTO_EXPOSURE_LOSS_SEARCH_SECONDS
     and AUTO_EXPOSURE_CNR_LOW <= AUTO_EXPOSURE_LOSS_FADING_CNR < AUTO_EXPOSURE_CNR_HIGH
+    and 0 < CONTROL_SLOW_RELEASE_PX < CONTROL_SLOW_TRIGGER_PX < FAST_CORRECTION_RADIUS_PX
+    and 0 < CONTROL_SLOW_WARMUP_SECONDS <= CONTROL_SLOW_WINDOW_SECONDS
+    and 0 < CONTROL_SLOW_FRACTION <= 1
+    and CONTROL_AB_BLOCK_SECONDS >= 2 * CONTROL_SLOW_WINDOW_SECONDS
     and 0 < AUTO_EXPOSURE_LOSS_SEARCH_BACKGROUND_LIMIT
     <= AUTO_EXPOSURE_BACKGROUND_INCREASE_LIMIT
     and AUTO_EXPOSURE_LOSS_SEARCH_RETURN_SECONDS > 0

@@ -197,3 +197,99 @@ class HistoricoDeFramesTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as caso:
             urllib.request.urlopen(f"{painel.url}api/historico.jpg")
         self.assertEqual(caso.exception.code, 400)
+
+
+class RegimeLentoDeControleTests(unittest.TestCase):
+    """O regime alternativo: janela longa, limiar baixo, ganho alto.
+
+    Motivacao medida em 2026-09-09. De manha o mount pediu ~300 px de movimento
+    para uma deriva liquida de 15,9 px (19:1 desperdicado, perseguindo
+    turbulencia); a noite a correcao removeu 27% do erro e 96% dos pulsos
+    deixaram o resto no MESMO sentido. Mesma raiz: atua sobre o vies de 8 s, que
+    e turbulencia, com fracao de 0,35.
+    """
+
+    def cfg(self):
+        from modulos.configuracoes import tracker
+
+        return tracker
+
+    def test_desligado_por_padrao(self):
+        self.assertFalse(self.cfg().CONTROL_AB_TEST_ENABLED)
+
+    def test_o_limiar_cabe_entre_o_menor_pulso_e_o_regime_atual(self):
+        """Abaixo do menor pulso o mount nao consegue corrigir; acima do
+        disparo atual nao seria experimento nenhum."""
+        from modulos.controle.mount_ascom import VEL_MIN_LIMITE
+        from modulos.controle.tracker_loop import CONTROL_HZ
+
+        t = self.cfg()
+        escala_px_por_grau = 8820.0  # medido na telemetria de 2026-09-09
+        menor_pulso_px = (1.0 / CONTROL_HZ) * VEL_MIN_LIMITE * escala_px_por_grau
+        self.assertGreater(
+            t.CONTROL_SLOW_TRIGGER_PX, 2 * menor_pulso_px,
+            f"o limiar de {t.CONTROL_SLOW_TRIGGER_PX} px esta perto demais do "
+            f"menor pulso possivel ({menor_pulso_px:.2f} px): o mount nao "
+            "consegue corrigir com essa resolucao e ficaria em catraca",
+        )
+        self.assertLess(
+            t.CONTROL_SLOW_TRIGGER_PX, t.HOLD_EXIT_RADIUS_PX,
+            "quem dispara hoje e HOLD_EXIT; o regime novo tem de disparar antes",
+        )
+
+    def test_a_janela_longa_promedia_a_turbulencia(self):
+        """Curta demais e ela mede turbulencia, que e o defeito atual."""
+        t = self.cfg()
+        self.assertGreaterEqual(
+            t.CONTROL_SLOW_WINDOW_SECONDS, 10 * t.SLOW_BIAS_WINDOW_SECONDS,
+            "a janela do regime novo precisa ser muito maior que a de 8 s",
+        )
+
+    def test_o_bloco_do_ab_cabe_varias_janelas(self):
+        t = self.cfg()
+        self.assertGreaterEqual(
+            t.CONTROL_AB_BLOCK_SECONDS, 2 * t.CONTROL_SLOW_WINDOW_SECONDS,
+            "bloco curto demais mistura os regimes dentro de uma estimativa",
+        )
+
+    def test_a_telemetria_separa_os_regimes(self):
+        from modulos.controle import tracker_telemetria
+
+        self.assertIn(
+            "regime_controle", tracker_telemetria.TrackerCsvLogger.FIELDNAMES,
+            "sem a coluna nao da para separar os blocos na analise",
+        )
+
+    def test_o_pulso_entrega_o_que_a_fracao_pede_no_regime_novo(self):
+        """Com 0,90 sobre um desvio de 0,6 px o pulso nao pode saturar no teto.
+
+        No regime atual isso acontece: com erro de 2,2 px, uma fracao alta pede
+        mais que os 120 ms de teto e o pulso entrega so 1,10 px.
+        """
+        from modulos.controle.mount_ascom import VEL_MIN_LIMITE
+        from modulos.controle.tracker_controle import FinePulseAxis
+        from modulos.controle.tracker_loop import (
+            CONTROL_HZ,
+            FINE_PULSE_MAX_S,
+            FINE_PULSE_SETTLE_S,
+        )
+
+        t = self.cfg()
+        escala = 8820.0
+        eixo = FinePulseAxis(
+            VEL_MIN_LIMITE,
+            correction_fraction=t.CONTROL_SLOW_FRACTION,
+            min_pulse_s=1.0 / CONTROL_HZ,
+            max_pulse_s=FINE_PULSE_MAX_S,
+            settle_s=FINE_PULSE_SETTLE_S,
+        )
+        erro_px = t.CONTROL_SLOW_TRIGGER_PX
+        taxa = eixo.command(0.0, erro_px / escala, True)
+        self.assertNotEqual(taxa, 0.0, "o pulso deveria ter disparado")
+        entregue = (eixo._pulse_until - 0.0) * VEL_MIN_LIMITE * escala
+        pedido = erro_px * t.CONTROL_SLOW_FRACTION
+        self.assertAlmostEqual(
+            entregue, pedido, delta=0.05,
+            msg=f"o pulso pediu {pedido:.2f} px e entregou {entregue:.2f} px; "
+                "o teto de duracao esta limitando o regime novo",
+        )
