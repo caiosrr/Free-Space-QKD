@@ -279,7 +279,9 @@ def grafico_mount(df: pd.DataFrame, resumo: dict, saida: Path) -> Path:
     time_ax.plot(smooth["tempo_h"], smooth["az_arcsec"], color=BLUE, lw=2.2, label="azimute")
     time_ax.plot(smooth["tempo_h"], smooth["alt_arcsec"], color=ORANGE, lw=2.2, label="altitude")
     time_ax.axhline(0, color=GRAY, lw=1)
-    returned = bool(resumo.get("return_to_start", {}).get("success"))
+    # Numa sessao encerrada por perda de sinal nao ha retorno, e a chave
+    # vem como null: "or {}" cobre ausente e nulo.
+    returned = bool((resumo.get("return_to_start") or {}).get("success"))
     if returned:
         final_t = float(smooth["tempo_h"].iloc[-1])
         time_ax.plot([final_t, final_t], [smooth["alt_arcsec"].iloc[-1], 0], color=GREEN, ls="--", lw=1.7)
