@@ -56,7 +56,12 @@ BORDER_MIN_PEAK_RATIO = 0.25
 BORDER_MIN_SIGNATURE_SIMILARITY = 0.35
 # Este limite conta somente ausencia real da ilha travada. Aparencia turbulenta
 # mantem o mount parado, mas possui um cronometro separado e nao encerra a sessao.
-SIGNAL_LOSS_LIMIT_SECONDS = 75.0
+# Orcamento de uma perda, com o piso da exposicao em 200 us: 8 s de espera
+# antes de a busca comecar, ~50 s de rampa ate o teto e ~2 s para reconstruir a
+# media temporal, ou seja 60 s antes de o alvo poder voltar a ser aceito. Com
+# 75 s sobravam 15 s de margem; 90 s dobra isso. Esperar mais nao tem custo
+# mecanico: sem sinal valido o mount ja esta parado e nao faz busca alguma.
+SIGNAL_LOSS_LIMIT_SECONDS = 90.0
 
 # Estimador temporal robusto. Os frames aceitos pela trava de identidade sao
 # normalizados e somados numa janela deslizante de dois segundos. O centro de

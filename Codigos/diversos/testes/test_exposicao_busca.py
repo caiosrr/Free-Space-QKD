@@ -135,10 +135,23 @@ class BuscaPorExposicaoTests(unittest.TestCase):
                 chegada = agora
                 break
         self.assertIsNotNone(chegada, "a busca nunca alcancou o teto")
+        # Depois da rampa ainda e preciso reconstruir a media temporal antes de
+        # o alvo voltar a ser aceito; o orcamento inteiro tem de caber no limite.
+        from modulos.configuracoes.tracker import (
+            AUTO_EXPOSURE_LOSS_SEARCH_SECONDS,
+            TEMPORAL_WINDOW_SECONDS,
+        )
+
+        orcamento = chegada + TEMPORAL_WINDOW_SECONDS
         self.assertLess(
-            chegada, SIGNAL_LOSS_LIMIT_SECONDS * 0.75,
-            f"do piso ({AUTO_EXPOSURE_MIN_US:.0f} us) ao teto levou {chegada:.0f}s, "
-            f"apertado demais para o limite de {SIGNAL_LOSS_LIMIT_SECONDS:.0f}s",
+            orcamento, SIGNAL_LOSS_LIMIT_SECONDS,
+            f"do piso ({AUTO_EXPOSURE_MIN_US:.0f} us) ao teto sao {chegada:.0f}s e "
+            f"mais {TEMPORAL_WINDOW_SECONDS:.0f}s de media: {orcamento:.0f}s nao cabe "
+            f"no limite de {SIGNAL_LOSS_LIMIT_SECONDS:.0f}s",
+        )
+        self.assertGreaterEqual(
+            SIGNAL_LOSS_LIMIT_SECONDS - orcamento, AUTO_EXPOSURE_LOSS_SEARCH_SECONDS,
+            "margem menor que a propria espera inicial da busca",
         )
 
     def test_busca_nao_dispara_antes_do_tempo_de_espera(self):
