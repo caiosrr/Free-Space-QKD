@@ -293,3 +293,75 @@ class RegimeLentoDeControleTests(unittest.TestCase):
             msg=f"o pulso pediu {pedido:.2f} px e entregou {entregue:.2f} px; "
                 "o teto de duracao esta limitando o regime novo",
         )
+
+
+class GanhoDoPulsoTests(unittest.TestCase):
+    """Quem define a duracao do pulso e BoundedCorrectionCycle.fraction.
+
+    O FinePulseAxis so entra como PROPOSTA, para conferir o sinal: a duracao
+    real sai de min(|erro|, |erro_atual|) * fraction / velocidade_minima. Mexer
+    so no FinePulseAxis deixa o ganho inalterado, e foi esse o engano na
+    primeira versao do A/B de controle.
+    """
+
+    def ciclo(self, fraction):
+        from modulos.controle.mount_ascom import VEL_MIN_LIMITE
+        from modulos.controle.tracker_pulsos import BoundedCorrectionCycle
+
+        return BoundedCorrectionCycle(
+            VEL_MIN_LIMITE, min_s=1 / 34.0, fine_max_s=0.12,
+            fraction=fraction, image_window_s=2.0,
+        )
+
+    def duracao_px(self, fraction, erro_px, escala=8820.0):
+        """Quantos pixels o pulso entrega para um erro dado."""
+        from modulos.controle.mount_ascom import VEL_MIN_LIMITE
+
+        ciclo = self.ciclo(fraction)
+        erro_deg = erro_px / escala
+        ciclo.command(
+            0.0, 0.0, (VEL_MIN_LIMITE, VEL_MIN_LIMITE),
+            (erro_deg, erro_deg), (erro_deg, erro_deg), fine=True, enabled=True,
+        )
+        return float(ciclo.deadlines[0]) * VEL_MIN_LIMITE * escala
+
+    def test_a_fracao_do_ciclo_muda_a_entrega(self):
+        baixa = self.duracao_px(0.35, 1.5)
+        alta = self.duracao_px(0.90, 1.5)
+        self.assertGreater(
+            alta, baixa * 2,
+            "a fracao do BoundedCorrectionCycle e o ganho real; se mexer nela "
+            "nao mudar a entrega, o A/B de controle nao esta testando nada",
+        )
+
+    def test_o_teto_de_duracao_limita_erros_grandes(self):
+        """Com 8820 px/grau, 120 ms valem 1,10 px: nenhum pulso passa disso."""
+        entregue = self.duracao_px(1.0, 5.0)
+        self.assertLess(
+            entregue, 1.2,
+            f"o pulso entregou {entregue:.2f} px; o teto de 120 ms deveria "
+            "limitar em ~1,10 px",
+        )
+
+    def test_no_regime_novo_o_pulso_nao_satura(self):
+        """O limiar baixo existe para o pulso nunca encostar no teto."""
+        from modulos.configuracoes import tracker
+
+        entregue = self.duracao_px(
+            tracker.CONTROL_SLOW_FRACTION, tracker.CONTROL_SLOW_TRIGGER_PX
+        )
+        pedido = tracker.CONTROL_SLOW_TRIGGER_PX * tracker.CONTROL_SLOW_FRACTION
+        self.assertAlmostEqual(entregue, pedido, delta=0.06)
+
+    def test_pulso_contra_o_erro_atual_e_bloqueado(self):
+        """Estimativa velha nao pode comandar contra o que a camera ve agora."""
+        from modulos.controle.mount_ascom import VEL_MIN_LIMITE
+
+        ciclo = self.ciclo(0.90)
+        erro = 1.5 / 8820.0
+        cmd = ciclo.command(
+            0.0, 0.0, (VEL_MIN_LIMITE, VEL_MIN_LIMITE),
+            (erro, erro), (-erro, -erro), fine=True, enabled=True,
+        )
+        self.assertEqual(float(cmd[0]), 0.0)
+        self.assertEqual(float(cmd[1]), 0.0)

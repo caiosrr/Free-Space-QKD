@@ -283,14 +283,20 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     if bloco_c != ab_bloco_controle:
                         ab_bloco_controle = bloco_c
                         regime_lento = bloco_c % 2 == 1
+                        # O ganho que vale e o do pulse_cycle: e ele que
+                        # calcula a duracao do pulso. O FinePulseAxis so entra
+                        # como proposta, para conferir o sinal, entao mexer so
+                        # nele deixaria o regime novo com o ganho de sempre.
                         if regime_lento:
                             correction_gate.enter_radius_px = CONTROL_SLOW_RELEASE_PX
                             correction_gate.exit_radius_px = CONTROL_SLOW_TRIGGER_PX
+                            pulse_cycle.fraction = CONTROL_SLOW_FRACTION
                             fine_az.correction_fraction = CONTROL_SLOW_FRACTION
                             fine_alt.correction_fraction = CONTROL_SLOW_FRACTION
                         else:
                             correction_gate.enter_radius_px = HOLD_ENTER_RADIUS_PX
                             correction_gate.exit_radius_px = HOLD_EXIT_RADIUS_PX
+                            pulse_cycle.fraction = FINE_PULSE_CORRECTION_FRACTION
                             fine_az.correction_fraction = FINE_PULSE_CORRECTION_FRACTION
                             fine_alt.correction_fraction = FINE_PULSE_CORRECTION_FRACTION
                         correction_gate.reset()
