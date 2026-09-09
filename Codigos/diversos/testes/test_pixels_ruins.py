@@ -52,11 +52,40 @@ class MascaraTests(unittest.TestCase):
         self.assertTrue(stats["plausivel"])
 
     def test_avisa_quando_a_fracao_e_alta_demais(self):
-        """Capturar com luz acesa gera mascara enorme; isso precisa ser sinalizado."""
+        """Cena AMPLAMENTE iluminada gera mascara enorme; precisa ser sinalizado.
+
+        Uma fonte pequena e pontual nao infla a mascara, e nao deve mesmo: o
+        que denuncia captura com luz e boa parte do sensor acima do limiar.
+        """
         rng = np.random.default_rng(3)
-        claros = [rng.normal(2.0, 0.5, (64, 64)) + beacon() for _ in range(5)]
+        # Fundo escuro com uma regiao clara ampla, que e o que acontece ao
+        # capturar apontado para o ceu ou com luz de sala. Um degrade suave nao
+        # serve de modelo: a estatistica robusta o absorve como fundo.
+        iluminacao = np.full((64, 64), 2.0)
+        iluminacao[:20, :] = 60.0  # cerca de 30% do sensor iluminado
+        claros = [rng.normal(0.0, 0.5, (64, 64)) + iluminacao for _ in range(5)]
         _, stats = pixels_ruins.construir_mascara(claros)
+        self.assertGreater(stats["fracao_do_sensor"], pixels_ruins.FRACAO_MAXIMA_PLAUSIVEL)
         self.assertFalse(stats["plausivel"])
+
+    def test_ruido_de_quantizacao_no_escuro_nao_vira_defeito(self):
+        """Regressao de 2026-09-09: no escuro o desvio robusto colapsa.
+
+        Com mediana 1,00 e desvio 0,05, o criterio de 5 sigma virava 0,25
+        contagem e marcou 0,58% do sensor -- cerca de 12x o que um CMOS
+        cientifico costuma ter de defeito. O piso absoluto corrige isso.
+        """
+        rng = np.random.default_rng(11)
+        escuros = [np.round(rng.normal(1.0, 0.4, (128, 128))).clip(0) for _ in range(30)]
+        quente = (33, 71)
+        for quadro in escuros:
+            quadro[quente] = 147.0
+        mascara, stats = pixels_ruins.construir_mascara(escuros)
+        self.assertTrue(mascara[quente], "o defeito real precisa ser marcado")
+        self.assertLess(
+            stats["fracao_do_sensor"], 0.001,
+            f"marcou {stats['fracao_do_sensor']:.4%} do sensor apenas com ruido",
+        )
 
     def test_um_pixel_quente_desloca_o_centroide_no_regime_fraco(self):
         """A premissa: 15 contagens de sinal, um defeito de 40 domina."""

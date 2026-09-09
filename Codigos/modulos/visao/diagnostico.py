@@ -26,7 +26,9 @@ def _estatisticas_frame(frame: np.ndarray) -> dict:
     valores = np.asarray(frame, dtype=np.float64)
     fundo = float(np.median(valores))
     pico = float(valores.max())
-    ruido = max(1.4826 * float(np.median(np.abs(valores - fundo))), 1e-9)
+    # Piso de meia contagem: num frame quantizado e quase uniforme o MAD vai a
+    # zero e o SNR estoura para valores absurdos (ja apareceu como 7,6e10).
+    ruido = max(1.4826 * float(np.median(np.abs(valores - fundo))), 0.5)
     return {
         "fundo": fundo,
         "pico": pico,
@@ -141,6 +143,12 @@ def calibrar_pixels_ruins(exposure_seconds: float, quantidade: int = 20) -> dict
             "  ATENCAO: fracao alta demais para defeitos de sensor. Provavelmente "
             "havia luz durante a captura; refaca no escuro."
         )
+    print(
+        f"  limiar quente      : {estatisticas['limiar_quente']:.2f} contagens "
+        f"(piso absoluto {estatisticas['piso_contagens']:.1f})"
+    )
+    perfil = " | ".join(f"{k}: {v}" for k, v in estatisticas["perfil"].items())
+    print(f"  pixels por excesso : {perfil}")
     print(f"  mascara salva em   : {caminho}")
     return estatisticas
 

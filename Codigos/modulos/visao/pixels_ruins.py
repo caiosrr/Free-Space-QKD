@@ -25,6 +25,13 @@ import numpy as np
 
 HOT_SIGMA_PADRAO = 5.0
 COLD_SIGMA_PADRAO = 5.0
+# Piso absoluto do limiar, em contagens. Sem ele o criterio em sigma colapsa: no
+# escuro quase todo pixel le o mesmo valor inteiro, o desvio robusto cai para
+# ~0,05 contagem e "5 sigma" vira 0,25 contagem. Na pratica isso marcou 0,58% do
+# sensor, cerca de 12x acima do que um CMOS cientifico costuma ter de defeito.
+# Um pixel so atrapalha se puder competir com o beacon, que fica em torno de 20
+# contagens: abaixo de alguns contagens de excesso ele e irrelevante.
+PISO_CONTAGENS_PADRAO = 3.0
 # Acima disso a mascara provavelmente esta medindo sinal, nao defeito.
 FRACAO_MAXIMA_PLAUSIVEL = 0.02
 
@@ -34,6 +41,7 @@ def construir_mascara(
     *,
     hot_sigma: float = HOT_SIGMA_PADRAO,
     cold_sigma: float = COLD_SIGMA_PADRAO,
+    piso_contagens: float = PISO_CONTAGENS_PADRAO,
 ) -> tuple[np.ndarray, dict]:
     """Marca pixels persistentemente claros ou escuros num frame escuro medio.
 
@@ -59,8 +67,13 @@ def construir_mascara(
     mad = float(np.median(np.abs(medio - mediana)))
     desvio = max(1.4826 * mad, 1e-6)
 
-    quentes = medio > mediana + hot_sigma * desvio
-    frios = medio < mediana - cold_sigma * desvio
+    # O limiar e o MAIOR entre o criterio estatistico e o piso absoluto. Num
+    # frame escuro quantizado o desvio robusto colapsa e o criterio em sigma
+    # sozinho marcaria ruido de arredondamento como defeito.
+    excesso_quente = max(hot_sigma * desvio, float(piso_contagens))
+    excesso_frio = max(cold_sigma * desvio, float(piso_contagens))
+    quentes = medio > mediana + excesso_quente
+    frios = medio < mediana - excesso_frio
     mascara = quentes | frios
 
     fracao = float(mascara.mean())
@@ -75,6 +88,15 @@ def construir_mascara(
         "fracao_do_sensor": fracao,
         "hot_sigma": float(hot_sigma),
         "cold_sigma": float(cold_sigma),
+        "piso_contagens": float(piso_contagens),
+        "limiar_quente": float(mediana + excesso_quente),
+        "limiar_frio": float(mediana - excesso_frio),
+        # Quantos pixels sobreviveriam a cada limiar, para escolher com dado em
+        # vez de aceitar o padrao no escuro.
+        "perfil": {
+            f"+{excesso:g}": int(np.count_nonzero(medio > mediana + excesso))
+            for excesso in (1, 2, 3, 5, 10, 20, 50)
+        },
         "plausivel": bool(fracao <= FRACAO_MAXIMA_PLAUSIVEL),
     }
     return mascara, estatisticas
