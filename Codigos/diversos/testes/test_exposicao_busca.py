@@ -162,3 +162,52 @@ class BuscaPorExposicaoTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PisoDeSinalTests(unittest.TestCase):
+    """A reducao nao pode descer em catraca ate o sinal virar quantizacao.
+
+    Em 2026-09-09 a exposicao caiu de 788 para 426 us com o CNR parado entre 16
+    e 17. Num sensor de 8 bits com poucas dezenas de contagens, um corte de 5%
+    pode nao mudar nenhum inteiro lido: o CNR aparenta nao ter caido e o
+    controlador corta de novo, indefinidamente.
+    """
+
+    def alimentar_com_mancha(self, ctrl, pico, fundo=3.0, ciclos=80, inicio=0.0):
+        """Cena com uma mancha de amplitude conhecida sobre fundo baixo."""
+        tamanho = 64
+        yy, xx = np.indices((tamanho, tamanho))
+        quadro = np.full((tamanho, tamanho), float(fundo), dtype=np.float32)
+        quadro += (pico - fundo) * np.exp(-(((xx - 32) ** 2 + (yy - 32) ** 2)) / (2 * 4.0**2))
+        motivos = []
+        for i in range(ciclos):
+            motivos.append(
+                ctrl.observe(
+                    inicio + i * 0.2, quadro,
+                    target_center=(32.0, 32.0), target_diameter_px=10.0,
+                    trusted_target=True, target_present=True,
+                ).reason
+            )
+        return motivos
+
+    def test_sinal_forte_ainda_permite_reduzir(self):
+        ctrl = AutoExposureController(4000.0, enabled=True, started_at=0.0)
+        motivos = self.alimentar_com_mancha(ctrl, pico=200.0)
+        self.assertIn("reducao_cnr_com_folga", motivos)
+        self.assertLess(ctrl.current_exposure_us, 4000.0)
+
+    def test_sinal_fraco_trava_a_reducao(self):
+        """Com o sinal ja perto da quantizacao, cortar mais e sempre errado."""
+        ctrl = AutoExposureController(4000.0, enabled=True, started_at=0.0)
+        motivos = self.alimentar_com_mancha(ctrl, pico=20.0)
+        self.assertIn("piso_de_sinal_atingido", motivos)
+        self.assertEqual(ctrl.current_exposure_us, 4000.0)
+
+    def test_o_piso_e_maior_que_o_alvo_de_cnr(self):
+        """Senao o CNR sozinho decidiria antes de o piso ter chance de agir."""
+        from modulos.configuracoes.tracker import (
+            AUTO_EXPOSURE_CNR_HIGH,
+            AUTO_EXPOSURE_MIN_TARGET_LEVEL,
+        )
+
+        self.assertGreater(AUTO_EXPOSURE_MIN_TARGET_LEVEL, AUTO_EXPOSURE_CNR_HIGH)

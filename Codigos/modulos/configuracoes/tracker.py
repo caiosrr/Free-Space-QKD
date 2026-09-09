@@ -105,6 +105,13 @@ AUTO_EXPOSURE_MIN_US = 200.0
 AUTO_EXPOSURE_MAX_US = 18000.0
 AUTO_EXPOSURE_CNR_LOW = 8.0
 AUTO_EXPOSURE_CNR_HIGH = 16.0
+# Piso ABSOLUTO de sinal, em contagens acima do fundo local. O CNR e uma medida
+# de CONTRASTE e para de ser confiavel quando o sinal se aproxima da
+# quantizacao: num sensor de 8 bits, um corte de 5% na exposicao pode nao mudar
+# nenhum inteiro lido, o CNR aparenta nao ter caido e o controlador corta de
+# novo. Foi o que se viu em 2026-09-09: a exposicao desceu de 788 para 426 us
+# com o CNR parado entre 16 e 17, sem sinal de que estivesse piorando.
+AUTO_EXPOSURE_MIN_TARGET_LEVEL = 30.0
 AUTO_EXPOSURE_MIN_TRUSTED_FRACTION = 0.95
 AUTO_EXPOSURE_UPDATE_SECONDS = 5.0
 AUTO_EXPOSURE_HISTORY_SECONDS = 2.0
@@ -254,6 +261,7 @@ if not (
     and 0 < AUTO_EXPOSURE_LOSS_SEARCH_STEP_FRACTION < 1
     and AUTO_EXPOSURE_LOSS_SEARCH_INTERVAL_SECONDS > 0
     and 0 < AUTO_EXPOSURE_CNR_LOW < AUTO_EXPOSURE_CNR_HIGH
+    and AUTO_EXPOSURE_MIN_TARGET_LEVEL > 0
     and 0.5 < AUTO_EXPOSURE_MIN_TRUSTED_FRACTION <= 1.0
     and AUTO_EXPOSURE_UPDATE_SECONDS >= AUTO_EXPOSURE_HISTORY_SECONDS > 0
     and AUTO_EXPOSURE_MIN_SAMPLES >= 2

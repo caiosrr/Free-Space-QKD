@@ -16,6 +16,7 @@ from modulos.configuracoes.tracker import (
     AUTO_EXPOSURE_MAX_STEP_FRACTION,
     AUTO_EXPOSURE_MAX_US,
     AUTO_EXPOSURE_MIN_SAMPLES,
+    AUTO_EXPOSURE_MIN_TARGET_LEVEL,
     AUTO_EXPOSURE_MIN_TRUSTED_FRACTION,
     AUTO_EXPOSURE_LOSS_SEARCH_INTERVAL_SECONDS,
     AUTO_EXPOSURE_LOSS_SEARCH_SECONDS,
@@ -167,6 +168,7 @@ class AutoExposureController:
         cnr_low: float = AUTO_EXPOSURE_CNR_LOW,
         cnr_high: float = AUTO_EXPOSURE_CNR_HIGH,
         min_trusted_fraction: float = AUTO_EXPOSURE_MIN_TRUSTED_FRACTION,
+        min_target_level: float = AUTO_EXPOSURE_MIN_TARGET_LEVEL,
         update_seconds: float = AUTO_EXPOSURE_UPDATE_SECONDS,
         history_seconds: float = AUTO_EXPOSURE_HISTORY_SECONDS,
         min_samples: int = AUTO_EXPOSURE_MIN_SAMPLES,
@@ -189,6 +191,7 @@ class AutoExposureController:
         self.cnr_low = float(cnr_low)
         self.cnr_high = float(cnr_high)
         self.min_trusted_fraction = float(min_trusted_fraction)
+        self.min_target_level = float(min_target_level)
         self.update_seconds = float(update_seconds)
         self.history_seconds = float(history_seconds)
         self.min_samples = int(min_samples)
@@ -485,6 +488,19 @@ class AutoExposureController:
             )
 
         if summary["cnr"] > self.cnr_high:
+            # O CNR sozinho nao basta perto da quantizacao: com poucas dezenas
+            # de contagens ele para de acompanhar os cortes e o controlador
+            # desce em catraca ate o sinal virar ruido. Exige-se tambem um piso
+            # absoluto de contagens acima do fundo local.
+            nivel = summary["peak"]
+            fundo = summary["local_background"]
+            acima_do_fundo = (
+                float(nivel) - float(fundo)
+                if nivel is not None and fundo is not None
+                else None
+            )
+            if acima_do_fundo is not None and acima_do_fundo <= self.min_target_level:
+                return self._decision(summary, reason="piso_de_sinal_atingido")
             return self._apply_factor(
                 1.0 - self.reduction_step_fraction,
                 reason="reducao_cnr_com_folga",
