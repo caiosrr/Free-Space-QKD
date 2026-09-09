@@ -91,7 +91,12 @@ AUTO_EXPOSURE_LOSS_SEARCH_SECONDS = 8.0
 # so dobrava em 64 s, contra os 75 s do limite de perda: chegava tarde demais.
 AUTO_EXPOSURE_LOSS_SEARCH_STEP_FRACTION = 0.35
 AUTO_EXPOSURE_LOSS_SEARCH_INTERVAL_SECONDS = 3.0
-AUTO_EXPOSURE_MIN_US = 1000.0
+# O piso e uma trava de seguranca, nao um alvo de projeto: o controlador so
+# desce ate o CNR sair da faixa e para sozinho. Com 1000 us ele ja encostava no
+# piso a noite, de ceu escuro, e ao amanhecer -- quando o fundo sobe e a
+# exposicao precisa CAIR -- ficaria sem para onde ir, encurtando justamente a
+# janela que se quer caracterizar.
+AUTO_EXPOSURE_MIN_US = 200.0
 AUTO_EXPOSURE_MAX_US = 18000.0
 AUTO_EXPOSURE_CNR_LOW = 8.0
 AUTO_EXPOSURE_CNR_HIGH = 16.0

@@ -110,6 +110,37 @@ class BuscaPorExposicaoTests(unittest.TestCase):
             f"o limite de {SIGNAL_LOSS_LIMIT_SECONDS:.0f}s",
         )
 
+    def test_a_rampa_cobre_a_faixa_inteira_a_partir_do_piso(self):
+        """A varredura precisa caber no limite partindo do PISO configurado.
+
+        Baixar o piso alarga a faixa a percorrer: de 1000 us eram 18x, de 200 us
+        sao 90x. O teste amarra a checagem ao piso real, para uma mudanca futura
+        de configuracao nao deixar a busca lenta demais em silencio.
+        """
+        from modulos.configuracoes.tracker import (
+            AUTO_EXPOSURE_MIN_US,
+            SIGNAL_LOSS_LIMIT_SECONDS,
+        )
+
+        ctrl = self.novo(AUTO_EXPOSURE_MIN_US)
+        quadro = cena(fundo=2.0)
+        chegada = None
+        for i in range(8000):
+            agora = i * 0.05
+            ctrl.observe(
+                agora, quadro, target_center=None, target_diameter_px=8.0,
+                trusted_target=False, target_present=False,
+            )
+            if ctrl.current_exposure_us >= ctrl.maximum_us:
+                chegada = agora
+                break
+        self.assertIsNotNone(chegada, "a busca nunca alcancou o teto")
+        self.assertLess(
+            chegada, SIGNAL_LOSS_LIMIT_SECONDS * 0.75,
+            f"do piso ({AUTO_EXPOSURE_MIN_US:.0f} us) ao teto levou {chegada:.0f}s, "
+            f"apertado demais para o limite de {SIGNAL_LOSS_LIMIT_SECONDS:.0f}s",
+        )
+
     def test_busca_nao_dispara_antes_do_tempo_de_espera(self):
         ctrl = self.novo(1000.0)
         alimentar(ctrl, cena(fundo=2.0), presente=False, confiavel=False, passo=0.05, ciclos=40)
