@@ -55,3 +55,54 @@ class PisoSinalBrutoTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OrientacaoDaMascaraTests(unittest.TestCase):
+    """A mascara precisa viver no mesmo espaco em que e aplicada.
+
+    `LAST_RAW_FRAME` ja passou pela rotacao de exibicao, mas
+    `aplicar_pixels_ruins` age no frame CRU, antes dela. Sem desfazer a
+    rotacao, a mascara sairia espelhada em 180 graus e corrigiria o canto
+    oposto ao dos defeitos reais.
+    """
+
+    TAMANHO = 32
+    DEFEITO = (4, 7)  # linha, coluna: assimetrico de proposito
+
+    def _mascara_construida(self, rotacionar: bool):
+        """Roda a calibracao e devolve a mascara que ela mandou salvar."""
+        from modulos.visao import diagnostico
+
+        cru = np.full((self.TAMANHO, self.TAMANHO), 2.0, dtype=np.float32)
+        cru[self.DEFEITO] = 200.0
+        capturadas = {}
+
+        def capturar(caminho, mascara):
+            capturadas["mascara"] = np.array(mascara, copy=True)
+            return caminho
+
+        with patch.object(foco, "capture_raw_frame", return_value=cru),                 patch.object(foco, "ROTATE_IMAGE_180", rotacionar),                 patch.object(diagnostico.pixels_ruins, "salvar", capturar),                 patch("builtins.input", return_value=""):
+            diagnostico.calibrar_pixels_ruins(0.001, 5)
+
+        self.assertIn("mascara", capturadas, "a calibracao nao salvou mascara")
+        return capturadas["mascara"]
+
+    def _espelhado(self):
+        linha, coluna = self.DEFEITO
+        return (self.TAMANHO - 1 - linha, self.TAMANHO - 1 - coluna)
+
+    def test_com_rotacao_a_mascara_volta_para_o_sensor(self):
+        mascara = self._mascara_construida(rotacionar=True)
+        self.assertTrue(
+            mascara[self.DEFEITO],
+            "com rotacao ligada o defeito precisa ficar na posicao do SENSOR",
+        )
+        self.assertFalse(
+            mascara[self._espelhado()],
+            "a posicao espelhada nao pode estar marcada",
+        )
+
+    def test_sem_rotacao_a_mascara_nao_e_mexida(self):
+        mascara = self._mascara_construida(rotacionar=False)
+        self.assertTrue(mascara[self.DEFEITO])
+        self.assertFalse(mascara[self._espelhado()])

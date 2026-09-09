@@ -115,6 +115,13 @@ def calibrar_pixels_ruins(exposure_seconds: float, quantidade: int = 20) -> dict
         if foco.LAST_RAW_FRAME is not None:
             escuros.append(np.array(foco.LAST_RAW_FRAME, copy=True))
 
+    # LAST_RAW_FRAME ja passou pela rotacao de exibicao, mas a correcao e
+    # aplicada no frame CRU do sensor, antes dela. A mascara precisa viver no
+    # mesmo espaco em que sera usada: desfazemos a rotacao aqui. Como rot180 e
+    # sua propria inversa, aplicar de novo devolve as coordenadas do sensor.
+    if foco.ROTATE_IMAGE_180:
+        escuros = [np.rot90(quadro, 2) for quadro in escuros]
+
     mascara, estatisticas = pixels_ruins.construir_mascara(escuros)
     caminho = pixels_ruins.salvar(_caminho_mascara(), mascara)
 
