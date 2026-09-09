@@ -17,6 +17,9 @@ from modulos.configuracoes.tracker import (
     AUTO_EXPOSURE_MAX_US,
     AUTO_EXPOSURE_MIN_SAMPLES,
     AUTO_EXPOSURE_MIN_TRUSTED_FRACTION,
+    AUTO_EXPOSURE_LOSS_SEARCH_INTERVAL_SECONDS,
+    AUTO_EXPOSURE_LOSS_SEARCH_SECONDS,
+    AUTO_EXPOSURE_LOSS_SEARCH_STEP_FRACTION,
     AUTO_EXPOSURE_MIN_US,
     AUTO_EXPOSURE_REDUCTION_STEP_FRACTION,
     AUTO_EXPOSURE_ROLLBACK_LOSS_SECONDS,
@@ -175,6 +178,9 @@ class AutoExposureController:
         rollback_window_s: float = AUTO_EXPOSURE_ROLLBACK_WINDOW_SECONDS,
         rollback_loss_s: float = AUTO_EXPOSURE_ROLLBACK_LOSS_SECONDS,
         safety_update_s: float = AUTO_EXPOSURE_SAFETY_UPDATE_SECONDS,
+        loss_search_s: float = AUTO_EXPOSURE_LOSS_SEARCH_SECONDS,
+        loss_search_step: float = AUTO_EXPOSURE_LOSS_SEARCH_STEP_FRACTION,
+        loss_search_interval_s: float = AUTO_EXPOSURE_LOSS_SEARCH_INTERVAL_SECONDS,
         started_at: float = 0.0,
     ):
         self.enabled = bool(enabled)
@@ -194,6 +200,9 @@ class AutoExposureController:
         self.rollback_window_s = float(rollback_window_s)
         self.rollback_loss_s = float(rollback_loss_s)
         self.safety_update_s = float(safety_update_s)
+        self.loss_search_s = float(loss_search_s)
+        self.loss_search_step = float(loss_search_step)
+        self.loss_search_interval_s = float(loss_search_interval_s)
         self.current_exposure_us = float(
             np.clip(initial_exposure_us, self.minimum_us, self.maximum_us)
         )
@@ -207,6 +216,8 @@ class AutoExposureController:
         self._last_change_can_rollback = False
         self._untrusted_since = None
         self._untrusted_safety_used = False
+        self._last_loss_search_t = float(started_at)
+        self._loss_search_active = False
 
     def _purge(self, now: float) -> None:
         cutoff = now - self.history_seconds
@@ -284,14 +295,11 @@ class AutoExposureController:
         summary: dict,
         allow_rollback: bool,
         now: float,
+        max_fraction: float | None = None,
     ) -> ExposureDecision:
-        factor = float(
-            np.clip(
-                factor,
-                1.0 - self.max_step_fraction,
-                1.0 + self.max_step_fraction,
-            )
-        )
+        # A busca por alvo ausente usa um passo maior que o controle normal.
+        limite = self.max_step_fraction if max_fraction is None else float(max_fraction)
+        factor = float(np.clip(factor, 1.0 - limite, 1.0 + limite))
         previous_exposure = self.current_exposure_us
         new_exposure = float(
             np.clip(previous_exposure * factor, self.minimum_us, self.maximum_us)
@@ -405,6 +413,32 @@ class AutoExposureController:
                     allow_rollback=False,
                     now=now,
                 )
+            # Alvo ausente com a cena ESCURA: a hipotese mais provavel e que a
+            # exposicao esteja baixa demais para o beacon atual. Congelar aqui
+            # cria um impasse, porque so uma exposicao maior traria o alvo de
+            # volta. Subir em degraus e seguro: sem alvo o mount ja esta parado,
+            # e a cena escura garante que nao estamos fugindo de saturacao.
+            if (
+                not target_present
+                and scene_ready
+                and not unsafe_scene
+                and summary["background"] <= self.background_increase_limit
+                and (self._loss_search_active or untrusted_s >= self.loss_search_s)
+                and now - self._last_loss_search_t >= self.loss_search_interval_s
+                and self.current_exposure_us < self.maximum_us
+            ):
+                # Cada mudanca zera _untrusted_since; sem esta trava a rampa
+                # esperaria loss_search_s de novo a cada degrau e chegaria tarde.
+                self._loss_search_active = True
+                self._last_loss_search_t = now
+                return self._apply_factor(
+                    1.0 + self.loss_search_step,
+                    reason="busca_alvo_ausente_cena_escura",
+                    summary=summary,
+                    allow_rollback=False,
+                    now=now,
+                    max_fraction=self.loss_search_step,
+                )
             reason = (
                 "congelada_anomalia_optica"
                 if target_present
@@ -414,6 +448,7 @@ class AutoExposureController:
 
         self._untrusted_since = None
         self._untrusted_safety_used = False
+        self._loss_search_active = False
         if unsafe_scene and now - self._last_safety_t >= self.safety_update_s:
             self._last_safety_t = now
             return self._apply_factor(

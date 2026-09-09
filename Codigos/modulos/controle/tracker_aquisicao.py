@@ -8,6 +8,7 @@ import numpy as np
 from modulos.artefatos import display_path
 from modulos.configuracoes.tracker import (
     AUTO_EXPOSURE_ENABLED,
+    EVENT_MIN_ABSENCE_SECONDS,
     BORDER_CONFIRM_SECONDS,
     BORDER_MIN_PEAK_RATIO,
     BORDER_MIN_SIGNATURE_SIMILARITY,
@@ -167,6 +168,7 @@ def executar_aquisicao(
     recovery_valid_frames = 0
     last_estimator_input_t = None
     ever_locked = False
+    ausencia_registrada = False
     last_frame = None
 
     while True:
@@ -381,8 +383,17 @@ def executar_aquisicao(
                     "\nQualidade optica recuperada. "
                     "Reconstruindo a media antes de liberar o controle."
                 )
-        if not event and target_was_present and not candidate_valid:
-            event = "inicio_alvo_ausente"
+        # Registrar a ausencia so depois que ela persiste: piscadas de fracao de
+        # segundo sao a maioria e afogavam os eventos que importam.
+        if candidate_valid:
+            ausencia_registrada = False
+        elif (
+            not event
+            and not ausencia_registrada
+            and signal_lost_s >= EVENT_MIN_ABSENCE_SECONDS
+        ):
+            ausencia_registrada = True
+            event = "alvo_ausente"
             logger.save_event_frame(frame, event)
         elif not event and measurement_valid and not signal_was_locked:
             event = "sinal_recuperado" if ever_locked else "sinal_inicial_confirmado"
@@ -426,6 +437,7 @@ def executar_aquisicao(
                 status_color=status_color,
                 elapsed_hours=(now - session_started) / 3600.0,
                 session_hours=session_hours,
+                sigma_centroide_px=selected.get("sigma_centroide_px"),
             )
             last_display_t = now
 

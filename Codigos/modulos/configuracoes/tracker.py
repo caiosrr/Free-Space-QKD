@@ -80,6 +80,17 @@ TEMPORAL_CONTROL_GAIN_SCALE = 0.35
 # menor exposicao que ainda fornece CNR confortavel para a ilha travada. Isso
 # preserva FPS e deixa a integracao para a media temporal de varios frames.
 AUTO_EXPOSURE_ENABLED = True
+# Depois de perder o alvo com a cena ESCURA, a exposicao pode simplesmente
+# estar baixa demais. Passado este tempo, ela volta a subir em degraus, em vez
+# de ficar congelada esperando um alvo que nao aparece justamente por falta de
+# exposicao. Foi esse impasse que encerrou a sessao de 2026-09-06 as 04:06.
+AUTO_EXPOSURE_LOSS_SEARCH_SECONDS = 8.0
+# A busca e deliberadamente mais agressiva que o controle normal. Os 10% a cada
+# 5 s existem para nao perturbar uma medicao em curso; com o alvo perdido nao ha
+# medicao para perturbar e o mount ja esta parado. No ritmo normal a exposicao
+# so dobrava em 64 s, contra os 75 s do limite de perda: chegava tarde demais.
+AUTO_EXPOSURE_LOSS_SEARCH_STEP_FRACTION = 0.35
+AUTO_EXPOSURE_LOSS_SEARCH_INTERVAL_SECONDS = 3.0
 AUTO_EXPOSURE_MIN_US = 1000.0
 AUTO_EXPOSURE_MAX_US = 18000.0
 AUTO_EXPOSURE_CNR_LOW = 8.0
@@ -152,6 +163,10 @@ VARIANCE_WINDOW_SECONDS = 2.0
 CSV_FLUSH_SECONDS = 1.0
 # Imagens de eventos sao amostradas para cobrir a sessao toda sem lotar o disco.
 # O frame terminal possui uma reserva separada e ignora estes dois limites.
+# Ausencias abaixo disso nao viram evento. Na sessao de 2026-09-06 foram 453
+# episodios, mediana de 0,32 s e apenas 4 acima de 5 s: 1518 eventos suprimidos
+# afogaram os poucos que importavam.
+EVENT_MIN_ABSENCE_SECONDS = 1.0
 TRACKER_EVENT_IMAGE_LIMIT = 200
 TRACKER_EVENT_IMAGE_MIN_INTERVAL_SECONDS = 30.0
 
@@ -212,6 +227,9 @@ if not 0 < TEMPORAL_CONTROL_GAIN_SCALE <= 1:
     raise ValueError("A escala de ganho temporal deve estar em (0, 1].")
 if not (
     0 < AUTO_EXPOSURE_MIN_US < AUTO_EXPOSURE_MAX_US
+    and AUTO_EXPOSURE_LOSS_SEARCH_SECONDS > 0
+    and 0 < AUTO_EXPOSURE_LOSS_SEARCH_STEP_FRACTION < 1
+    and AUTO_EXPOSURE_LOSS_SEARCH_INTERVAL_SECONDS > 0
     and 0 < AUTO_EXPOSURE_CNR_LOW < AUTO_EXPOSURE_CNR_HIGH
     and 0.5 < AUTO_EXPOSURE_MIN_TRUSTED_FRACTION <= 1.0
     and AUTO_EXPOSURE_UPDATE_SECONDS >= AUTO_EXPOSURE_HISTORY_SECONDS > 0
