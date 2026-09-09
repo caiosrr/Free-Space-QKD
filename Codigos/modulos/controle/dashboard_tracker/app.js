@@ -16,6 +16,7 @@
     "link-distance", "session-time", "system-state",
     "viewer-meta", "live-frame", "beacon-overlay", "camera-label",
     "measurement-rate", "coordinates", "sigma", "inset-caption",
+    "review-banner", "review-when", "review-back",
     "radial-error", "radial-metric",
     "scale", "tick-rest", "tick-wake", "scale-bar",
     "error-x", "error-y", "sigma-inline", "state-detail",
@@ -473,6 +474,7 @@
   }
 
   function atualizarFrame() {
+    if (revendoUnixS !== null) return;   // congelado numa revisao
     const imagem = new Image();
     imagem.onload = () => {
       ui["live-frame"].src = imagem.src;
@@ -480,6 +482,59 @@
     };
     imagem.src = `/api/frame.jpg?t=${Date.now()}`;
   }
+
+  // ── revisao: clicar no grafico volta ao frame daquele instante ─────
+  //
+  // O grafico mostra QUE houve uma descontinuidade, nunca o que a causou. O
+  // painel ja codifica um JPEG por quadro exibido, entao guardar os mesmos
+  // bytes num anel de 120 s custa memoria e nada de CPU: e a diferenca entre
+  // "perdeu sinal as 19:42" e ver o que estava no campo as 19:42.
+  let revendoUnixS = null;
+
+  function instanteDoClique(evento) {
+    const canvas = ui["trend-canvas"];
+    const caixa = canvas.getBoundingClientRect();
+    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+    // mesmas margens de desenharGrafico, convertidas de volta para CSS px
+    const esq = (30 * ratio) / ratio;
+    const dir = (6 * ratio) / ratio;
+    const largura = caixa.width - esq - dir;
+    const x = evento.clientX - caixa.left - esq;
+    if (largura <= 0) return null;
+    const fracao = Math.max(0, Math.min(1, x / largura));
+    return Date.now() - (1 - fracao) * HISTORY_MS;
+  }
+
+  function reverEm(alvoMs) {
+    const imagem = new Image();
+    imagem.onload = () => {
+      ui["live-frame"].src = imagem.src;
+      if (latest) desenharVisor(latest);
+    };
+    imagem.onerror = () => voltarAoVivo();
+    imagem.src = `/api/historico.jpg?t=${(alvoMs / 1000).toFixed(3)}`;
+    revendoUnixS = alvoMs / 1000;
+    const quando = new Date(alvoMs);
+    const hhmmss = quando.toTimeString().slice(0, 8);
+    const atras = Math.round((Date.now() - alvoMs) / 1000);
+    ui["review-banner"].hidden = false;
+    ui["review-when"].textContent = `${hhmmss} · ${atras} s atrás`;
+  }
+
+  function voltarAoVivo() {
+    revendoUnixS = null;
+    ui["review-banner"].hidden = true;
+    atualizarFrame();
+  }
+
+  ui["trend-canvas"].addEventListener("click", (evento) => {
+    const alvo = instanteDoClique(evento);
+    if (alvo !== null) reverEm(alvo);
+  });
+  ui["review-back"].addEventListener("click", voltarAoVivo);
+  document.addEventListener("keydown", (evento) => {
+    if (evento.key === "Escape") voltarAoVivo();
+  });
 
   setInterval(poll, 200);
   setInterval(atualizarFrame, 1000);

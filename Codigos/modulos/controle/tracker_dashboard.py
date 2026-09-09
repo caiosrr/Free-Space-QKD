@@ -6,6 +6,7 @@ participa da deteccao, nao altera a calibracao e nunca envia comandos ao mount.
 
 from __future__ import annotations
 
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -28,12 +29,28 @@ CONTENT_TYPES = {
 class TrackerDashboard:
     """Publica a visualizacao ao vivo em um servidor restrito ao computador."""
 
-    def __init__(self, *, frame_hz: float = 1.0, open_browser: bool = True):
+    # Janela do historico, igual a do grafico do painel: clicar no grafico so
+    # faz sentido se o frame daquele instante ainda existir.
+    HISTORY_SECONDS = 120.0
+
+    def __init__(
+        self,
+        *,
+        frame_hz: float = 4.0,
+        open_browser: bool = True,
+        history_seconds: float = HISTORY_SECONDS,
+    ):
         self._lock = threading.Lock()
         self._state: dict = {"connected": False}
         self._frame_jpeg: bytes | None = None
         self._last_frame_encode = 0.0
         self._frame_interval_s = 1.0 / max(float(frame_hz), 0.5)
+        # Anel de frames ja codificados. O custo e so memoria: o JPEG do quadro
+        # ao vivo ja e produzido de qualquer jeito, e guardar os mesmos bytes
+        # nao gasta CPU nenhuma. Uma ROI de 256x256 em q82 da ~11 kB, entao
+        # 120 s a 4 Hz custam cerca de 5 MB. E a unica forma de responder
+        # "o que aconteceu ali?" depois que o grafico mostra a descontinuidade.
+        self._history: deque = deque(maxlen=max(1, int(history_seconds * frame_hz)))
         self._closed = False
 
         handler = self._make_handler()
@@ -79,6 +96,35 @@ class TrackerDashboard:
                             allow_nan=False,
                         ).encode("utf-8")
                     self._send(body, "application/json; charset=utf-8", cache=False)
+                    return
+                if path == "/api/historico":
+                    body = json.dumps(dashboard._janela_do_historico()).encode("utf-8")
+                    self._send(body, "application/json; charset=utf-8", cache=False)
+                    return
+                if path == "/api/historico.jpg":
+                    consulta = self.path.split("?", 1)[1] if "?" in self.path else ""
+                    alvo = None
+                    for parte in consulta.split("&"):
+                        if parte.startswith("t="):
+                            try:
+                                alvo = float(parte[2:])
+                            except ValueError:
+                                alvo = None
+                    if alvo is None:
+                        self.send_error(400, "falta t=<unix>")
+                        return
+                    quando, body = dashboard._frame_no_instante(alvo)
+                    if body is None:
+                        self.send_response(204)
+                        self.end_headers()
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "no-store, max-age=0")
+                    self.send_header("X-Frame-Unix-S", f"{quando:.3f}")
+                    self.end_headers()
+                    self.wfile.write(body)
                     return
                 if path == "/api/frame.jpg":
                     with dashboard._lock:
@@ -139,6 +185,26 @@ class TrackerDashboard:
             self._state = clean_state
             if encoded is not None:
                 self._frame_jpeg = encoded
+                self._history.append((clean_state["updated_unix_s"], encoded))
+
+    def _frame_no_instante(self, alvo_unix: float):
+        """Frame gravado mais proximo de ``alvo_unix``. ``(None, None)`` se vazio."""
+        with self._lock:
+            if not self._history:
+                return None, None
+            melhor = min(self._history, key=lambda item: abs(item[0] - alvo_unix))
+        return melhor[0], melhor[1]
+
+    def _janela_do_historico(self) -> dict:
+        with self._lock:
+            if not self._history:
+                return {"vazio": True}
+            return {
+                "vazio": False,
+                "inicio_unix_s": self._history[0][0],
+                "fim_unix_s": self._history[-1][0],
+                "frames": len(self._history),
+            }
 
     @classmethod
     def _json_safe(cls, value):

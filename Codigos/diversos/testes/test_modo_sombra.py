@@ -126,3 +126,74 @@ class ABDaZonaDeRepousoTests(unittest.TestCase):
             "zona_parada_raio_px",
             tracker_telemetria.TrackerCsvLogger.FIELDNAMES,
         )
+
+
+class HistoricoDeFramesTests(unittest.TestCase):
+    """O grafico mostra QUE houve descontinuidade, nunca o que a causou.
+
+    O painel ja codifica um JPEG por quadro exibido; guardar os mesmos bytes num
+    anel de 120 s custa memoria e nada de CPU. Uma ROI de 256x256 em q82 da
+    ~11 kB, entao 120 s a 4 Hz ficam em torno de 5 MB.
+    """
+
+    def dashboard(self, **kwargs):
+        from modulos.controle.tracker_dashboard import TrackerDashboard
+
+        painel = TrackerDashboard(open_browser=False, **kwargs)
+        self.addCleanup(painel.close)
+        return painel
+
+    def alimentar(self, painel, quantidade, valor0=10, passo=15, intervalo=0.3):
+        import time
+
+        import numpy as np
+
+        marcas = []
+        for i in range(quantidade):
+            valor = valor0 + i * passo
+            painel.update(np.full((64, 64), valor, dtype=np.uint8), {"passo": i})
+            marcas.append((time.time(), valor))
+            time.sleep(intervalo)
+        return marcas
+
+    def test_o_anel_guarda_a_janela_pedida(self):
+        painel = self.dashboard(frame_hz=4.0, history_seconds=120.0)
+        self.assertEqual(painel._history.maxlen, 480)
+
+    def test_devolve_o_frame_do_instante_pedido(self):
+        import urllib.request
+
+        import cv2
+        import numpy as np
+
+        painel = self.dashboard(frame_hz=4.0)
+        marcas = self.alimentar(painel, 8)
+        for quando, valor in (marcas[1], marcas[-1]):
+            resposta = urllib.request.urlopen(
+                f"{painel.url}api/historico.jpg?t={quando:.3f}"
+            )
+            img = cv2.imdecode(
+                np.frombuffer(resposta.read(), np.uint8), cv2.IMREAD_GRAYSCALE
+            )
+            self.assertLessEqual(
+                abs(int(np.median(img)) - valor), 3,
+                f"o frame devolvido para t={quando:.2f} nao e o daquele instante",
+            )
+
+    def test_o_anel_descarta_o_que_saiu_da_janela(self):
+        painel = self.dashboard(frame_hz=4.0, history_seconds=1.0)
+        self.assertEqual(painel._history.maxlen, 4)
+        # O intervalo tem de ser maior que o de codificacao (1/frame_hz): o anel
+        # so recebe frames que o painel realmente codificou.
+        self.alimentar(painel, 7, intervalo=0.3)
+        self.assertEqual(len(painel._history), 4, "o anel nao pode crescer sem limite")
+
+    def test_sem_instante_o_pedido_e_recusado(self):
+        import urllib.error
+        import urllib.request
+
+        painel = self.dashboard()
+        self.alimentar(painel, 2, intervalo=0.05)
+        with self.assertRaises(urllib.error.HTTPError) as caso:
+            urllib.request.urlopen(f"{painel.url}api/historico.jpg")
+        self.assertEqual(caso.exception.code, 400)
