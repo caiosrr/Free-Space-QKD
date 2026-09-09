@@ -151,6 +151,7 @@ main {
 .corner { position: absolute; z-index: 2; color: var(--ink-2); font: .8rem var(--mono); letter-spacing: .04em; }
 .corner.tl { top: 9px; left: 11px; }
 .corner.tr { top: 9px; right: 11px; display: flex; align-items: center; gap: 6px; }
+.corner b { color: var(--ink); font-weight: 500; }
 .corner.bl { bottom: 9px; left: 11px; }
 .corner.br { bottom: 9px; right: 11px; }
 .live-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--sodium); animation: breathe 3s ease-in-out infinite; }

@@ -15,7 +15,7 @@
   [
     "link-distance", "session-time", "system-state",
     "viewer-meta", "live-frame", "beacon-overlay", "camera-label",
-    "measurement-rate", "coordinates", "sigma",
+    "measurement-rate", "coordinates", "sigma", "inset-caption",
     "radial-error", "radial-metric",
     "scale", "tick-rest", "tick-wake", "scale-bar",
     "error-x", "error-y", "sigma-inline", "state-detail",
@@ -275,6 +275,112 @@
       overlayCtx.arc(cx, cy, 1.8 * ratio, 0, Math.PI * 2);
       overlayCtx.fill();
     }
+
+    desenharLupa(s, width, height, ratio, escala);
+  }
+
+  // ── lupa ──────────────────────────────────────────────────────────
+  //
+  // A ROI tem 256 px e o visor uns 500 px de tela: 1 px de sensor vira ~2 px de
+  // tela. Com o erro tipico em torno de 1 px, o centro de massa se mexe 2 px na
+  // tela e o anel de repouso (1 px) fica MENOR que o proprio marcador. Nessa
+  // escala nao ha desenho que resolva: a grandeza que interessa e 1/200 da
+  // largura do quadro. A lupa mostra um recorte de LADO_PX px do sensor em
+  // torno do alvo, onde 1 px de erro vira dezenas de px de tela e os aneis
+  // voltam a significar alguma coisa. A imagem grande continua servindo para o
+  // que ela e boa: a forma da ilha e o que mais entrou no campo.
+  const LUPA_LADO_PX = 16;   // lado do recorte, em pixels de sensor
+  const LUPA_TELA = 172;     // lado da lupa, em px de CSS
+
+  function desenharLupa(s, width, height, ratio, escala) {
+    const img = ui["live-frame"];
+    if (!img.naturalWidth || !s.roi_width_px) return;
+
+    const lado = LUPA_TELA * ratio;
+    const margem = 10 * ratio;
+    const x0 = width - lado - margem;
+    const y0 = height - lado - margem;
+    // Ampliacao dita em relacao a imagem grande, que e com o que o olho
+    // compara. Ambas em px de dispositivo por px de sensor, entao o fator de
+    // densidade de tela se cancela.
+    const amp = (lado / LUPA_LADO_PX) / escala;
+    ui["inset-caption"].textContent =
+      `lupa ${amp.toFixed(0)}x · recorte de ${LUPA_LADO_PX} px do sensor`;
+
+    // recorte da imagem ao vivo, centrado no alvo
+    const meio = LUPA_LADO_PX / 2;
+    const sx = s.target_x_px - meio;
+    const sy = s.target_y_px - meio;
+    overlayCtx.save();
+    overlayCtx.beginPath();
+    overlayCtx.rect(x0, y0, lado, lado);
+    overlayCtx.clip();
+    overlayCtx.fillStyle = tone("--well");
+    overlayCtx.fillRect(x0, y0, lado, lado);
+    overlayCtx.imageSmoothingEnabled = false;
+    try {
+      overlayCtx.drawImage(img, sx, sy, LUPA_LADO_PX, LUPA_LADO_PX, x0, y0, lado, lado);
+    } catch (e) {
+      // imagem ainda nao decodificada; o proximo quadro desenha
+    }
+
+    // do sensor para dentro da lupa
+    const k = lado / LUPA_LADO_PX;
+    const px = (v) => x0 + (v - sx) * k;
+    const py = (v) => y0 + (v - sy) * k;
+    const ax = px(s.target_x_px);
+    const ay = py(s.target_y_px);
+
+    [[s.hold_enter_radius_px, tone("--rest")], [s.hold_exit_radius_px, tone("--sodium")]]
+      .forEach(([raio, cor]) => {
+        if (!raio) return;
+        overlayCtx.strokeStyle = cor;
+        overlayCtx.globalAlpha = 0.65;
+        overlayCtx.lineWidth = 1.1 * ratio;
+        overlayCtx.setLineDash([4 * ratio, 5 * ratio]);
+        overlayCtx.beginPath();
+        overlayCtx.arc(ax, ay, raio * k, 0, Math.PI * 2);
+        overlayCtx.stroke();
+      });
+    overlayCtx.setLineDash([]);
+    overlayCtx.globalAlpha = 1;
+
+    // eixos com vao, como no visor grande
+    overlayCtx.strokeStyle = "rgba(250,243,230,.45)";
+    overlayCtx.lineWidth = ratio;
+    const vao = 9 * ratio;
+    const bra = 13 * ratio;
+    overlayCtx.beginPath();
+    overlayCtx.moveTo(ax - vao - bra, ay); overlayCtx.lineTo(ax - vao, ay);
+    overlayCtx.moveTo(ax + vao, ay); overlayCtx.lineTo(ax + vao + bra, ay);
+    overlayCtx.moveTo(ax, ay - vao - bra); overlayCtx.lineTo(ax, ay - vao);
+    overlayCtx.moveTo(ax, ay + vao); overlayCtx.lineTo(ax, ay + vao + bra);
+    overlayCtx.stroke();
+
+    if (s.has_signal && s.x_cm_px != null && s.y_cm_px != null) {
+      // Fora do recorte o marcador encosta na borda, em vez de sumir: assim a
+      // lupa nunca fica vazia sem dizer por que.
+      const bx = Math.max(x0 + 2 * ratio, Math.min(x0 + lado - 2 * ratio, px(s.x_cm_px)));
+      const by = Math.max(y0 + 2 * ratio, Math.min(y0 + lado - 2 * ratio, py(s.y_cm_px)));
+      const dentro = bx === px(s.x_cm_px) && by === py(s.y_cm_px);
+      const cor = s.hold_active ? tone("--rest") : tone("--sodium");
+      overlayCtx.globalAlpha = dentro ? 1 : 0.5;
+      overlayCtx.strokeStyle = cor;
+      overlayCtx.lineWidth = 1.6 * ratio;
+      overlayCtx.beginPath();
+      overlayCtx.arc(bx, by, 9 * ratio, 0, Math.PI * 2);
+      overlayCtx.stroke();
+      overlayCtx.fillStyle = cor;
+      overlayCtx.beginPath();
+      overlayCtx.arc(bx, by, 2.4 * ratio, 0, Math.PI * 2);
+      overlayCtx.fill();
+      overlayCtx.globalAlpha = 1;
+    }
+    overlayCtx.restore();
+
+    overlayCtx.strokeStyle = tone("--rule");
+    overlayCtx.lineWidth = ratio;
+    overlayCtx.strokeRect(x0, y0, lado, lado);
   }
 
   // ── historico ─────────────────────────────────────────────────────
