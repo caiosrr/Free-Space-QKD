@@ -102,11 +102,14 @@ def imprimir(resultado: dict) -> None:
 
 
 def calibrar_pixels_ruins(exposure_seconds: float, quantidade: int = 20) -> dict:
-    """Constroi a mascara com o feixe bloqueado e a grava para as sessoes."""
-    print("\n=== MASCARA DE PIXELS RUINS ===")
-    print("Bloqueie o feixe e tampe a objetiva. A mascara so faz sentido no escuro.")
-    input("Pressione ENTER quando estiver pronto...")
+    """Constroi a mascara a partir de frames escuros e a grava para as sessoes.
 
+    NAO pergunta nada e nao segura a camera alem do necessario: enquanto este
+    processo mantem a IDS aberta, nenhum outro programa consegue abri-la, e e
+    justamente por outro programa que o operador aponta o telescopio. Quem
+    chama confirma ANTES de conectar.
+    """
+    print("\n=== MASCARA DE PIXELS RUINS ===")
     foco.definir_mascara_pixels_ruins(None)
     print(f"Capturando {quantidade} frames escuros...")
     escuros = []

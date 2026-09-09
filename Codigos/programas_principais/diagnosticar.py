@@ -54,6 +54,14 @@ if __name__ == "__main__":
     for aviso in optica.avisos():
         print(f"  ATENCAO: {aviso}")
 
+    # A confirmacao vem ANTES de conectar: com a IDS aberta por este processo,
+    # nenhum outro consegue abri-la, e e por outro programa que o operador
+    # aponta o telescopio.
+    if args.calibrar_pixels:
+        print("\nAponte para uma regiao SEM LUZ visivel (ou tampe a objetiva).")
+        print("A mascara so faz sentido no escuro.")
+        input("Pressione ENTER quando estiver pronto...")
+
     connect_camera()
     try:
         foco.set_focus_mode("dual")
@@ -64,8 +72,12 @@ if __name__ == "__main__":
                 float(args.exposicao[0]) * 1e-6 if args.exposicao else foco.EXPOSURE_SECONDS
             )
             diagnostico.calibrar_pixels_ruins(exposicao_mascara, args.frames)
-            print("\nDestampe a objetiva e libere o feixe para o restante do diagnostico.")
-            input("Pressione ENTER para continuar...")
+            # Encerra aqui e LIBERA a camera. Reapontar o telescopio para o
+            # beacon exige o Cockpit, que nao abre a IDS enquanto este processo
+            # a mantem. Rode de novo, sem --calibrar-pixels, ja mirado.
+            print("\nCamera liberada. Reaponte para o beacon e rode de novo sem")
+            print("--calibrar-pixels para medir sinal e exposicao.")
+            raise SystemExit(0)
 
         if diagnostico.carregar_mascara_se_existir():
             print("Mascara de pixels ruins: ATIVA")
