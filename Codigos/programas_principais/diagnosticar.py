@@ -58,7 +58,12 @@ if __name__ == "__main__":
     try:
         foco.set_focus_mode("dual")
         if args.calibrar_pixels:
-            diagnostico.calibrar_pixels_ruins(foco.EXPOSURE_SECONDS, args.frames)
+            # Pixel quente aparece melhor na exposicao MAIS LONGA: a corrente
+            # escura se acumula com o tempo, enquanto o defeito fixo nao.
+            exposicao_mascara = (
+                float(args.exposicao[0]) * 1e-6 if args.exposicao else foco.EXPOSURE_SECONDS
+            )
+            diagnostico.calibrar_pixels_ruins(exposicao_mascara, args.frames)
             print("\nDestampe a objetiva e libere o feixe para o restante do diagnostico.")
             input("Pressione ENTER para continuar...")
 

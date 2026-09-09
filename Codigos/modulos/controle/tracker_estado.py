@@ -80,6 +80,12 @@ class TrackerState:
     mount_alt_deg: float | None = None
     offset_az_deg: float = 0.0
     offset_alt_deg: float = 0.0
+    shadow_bias_dx_px: float = 0.0
+    shadow_bias_dy_px: float = 0.0
+    shadow_bias_radius_px: float = 0.0
+    shadow_bias_ready: bool = False
+    shadow_bias_window_s: float = 0.0
+    shadow_corrections: int = 0
     safety_stop_reason: str | None = None
     watchdog_error: str | None = None
     preflight_active: bool = False

@@ -5,6 +5,8 @@ Este modulo so desenha informacoes; nao participa da medicao nem do controle.
 
 import cv2
 
+from modulos.configuracoes import optica
+from modulos.controle.cameras.backend import backend_name
 from modulos.configuracoes.tracker import (
     HOLD_ENTER_RADIUS_PX,
     HOLD_EXIT_RADIUS_PX,
@@ -93,6 +95,7 @@ class TrackerDisplay:
         status_color,
         elapsed_hours,
         session_hours,
+        sigma_centroide_px=None,
     ):
         def ratio_text(value):
             return "--" if value is None else f"{value:.2f}x"
@@ -122,6 +125,15 @@ class TrackerDisplay:
                         ),
                         "hold_enter_radius_px": HOLD_ENTER_RADIUS_PX,
                         "hold_exit_radius_px": HOLD_EXIT_RADIUS_PX,
+                        "recovery_target_frames": TEMPORAL_RECOVERY_VALID_FRAMES,
+                        # Escala fisica e rotulos: o painel mostra o erro em
+                        # centimetros no alvo ao lado dos pixels.
+                        "cm_per_px": optica.metros_por_px_no_alvo() * 100.0,
+                        "link_label": (
+                            f"enlace experimental · {optica.LINK_DISTANCE_M / 1000:.1f} km"
+                        ),
+                        "camera_label": backend_name().upper(),
+                        "sigma_centroide_px": sigma_centroide_px,
                     },
                 )
             except Exception as exc:

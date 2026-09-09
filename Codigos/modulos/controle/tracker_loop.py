@@ -20,6 +20,9 @@ from modulos.configuracoes.tracker import (
     MAX_TRACKING_RATE_DEG_S,
     SLOW_BIAS_WARMUP_SECONDS,
     SLOW_BIAS_WINDOW_SECONDS,
+    SHADOW_BIAS_TRIGGER_PX,
+    SHADOW_BIAS_WARMUP_SECONDS,
+    SHADOW_BIAS_WINDOW_SECONDS,
     SLOW_CORRECTION_PERSISTENCE_SECONDS,
     TEMPORAL_CONTROL_GAIN_SCALE,
     TEMPORAL_WINDOW_SECONDS,
@@ -203,6 +206,17 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
         fast_radius_px=FAST_CORRECTION_RADIUS_PX,
     )
 
+    # Observador do modo sombra: janela longa, so registro. Nunca entra em
+    # nenhuma decisao de comando; existe para medir o que uma zona de repouso
+    # mais apertada teria feito.
+    shadow_bias = SlowBiasEstimator(
+        window_s=SHADOW_BIAS_WINDOW_SECONDS,
+        warmup_s=SHADOW_BIAS_WARMUP_SECONDS,
+    )
+    shadow_corrections = 0
+    shadow_armed = True
+    shadow_estimate = None
+
     dt_target = 1.0 / CONTROL_HZ
     last_loop_t = time.perf_counter()
     last_seq = -1
@@ -269,6 +283,8 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     prev_dy_filt_px = None
                     runaway_count = 0
                     repousar("sem_sinal")
+                    shadow_bias.reset()
+                    shadow_estimate = None
                 elif pulse_cycle.ready(measurement_ts) and seq != last_seq:
                     last_seq = seq
                     fast_radius_px = float(np.hypot(dx_filt, dy_filt))
@@ -285,6 +301,15 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                         fast_estimate.direction_coherence
                     )
                     estado.fast_ready = fast_estimate.ready
+                    shadow_estimate = shadow_bias.observe(measurement_ts, dx_filt, dy_filt)
+                    # Conta uma correcao hipotetica por travessia do limiar,
+                    # com rearme abaixo da metade, para nao contar oscilacao.
+                    if shadow_estimate.ready:
+                        if shadow_armed and shadow_estimate.radius_px >= SHADOW_BIAS_TRIGGER_PX:
+                            shadow_corrections += 1
+                            shadow_armed = False
+                        elif shadow_estimate.radius_px <= SHADOW_BIAS_TRIGGER_PX * 0.5:
+                            shadow_armed = True
                     bias = slow_bias.observe(measurement_ts, dx_filt, dy_filt)
                     estado.slow_dx_px = bias.dx_px
                     estado.slow_dy_px = bias.dy_px
@@ -517,6 +542,14 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     state.fast_error_ready = estado.fast_ready
                     state.correction_persistence_s = estado.correction_persistence_s
                     state.control_error_source = estado.source
+                    state.shadow_bias_dx_px = shadow_estimate.dx_px if shadow_estimate else 0.0
+                    state.shadow_bias_dy_px = shadow_estimate.dy_px if shadow_estimate else 0.0
+                    state.shadow_bias_radius_px = (
+                        shadow_estimate.radius_px if shadow_estimate else 0.0
+                    )
+                    state.shadow_bias_ready = bool(shadow_estimate and shadow_estimate.ready)
+                    state.shadow_bias_window_s = shadow_estimate.span_s if shadow_estimate else 0.0
+                    state.shadow_corrections = shadow_corrections
                     state.control_loop_hz = control_loop_hz
                     state.correction_phase = pulse_cycle.phase
                     state.correction_cycles = pulse_cycle.completed

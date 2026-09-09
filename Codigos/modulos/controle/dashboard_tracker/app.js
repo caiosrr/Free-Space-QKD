@@ -1,207 +1,365 @@
+/* Painel do tracker — somente leitura.
+   Consome /api/state e /api/frame.jpg. Nao mede, nao calibra e nao comanda.
+
+   Cada grandeza aparece UMA vez, na forma que serve melhor:
+     erro radial  -> numero grande + escala com as marcas de repouso/retomada
+     X e Y        -> numero exato + historico no grafico (sem barras repetindo)
+     visor        -> aneis de repouso e retomada em torno do alvo
+*/
+
 (() => {
   "use strict";
 
   const $ = (id) => document.getElementById(id);
-  const ui = {
-    sessionTime: $("session-time"), systemState: $("system-state"), stateLabel: $("state-label"),
-    stateDetail: $("state-detail"), radialError: $("radial-error"), errorX: $("error-x"),
-    errorY: $("error-y"), frameCount: $("frame-count"), windowTime: $("window-time"),
-    exposure: $("exposure"), measurementRate: $("measurement-rate"), controlRate: $("control-rate"),
-    roiSize: $("roi-size"), frame: $("live-frame"), overlay: $("beacon-overlay"),
-    coordinates: $("coordinates"), trend: $("trend-canvas"), historyStatus: $("history-status"),
-    actuation: $("actuation"), angularError: $("angular-error"), mountCommand: $("mount-command"),
-    mountOffset: $("mount-offset"), quality: $("quality"), signalLost: $("signal-lost"),
-    lastUpdate: $("last-update"),
-  };
-  const overlayCtx = ui.overlay.getContext("2d");
-  const trendCtx = ui.trend.getContext("2d");
+  const ui = {};
+  [
+    "link-distance", "session-time", "system-state",
+    "viewer-meta", "live-frame", "beacon-overlay", "camera-label",
+    "measurement-rate", "coordinates", "sigma",
+    "radial-error", "radial-metric",
+    "scale", "scale-rest", "tick-rest", "tick-wake", "pointer",
+    "error-x", "error-y", "sigma-inline", "state-detail",
+    "actuation", "mount-command", "angular-error", "mount-offset",
+    "quality", "exposure", "calibration",
+    "trend-canvas", "last-update",
+  ].forEach((id) => { ui[id] = $(id); });
+
+  const overlayCtx = ui["beacon-overlay"].getContext("2d");
+  const trendCtx = ui["trend-canvas"].getContext("2d");
+
+  const HISTORY_MS = 120000;
+  const TRAIL_MAX = 80;
   const history = [];
+  const trail = [];
+
   let latest = null;
   let lastServerTimestamp = 0;
   let lastMetricRender = 0;
 
-  function fmt(value, digits = 2) {
-    return value == null ? "—" : Number(value).toFixed(digits).replace(".", ",");
-  }
-  function signed(value, digits = 2) {
-    if (value == null) return "—";
-    return `${value >= 0 ? "+" : "−"}${Math.abs(Number(value)).toFixed(digits).replace(".", ",")}`;
-  }
-  function clock(seconds) {
-    const value = Math.max(0, Math.round(seconds || 0));
-    return `${String(Math.floor(value / 3600)).padStart(2, "0")}:${String(Math.floor((value % 3600) / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
-  }
+  const CSS = getComputedStyle(document.documentElement);
+  const tone = (name) => CSS.getPropertyValue(name).trim();
+
+  const fmt = (v, d = 2) =>
+    v == null || !isFinite(v) ? "—" : Number(v).toFixed(d).replace(".", ",");
+  const signed = (v, d = 2) =>
+    v == null || !isFinite(v) ? "—" : `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(d).replace(".", ",")}`;
+  const clock = (seconds) => {
+    const s = Math.max(0, Math.round(seconds || 0));
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
+  };
+  const setTone = (el, kind) => { el.className = el.className.replace(/\bis-\w+/g, "").trim() + ` is-${kind}`; };
+
   function resizeCanvas(canvas) {
     const rect = canvas.getBoundingClientRect();
     const ratio = Math.min(window.devicePixelRatio || 1, 2);
     const width = Math.max(1, Math.round(rect.width * ratio));
     const height = Math.max(1, Math.round(rect.height * ratio));
-    if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
     return { width, height, ratio };
   }
 
-  function statusInfo(s) {
-    const label = (s.status || "AGUARDANDO").replaceAll(" - ", " · ");
-    if (s.safety_stop_reason) return { label, detail: s.safety_stop_reason, css: "state-fault", system: "PARADA" };
-    if (!s.has_signal || label.includes("ANOMALIA") || label.includes("REJEITADO")) {
-      const targetPresent = Boolean(s.target_present);
-      const detail = targetPresent
-        ? `beacon presente · aparência instável ${fmt(s.optical_unstable_s, 1)} s`
-        : s.optical_anomaly_reason || `beacon ausente ${fmt(s.signal_lost_s, 1)} s`;
-      return { label, detail, css: targetPresent ? "state-active" : "state-fault", system: "MOUNT PARADO" };
+  // ── interpretacao do estado ───────────────────────────────────────
+  function leitura(s) {
+    if (s.safety_stop_reason) {
+      return { estado: "parada de segurança", kind: "fault", detalhe: s.safety_stop_reason };
     }
-    if (s.hold_active) {
-      const waiting = s.control_error_source === "aguardando_vies";
-      const warming = !s.slow_bias_ready;
-      const detail = waiting ? "confirmando deriva persistente" : warming ? "formando mediana lenta" : "dentro da zona de repouso";
-      return { label, detail, css: waiting || warming ? "state-active" : "state-stable", system: waiting || warming ? "AVALIANDO" : "NORMAL" };
+    if (!s.target_present) {
+      return {
+        estado: "sem sinal",
+        kind: "fault",
+        detalhe: `beacon ausente há ${fmt(s.signal_lost_s, 1)} s · mount parado, sem busca`,
+      };
     }
-    return { label, detail: s.trim_mode_active ? "micropulso fino" : "correção ativa", css: "state-active", system: "ATUANDO" };
+    if (!s.has_signal) {
+      const anomalia = (s.optical_anomaly_reason || "").replaceAll(",", ", ");
+      return {
+        estado: "aparência instável",
+        kind: "fault",
+        detalhe: anomalia
+          ? `${anomalia} · mount parado até a luz normalizar`
+          : `reconstruindo a média temporal há ${fmt(s.optical_unstable_s, 1)} s`,
+      };
+    }
+    if (s.correction_phase === "parando" || s.correction_phase === "acomodacao") {
+      return {
+        estado: "acomodando",
+        kind: "act",
+        detalhe: "aguardando uma média inteiramente posterior ao movimento",
+      };
+    }
+    if (!s.hold_active) {
+      return {
+        estado: "corrigindo",
+        kind: "act",
+        detalhe: s.trim_mode_active
+          ? "micropulsos finos, com espera pela nova média entre eles"
+          : "correção sobre erro persistente e coerente em direção",
+      };
+    }
+    if (s.control_error_source === "aguardando_vies") {
+      return { estado: "confirmando", kind: "act", detalhe: "deriva possível, aguardando persistência antes de atuar" };
+    }
+    if (!s.slow_bias_ready) {
+      return { estado: "aquecendo", kind: "act", detalhe: "formando a mediana lenta de referência" };
+    }
+    return { estado: "em repouso", kind: "rest", detalhe: "dentro da zona de repouso · mount parado por decisão" };
   }
 
-  function renderMetrics(s) {
-    const state = statusInfo(s);
-    ui.sessionTime.textContent = clock((s.elapsed_hours || 0) * 3600);
-    ui.systemState.textContent = state.system;
-    ui.systemState.className = state.css;
-    ui.stateLabel.textContent = state.label;
-    ui.stateLabel.className = state.css;
-    ui.stateDetail.textContent = state.detail;
-    ui.radialError.textContent = fmt(s.radial_error_px, 2);
-    ui.errorX.textContent = `X ${signed(s.dx_px, 2)}`;
-    ui.errorY.textContent = `Y↑ ${signed(s.dy_up_px, 2)}`;
-    ui.frameCount.textContent = s.temporal_frame_count || 0;
-    ui.windowTime.textContent = `${fmt(s.temporal_window_s, 2)} s acumulados`;
-    ui.exposure.textContent = fmt(s.exposure_us, 0);
-    ui.measurementRate.textContent = fmt(s.measurement_hz, 1);
-    ui.controlRate.textContent = `controle ${fmt(s.control_loop_hz, 1)} Hz`;
-    ui.roiSize.textContent = `ROI ${s.roi_width_px || "—"} × ${s.roi_height_px || "—"}`;
-    ui.coordinates.textContent = s.has_signal ? `X ${signed(s.dx_px)} px · Y↑ ${signed(s.dy_up_px)} px` : "sem medição válida";
-    ui.actuation.textContent = s.trim_mode_active ? "micropulso por viés lento" : s.control_error_source === "aguardando_vies" ? "confirmando deriva" : s.hold_active ? "repouso" : "correção rápida";
-    ui.angularError.textContent = `Az ${signed(s.err_az_deg, 5)} · Alt ${signed(s.err_alt_deg, 5)} deg`;
-    ui.mountCommand.textContent = `Az ${signed(s.cmd_az_deg_s, 4)} · Alt ${signed(s.cmd_alt_deg_s, 4)} °/s`;
-    ui.mountOffset.textContent = `Az ${signed((s.offset_az_deg || 0) * 3600, 1)} · Alt ${signed((s.offset_alt_deg || 0) * 3600, 1)} arcsec`;
-    const ratios = s.optical_intensity_ratio == null ? "" : ` · int ${fmt(s.optical_intensity_ratio)}× · área ${fmt(s.optical_area_ratio)}×`;
-    const consensus = s.optical_quality_phase === "recuperando" ? ` · consenso ${fmt((s.optical_recovery_fraction || 0) * 100, 0)}%` : "";
-    ui.quality.textContent = `${s.optical_quality_phase || "—"}${ratios}${consensus}`;
-    ui.quality.className = s.optical_quality_phase === "normal"
-      ? "state-stable"
-      : s.target_present ? "state-active" : "state-fault";
-    ui.signalLost.textContent = `${fmt(s.signal_lost_s, 1)} s`;
-    ui.historyStatus.textContent = s.has_signal ? "medição aceita" : "medição suspensa";
-    ui.historyStatus.className = s.has_signal ? "state-stable" : "state-fault";
-    ui.lastUpdate.textContent = `atualizado ${new Date().toLocaleTimeString("pt-BR")}`;
-    drawOverlay(s);
+  function textoAtuacao(s) {
+    if (s.correction_phase === "parando" || s.correction_phase === "acomodacao") return "acomodação pós-movimento";
+    if (s.trim_mode_active) return "micropulso fino";
+    if (!s.hold_active) return "correção ativa";
+    if (s.control_error_source === "aguardando_vies") return "confirmando deriva";
+    const n = s.correction_cycles || 0;
+    return n ? `repouso · ${n} correç${n > 1 ? "ões" : "ão"} na sessão` : "repouso";
   }
 
-  function drawOverlay(s) {
-    const { width, height, ratio } = resizeCanvas(ui.overlay);
+  // ── render ────────────────────────────────────────────────────────
+  function render(s) {
+    const r = leitura(s);
+
+    ui["session-time"].textContent = clock((s.elapsed_hours || 0) * 3600);
+    ui["system-state"].textContent = r.estado;
+    setTone(ui["system-state"], r.kind);
+    ui["state-detail"].textContent = r.detalhe;
+    ui["link-distance"].textContent = s.link_label || "";
+    ui["camera-label"].textContent = s.camera_label || "";
+
+    ui["radial-error"].textContent = fmt(s.radial_error_px, 2);
+    setTone(ui["radial-error"], r.kind === "fault" ? "fault" : s.hold_active ? "rest" : "act");
+    ui["radial-error"].classList.add("num");
+    ui["radial-metric"].textContent =
+      s.radial_error_px != null && s.cm_per_px
+        ? `${fmt(s.radial_error_px * s.cm_per_px, 1)} cm no alvo`
+        : "";
+    desenharEscala(s);
+
+    ui["error-x"].textContent = `${signed(s.dx_px, 2)} px`;
+    ui["error-y"].textContent = `${signed(s.dy_up_px, 2)} px`;
+    ui["sigma-inline"].textContent = s.sigma_centroide_px ? `${fmt(s.sigma_centroide_px, 3)} px` : "—";
+
+    ui["viewer-meta"].textContent =
+      `ROI ${s.roi_width_px || "—"}×${s.roi_height_px || "—"} · ${fmt(s.temporal_window_s, 2)} s · ${s.temporal_frame_count || 0} frames`;
+    ui["measurement-rate"].textContent =
+      `${fmt(s.measurement_hz, 1)} Hz medição · ${fmt(s.control_loop_hz, 1)} Hz controle`;
+    ui["coordinates"].textContent = s.has_signal
+      ? `X ${signed(s.dx_px)} · Y↑ ${signed(s.dy_up_px)} px`
+      : "sem medição válida";
+    ui["sigma"].textContent = s.sigma_centroide_px ? `σ ${fmt(s.sigma_centroide_px, 3)} px` : "—";
+
+    ui["actuation"].textContent = textoAtuacao(s);
+    ui["mount-command"].textContent =
+      Math.abs(s.cmd_az_deg_s || 0) + Math.abs(s.cmd_alt_deg_s || 0) > 1e-9
+        ? `Az ${signed(s.cmd_az_deg_s, 4)} · Alt ${signed(s.cmd_alt_deg_s, 4)} °/s`
+        : "parado";
+    ui["angular-error"].textContent = `Az ${signed(s.err_az_deg, 5)} · Alt ${signed(s.err_alt_deg, 5)}°`;
+    ui["mount-offset"].textContent =
+      `Az ${signed((s.offset_az_deg || 0) * 3600, 1)}″ · Alt ${signed((s.offset_alt_deg || 0) * 3600, 1)}″`;
+
+    const fase = s.optical_quality_phase || "—";
+    const razoes = s.optical_intensity_ratio == null
+      ? ""
+      : ` · int ${fmt(s.optical_intensity_ratio)}× · área ${fmt(s.optical_area_ratio)}×`;
+    ui["quality"].textContent = fase + razoes;
+    setTone(ui["quality"], fase === "normal" ? "rest" : s.target_present ? "act" : "fault");
+
+    ui["exposure"].textContent = `${fmt(s.exposure_us, 0)} µs`;
+    ui["calibration"].textContent = s.calibration_name || "contínua";
+    ui["last-update"].textContent = `atualizado ${new Date().toLocaleTimeString("pt-BR")}`;
+
+    desenharVisor(s);
+  }
+
+  // escala com marcas, no lugar de uma barra de progresso
+  function desenharEscala(s) {
+    const rest = s.hold_enter_radius_px || 1;
+    const wake = s.hold_exit_radius_px || 2;
+    const max = Math.max(wake * 1.75, 3.5);
+    const pos = (v) => `${Math.max(0, Math.min(100, (v / max) * 100))}%`;
+
+    ui["scale-rest"].style.left = "0";
+    ui["scale-rest"].style.width = pos(rest);
+    ui["tick-rest"].style.left = pos(rest);
+    ui["tick-rest"].firstElementChild.textContent = `${fmt(rest, 1)} repouso`;
+    ui["tick-wake"].style.left = pos(wake);
+    ui["tick-wake"].firstElementChild.textContent = `${fmt(wake, 1)} retoma`;
+
+    const v = s.radial_error_px;
+    ui["pointer"].style.left = v == null || !isFinite(v) ? "0%" : pos(v);
+    ui["pointer"].style.borderTopColor =
+      v == null ? tone("--ink-3") : v <= rest ? tone("--rest") : v <= wake ? tone("--sodium") : tone("--fault");
+  }
+
+  // ── visor ─────────────────────────────────────────────────────────
+  function desenharVisor(s) {
+    const { width, height, ratio } = resizeCanvas(ui["beacon-overlay"]);
     overlayCtx.clearRect(0, 0, width, height);
     if (!s.roi_width_px || !s.roi_height_px) return;
-    const scale = Math.min(width / s.roi_width_px, height / s.roi_height_px);
-    const offsetX = (width - s.roi_width_px * scale) / 2;
-    const offsetY = (height - s.roi_height_px * scale) / 2;
-    const targetX = offsetX + s.target_x_px * scale;
-    const targetY = offsetY + s.target_y_px * scale;
 
-    overlayCtx.strokeStyle = "rgba(103,183,195,.68)";
+    const escala = Math.min(width / s.roi_width_px, height / s.roi_height_px);
+    const ox = (width - s.roi_width_px * escala) / 2;
+    const oy = (height - s.roi_height_px * escala) / 2;
+    const tx = ox + s.target_x_px * escala;
+    const ty = oy + s.target_y_px * escala;
+
+    // aneis de repouso e retomada: o que da significado imediato ao numero
+    overlayCtx.setLineDash([4 * ratio, 5 * ratio]);
+    overlayCtx.lineWidth = 1.1 * ratio;
+    [[s.hold_enter_radius_px, tone("--rest")], [s.hold_exit_radius_px, tone("--sodium")]]
+      .forEach(([raio, cor]) => {
+        if (!raio) return;
+        overlayCtx.strokeStyle = cor;
+        overlayCtx.globalAlpha = 0.5;
+        overlayCtx.beginPath();
+        overlayCtx.arc(tx, ty, Math.max(raio * escala, 3 * ratio), 0, Math.PI * 2);
+        overlayCtx.stroke();
+      });
+    overlayCtx.setLineDash([]);
+    overlayCtx.globalAlpha = 1;
+
+    // cruz do alvo, curta e discreta
+    overlayCtx.strokeStyle = "rgba(241,231,214,.28)";
     overlayCtx.lineWidth = ratio;
-    overlayCtx.beginPath(); overlayCtx.moveTo(offsetX, targetY); overlayCtx.lineTo(width - offsetX, targetY); overlayCtx.stroke();
-    overlayCtx.beginPath(); overlayCtx.moveTo(targetX, offsetY); overlayCtx.lineTo(targetX, height - offsetY); overlayCtx.stroke();
-    overlayCtx.fillStyle = "rgba(233,239,237,.9)";
-    overlayCtx.beginPath(); overlayCtx.arc(targetX, targetY, 2.2 * ratio, 0, Math.PI * 2); overlayCtx.fill();
+    const braco = 10 * ratio;
+    overlayCtx.beginPath();
+    overlayCtx.moveTo(tx - braco, ty); overlayCtx.lineTo(tx + braco, ty);
+    overlayCtx.moveTo(tx, ty - braco); overlayCtx.lineTo(tx, ty + braco);
+    overlayCtx.stroke();
+
+    // rastro recente
+    if (trail.length > 1) {
+      overlayCtx.strokeStyle = tone("--sodium");
+      overlayCtx.lineWidth = 1.1 * ratio;
+      for (let i = 1; i < trail.length; i += 1) {
+        overlayCtx.globalAlpha = (i / trail.length) * 0.45;
+        overlayCtx.beginPath();
+        overlayCtx.moveTo(ox + trail[i - 1].x * escala, oy + trail[i - 1].y * escala);
+        overlayCtx.lineTo(ox + trail[i].x * escala, oy + trail[i].y * escala);
+        overlayCtx.stroke();
+      }
+      overlayCtx.globalAlpha = 1;
+    }
 
     if (s.has_signal && s.x_cm_px != null && s.y_cm_px != null) {
-      overlayCtx.strokeStyle = s.hold_active ? "#65b488" : "#d3a04c";
-      overlayCtx.lineWidth = 1.2 * ratio;
+      const cx = ox + s.x_cm_px * escala;
+      const cy = oy + s.y_cm_px * escala;
+      const cor = s.hold_active ? tone("--rest") : tone("--sodium");
+      overlayCtx.strokeStyle = cor;
+      overlayCtx.lineWidth = 1.4 * ratio;
       overlayCtx.beginPath();
-      overlayCtx.arc(offsetX + s.x_cm_px * scale, offsetY + s.y_cm_px * scale, 5 * ratio, 0, Math.PI * 2);
+      overlayCtx.arc(cx, cy, 7 * ratio, 0, Math.PI * 2);
       overlayCtx.stroke();
+      overlayCtx.fillStyle = cor;
+      overlayCtx.beginPath();
+      overlayCtx.arc(cx, cy, 1.8 * ratio, 0, Math.PI * 2);
+      overlayCtx.fill();
     }
   }
 
-  function drawTrend() {
-    const { width, height, ratio } = resizeCanvas(ui.trend);
-    const pad = { left: 36 * ratio, right: 12 * ratio, top: 12 * ratio, bottom: 24 * ratio };
+  // ── historico ─────────────────────────────────────────────────────
+  function desenharGrafico() {
+    const { width, height, ratio } = resizeCanvas(ui["trend-canvas"]);
+    const pad = { left: 30 * ratio, right: 6 * ratio, top: 8 * ratio, bottom: 18 * ratio };
     const plotW = width - pad.left - pad.right;
     const plotH = height - pad.top - pad.bottom;
     const yMin = -4;
     const yMax = 4;
-    const toY = (value) => pad.top + ((yMax - value) / (yMax - yMin)) * plotH;
-    trendCtx.clearRect(0, 0, width, height);
-    trendCtx.font = `${8 * ratio}px Consolas, monospace`;
+    const toY = (v) => pad.top + ((yMax - v) / (yMax - yMin)) * plotH;
 
-    [-4, -2, 0, 2, 4].forEach((value) => {
-      const y = toY(value);
-      trendCtx.strokeStyle = "rgba(129,144,147,.16)";
+    trendCtx.clearRect(0, 0, width, height);
+    trendCtx.font = `${10 * ratio}px Consolas, monospace`;
+
+    // faixa de repouso: mesma referencia dos aneis do visor
+    const rest = latest && latest.hold_enter_radius_px;
+    if (rest) {
+      trendCtx.fillStyle = "rgba(147,177,122,.08)";
+      trendCtx.fillRect(pad.left, toY(rest), plotW, toY(-rest) - toY(rest));
+    }
+
+    [-4, -2, 0, 2, 4].forEach((v) => {
+      const y = toY(v);
+      trendCtx.strokeStyle = v === 0 ? "rgba(168,151,124,.26)" : "rgba(168,151,124,.10)";
       trendCtx.lineWidth = ratio;
       trendCtx.beginPath(); trendCtx.moveTo(pad.left, y); trendCtx.lineTo(width - pad.right, y); trendCtx.stroke();
-      trendCtx.fillStyle = "rgba(129,144,147,.75)";
-      trendCtx.fillText(String(value).replace("-", "−"), 7 * ratio, y + 3 * ratio);
+      trendCtx.fillStyle = "rgba(168,151,124,.65)";
+      trendCtx.fillText(String(v).replace("-", "−"), 6 * ratio, y + 3.5 * ratio);
     });
-    const now = Date.now();
-    const trace = (key) => {
-      trendCtx.beginPath();
-      let started = false;
-      history.forEach((item) => {
-        const value = item[key];
-        if (value == null || value < yMin || value > yMax) { started = false; return; }
-        const x = pad.left + Math.max(0, 1 - (now - item.t) / 120000) * plotW;
-        const y = toY(value);
-        if (!started) { trendCtx.moveTo(x, y); started = true; } else trendCtx.lineTo(x, y);
-      });
-    };
-    const draw = (key, color, glow) => {
+
+    const agora = Date.now();
+    const traco = (chave, cor) => {
       trendCtx.lineCap = "round";
       trendCtx.lineJoin = "round";
-      trace(key);
-      trendCtx.strokeStyle = glow;
-      trendCtx.lineWidth = 4.5 * ratio;
-      trendCtx.stroke();
-      trace(key);
-      trendCtx.strokeStyle = color;
-      trendCtx.lineWidth = 2 * ratio;
+      trendCtx.strokeStyle = cor;
+      trendCtx.lineWidth = 1.7 * ratio;
+      trendCtx.beginPath();
+      let iniciado = false;
+      history.forEach((item) => {
+        const valor = item[chave];
+        if (valor == null || valor < yMin || valor > yMax) { iniciado = false; return; }
+        const x = pad.left + Math.max(0, 1 - (agora - item.t) / HISTORY_MS) * plotW;
+        const y = toY(valor);
+        if (!iniciado) { trendCtx.moveTo(x, y); iniciado = true; } else trendCtx.lineTo(x, y);
+      });
       trendCtx.stroke();
     };
-    draw("x", "rgba(112,204,216,.98)", "rgba(105,183,195,.16)");
-    draw("y", "rgba(225,173,83,.98)", "rgba(211,160,76,.15)");
-    trendCtx.fillStyle = "rgba(129,144,147,.7)";
-    trendCtx.fillText("−120 s", pad.left, height - 6 * ratio);
-    trendCtx.fillText("agora", width - pad.right - 30 * ratio, height - 6 * ratio);
+    traco("x", tone("--sodium"));
+    traco("y", tone("--rest"));
+
+    trendCtx.fillStyle = "rgba(109,94,72,.9)";
+    trendCtx.fillText("−120 s", pad.left, height - 4 * ratio);
+    const fim = "agora";
+    trendCtx.fillText(fim, width - pad.right - trendCtx.measureText(fim).width, height - 4 * ratio);
   }
 
+  // ── ciclo ─────────────────────────────────────────────────────────
   async function poll() {
     try {
       const response = await fetch(`/api/state?t=${Date.now()}`, { cache: "no-store" });
       const state = await response.json();
       if (!state.connected) return;
       latest = state;
+
       if (state.updated_unix_s !== lastServerTimestamp) {
         lastServerTimestamp = state.updated_unix_s;
         history.push({ t: Date.now(), x: state.dx_px, y: state.dy_up_px });
-        const cutoff = Date.now() - 120000;
-        while (history.length && history[0].t < cutoff) history.shift();
-        drawTrend();
+        const corte = Date.now() - HISTORY_MS;
+        while (history.length && history[0].t < corte) history.shift();
+
+        if (state.has_signal && state.x_cm_px != null) {
+          trail.push({ x: state.x_cm_px, y: state.y_cm_px });
+          while (trail.length > TRAIL_MAX) trail.shift();
+        } else if (!state.target_present) {
+          trail.length = 0;
+        }
+        desenharGrafico();
       }
-      const now = Date.now();
-      if (now - lastMetricRender >= 1000) {
-        renderMetrics(state);
-        lastMetricRender = now;
+
+      const agora = Date.now();
+      if (agora - lastMetricRender >= 1000) {
+        render(state);
+        lastMetricRender = agora;
       }
-    } catch (_error) {
-      ui.systemState.textContent = "PAINEL DESCONECTADO";
-      ui.systemState.className = "state-fault";
+    } catch (_erro) {
+      ui["system-state"].textContent = "painel desconectado";
+      setTone(ui["system-state"], "fault");
     }
   }
 
-  function refreshFrame() {
-    const image = new Image();
-    image.onload = () => { ui.frame.src = image.src; if (latest) drawOverlay(latest); };
-    image.src = `/api/frame.jpg?t=${Date.now()}`;
+  function atualizarFrame() {
+    const imagem = new Image();
+    imagem.onload = () => {
+      ui["live-frame"].src = imagem.src;
+      if (latest) desenharVisor(latest);
+    };
+    imagem.src = `/api/frame.jpg?t=${Date.now()}`;
   }
 
   setInterval(poll, 200);
-  setInterval(refreshFrame, 1000);
-  window.addEventListener("resize", () => { if (latest) drawOverlay(latest); drawTrend(); });
-  poll(); refreshFrame(); drawTrend();
+  setInterval(atualizarFrame, 1000);
+  window.addEventListener("resize", () => { if (latest) desenharVisor(latest); desenharGrafico(); });
+  poll(); atualizarFrame(); desenharGrafico();
 })();

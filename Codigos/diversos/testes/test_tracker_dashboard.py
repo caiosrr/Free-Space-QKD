@@ -34,7 +34,10 @@ class TrackerDashboardTests(unittest.TestCase):
             self.assertTrue(state["connected"])
             self.assertEqual(state["dx_px"], 1.25)
             self.assertGreater(len(frame), 100)
-            self.assertIn("SOMENTE LEITURA", html)
+            # O painel precisa se declarar somente leitura. A caixa alta e
+            # aplicada por CSS, entao a checagem ignora maiusculas.
+            self.assertIn("somente leitura", html.lower())
+            self.assertIn("beacon-overlay", html)
         finally:
             dashboard.close()
 

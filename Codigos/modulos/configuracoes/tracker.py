@@ -167,6 +167,17 @@ CSV_FLUSH_SECONDS = 1.0
 # episodios, mediana de 0,32 s e apenas 4 acima de 5 s: 1518 eventos suprimidos
 # afogaram os poucos que importavam.
 EVENT_MIN_ABSENCE_SECONDS = 1.0
+
+# ===== MODO SOMBRA DO VIES LENTO =====
+# Observa uma deriva de janela longa e registra quando uma zona de repouso mais
+# apertada teria mandado corrigir. NAO comanda nada: existe para decidir com
+# dado se vale apertar HOLD_ENTER_RADIUS_PX, sem arriscar oscilacao numa sessao
+# real. Nas sessoes de 04/09 e 06/09 sobrou um vies parado de 0,60 e 0,47 px,
+# que custa 23% e 16% do erro mediano e nunca e corrigido porque fica abaixo
+# dos 2,0 px que acordam o controle.
+SHADOW_BIAS_WINDOW_SECONDS = 60.0
+SHADOW_BIAS_WARMUP_SECONDS = 20.0
+SHADOW_BIAS_TRIGGER_PX = 0.6
 TRACKER_EVENT_IMAGE_LIMIT = 200
 TRACKER_EVENT_IMAGE_MIN_INTERVAL_SECONDS = 30.0
 
@@ -228,6 +239,8 @@ if not 0 < TEMPORAL_CONTROL_GAIN_SCALE <= 1:
 if not (
     0 < AUTO_EXPOSURE_MIN_US < AUTO_EXPOSURE_MAX_US
     and AUTO_EXPOSURE_LOSS_SEARCH_SECONDS > 0
+    and 0 < SHADOW_BIAS_WARMUP_SECONDS <= SHADOW_BIAS_WINDOW_SECONDS
+    and SHADOW_BIAS_TRIGGER_PX > 0
     and 0 < AUTO_EXPOSURE_LOSS_SEARCH_STEP_FRACTION < 1
     and AUTO_EXPOSURE_LOSS_SEARCH_INTERVAL_SECONDS > 0
     and 0 < AUTO_EXPOSURE_CNR_LOW < AUTO_EXPOSURE_CNR_HIGH

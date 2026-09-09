@@ -146,6 +146,14 @@ def _caminho_mascara():
     return raiz / "mascara_pixels_ruins.npy"
 
 
+def mascara_gravada():
+    """Le a mascara do disco sem aplica-la. ``None`` quando nao existe.
+
+    Quem usa ROI precisa aplicar depois, informando a origem do recorte.
+    """
+    return pixels_ruins.carregar(_caminho_mascara())
+
+
 def carregar_mascara_se_existir(origem_xy=(0, 0)) -> bool:
     """Ativa a mascara gravada, quando houver. Devolve se aplicou."""
     mascara = pixels_ruins.carregar(_caminho_mascara())

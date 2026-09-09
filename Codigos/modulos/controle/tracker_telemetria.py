@@ -101,6 +101,8 @@ class TrackerCsvLogger:
         "calibracao", "zona_parada_ativa", "correcao_lenta_ativa",
         "erro_controle_x_px", "erro_controle_y_px", "raio_controle_px",
         "janela_vies_lento_s", "vies_lento_pronto",
+        "sombra_vies_x_px", "sombra_vies_y_px", "sombra_vies_raio_px",
+        "sombra_vies_pronto", "sombra_janela_s", "sombra_correcoes",
         "janela_erro_grande_s", "fracao_erro_grande",
         "coerencia_direcional_erro_grande", "erro_grande_confirmado",
         "persistencia_erro_s", "fonte_erro_controle",
@@ -370,6 +372,13 @@ class TrackerCsvLogger:
             "raio_controle_px": number(state_values["control_radius_px"], 3),
             "janela_vies_lento_s": number(state_values["slow_bias_window_s"], 3),
             "vies_lento_pronto": int(bool(state_values["slow_bias_ready"])),
+            # Modo sombra: o que uma zona de repouso mais apertada teria feito.
+            "sombra_vies_x_px": number(state_values["shadow_bias_dx_px"], 3),
+            "sombra_vies_y_px": number(state_values["shadow_bias_dy_px"], 3),
+            "sombra_vies_raio_px": number(state_values["shadow_bias_radius_px"], 3),
+            "sombra_vies_pronto": int(bool(state_values["shadow_bias_ready"])),
+            "sombra_janela_s": number(state_values["shadow_bias_window_s"], 1),
+            "sombra_correcoes": state_values["shadow_corrections"],
             "janela_erro_grande_s": number(
                 state_values["fast_error_window_s"], 3
             ),

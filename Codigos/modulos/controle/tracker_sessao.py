@@ -136,6 +136,7 @@ def main(
     initial_position = None
     state = None
     display = None
+    mascara_pixels = None
 
     try:
         # 1. Prepara mount, camera, calibracao e alvo.
@@ -147,8 +148,12 @@ def main(
         # Com a autoexposicao trabalhando perto de 1150 us, o pico do beacon
         # fica na casa de 15 contagens: um unico pixel quente desloca o centro
         # de massa. A mascara e medida por programas_principais/diagnosticar.py.
-        if diagnostico.carregar_mascara_se_existir():
-            print("Mascara de pixels ruins: ATIVA")
+        mascara_pixels = diagnostico.mascara_gravada()
+        if mascara_pixels is not None:
+            print(
+                f"Mascara de pixels ruins: {int(mascara_pixels.sum())} defeitos "
+                "(sera reancorada apos a ROI)"
+            )
         else:
             print("Mascara de pixels ruins: ausente (rode diagnosticar.py --calibrar-pixels)")
 
@@ -207,13 +212,19 @@ def main(
         print("Q, Esc ou Ctrl+C encerra com velocidade zero.\n")
 
         # 2. Centraliza a ROI e inicia controle e watchdog independentes.
-        _, _, target_x, target_y = set_camera_roi_validated(
+        roi_x, roi_y, target_x, target_y = set_camera_roi_validated(
             WINDOW_SIZE,
             WINDOW_SIZE,
             target.x_px,
             target.y_px,
             target.focus_signature,
         )
+        # A mascara e do sensor inteiro e precisa ser fatiada na posicao real da
+        # ROI. Carregada antes disso, ela corrigiria o canto do sensor e
+        # deixaria intactos justamente os pixels sob o beacon.
+        if mascara_pixels is not None:
+            foco.definir_mascara_pixels_ruins(mascara_pixels, (roi_x, roi_y))
+            print(f"Mascara de pixels ruins reancorada na ROI ({roi_x}, {roi_y}).")
         roi_w, roi_h = current_roi_size(WINDOW_SIZE)
         display = TrackerDisplay(
             roi_w,
