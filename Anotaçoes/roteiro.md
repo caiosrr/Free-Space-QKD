@@ -463,3 +463,70 @@ o erro). Próximo passo natural do modo sombra.
   igual ao das 3 h anteriores). Falta o lado do UFF: o laser continuou ligado?
 - A máscara de pixels ruins ainda foi medida a 18000 µs, não na faixa de
   operação real (~750 µs). Separar defeito fixo de corrente escura.
+
+### Oclusão por embarcação: a perda mais comum não é falta de exposição
+
+O enlace UFF–CBPF atravessa a baía de Guanabara e embarcações cortam o feixe
+com frequência, tipicamente por 1 a 2 minutos. Isso muda o diagnóstico padrão de
+uma perda de sinal. Confirmado no dia 09/09: por volta das 12h a luz continuava
+ligada, apenas com baixa visibilidade — o beacon das 09:05 não tinha sido
+desligado.
+
+**Oclusão e falta de exposição são diagnósticos opostos e pedem respostas
+opostas.** Uma embarcação tira o beacon inteiro de um sinal saudável; falta de
+exposição produz desvanecimento, com o contraste raspando o limite por minutos
+antes de a ilha sumir. Subir a exposição não traz de volta um feixe bloqueado —
+só estraga a cena, como aconteceu hoje.
+
+Diante de uma oclusão a resposta certa é **congelar tudo e esperar**: o mount já
+fica parado, a assinatura da ilha travada e a posição alvo continuam guardadas,
+a exposição fica congelada, e o feixe volta com as mesmas características. O céu
+não muda em dois minutos — hoje o fundo subiu 7 → 40 contagens em 3 h, ou
+~0,2 contagem por minuto.
+
+#### O discriminador: CNR do último alvo confiável
+
+Medido nas duas sessões reais, na janela imediatamente anterior à perda:
+
+| | CNR mediano | CNR p10 | nível (pico − fundo local) |
+|---|---|---|---|
+| 06/09 — faltava exposição mesmo | **7,5–8,0** | 7,0 | 6,2–8,7 |
+| 09/09 — oclusão, beacon intacto | **16,9** | 15,3 | 4,1–8,0 |
+
+Separação limpa, sem sobreposição. O **nível absoluto não serve** — 6,2–8,7
+contra 4,1–8,0 nas mesmas janelas, completamente sobrepostos. Vale registrar
+porque `AUTO_EXPOSURE_MIN_TARGET_LEVEL` era o discriminador óbvio e teria
+classificado a oclusão de hoje como desvanecimento, fazendo exatamente a coisa
+errada.
+
+O diagnóstico é **congelado no instante da perda**: o histórico de qualidade da
+autoexposição dura só 2 s e já se esvaziou quando a perda se confirma.
+
+#### Mudanças
+
+- `AUTO_EXPOSURE_LOSS_SEARCH_OCCLUSION_SECONDS = 150` — espera antes da busca
+  quando o beacon sumiu saudável. Cobre a ocultação típica com folga.
+- `AUTO_EXPOSURE_LOSS_FADING_CNR = 10.0` — abaixo disso a perda é lida como
+  desvanecimento e a busca começa nos 8 s de sempre. Fica acima de
+  `AUTO_EXPOSURE_CNR_LOW` (8,0) de propósito: errar para oclusão custa 150 s de
+  um orçamento de 600 s, errar para desvanecimento dispara uma rampa na cena
+  errada. Sem medida anterior, espera-se o tempo longo.
+- `SIGNAL_LOSS_LIMIT_SECONDS` de 90 para **600 s**. Um limite curto transforma um
+  navio passando em fim de sessão. Esperar não tem custo mecânico nenhum; o
+  único custo é tempo de sessão. Um navio de 2 min consome 20% do orçamento.
+
+Simulação ponta a ponta sobre a cena real de hoje (beacon saudável → navio de
+120 s → beacon volta): a exposição fica em 764 µs o tempo inteiro, congelada em
+`congelada_alvo_ausente`, e volta a medir com as mesmas características.
+
+Testes: `OcultacaoTests` em `diversos/testes/test_exposicao_busca.py`. Suíte em
+172 testes.
+
+#### O que ainda não é tratado
+
+Numa ausência muito longa (perto dos 600 s) o céu pode ter mudado o bastante
+para a exposição congelada não servir mais na volta. Hoje isso não importa
+(~0,2 contagem/min), mas ao amanhecer ou anoitecer o fundo se move mais rápido.
+O tracker poderia acompanhar o **fundo** durante a ausência — ele é medível sem
+o alvo — em vez de congelar às cegas. Fica para depois de haver dado de uma
+ocultação longa de verdade.

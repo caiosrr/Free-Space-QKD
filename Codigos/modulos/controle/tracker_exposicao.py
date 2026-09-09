@@ -19,6 +19,8 @@ from modulos.configuracoes.tracker import (
     AUTO_EXPOSURE_MIN_TARGET_LEVEL,
     AUTO_EXPOSURE_MIN_TRUSTED_FRACTION,
     AUTO_EXPOSURE_LOSS_SEARCH_INTERVAL_SECONDS,
+    AUTO_EXPOSURE_LOSS_SEARCH_OCCLUSION_SECONDS,
+    AUTO_EXPOSURE_LOSS_FADING_CNR,
     AUTO_EXPOSURE_LOSS_SEARCH_BACKGROUND_LIMIT,
     AUTO_EXPOSURE_LOSS_SEARCH_RETURN_SECONDS,
     AUTO_EXPOSURE_LOSS_SEARCH_SECONDS,
@@ -186,6 +188,8 @@ class AutoExposureController:
         loss_search_step: float = AUTO_EXPOSURE_LOSS_SEARCH_STEP_FRACTION,
         loss_search_interval_s: float = AUTO_EXPOSURE_LOSS_SEARCH_INTERVAL_SECONDS,
         loss_search_background_limit: float = AUTO_EXPOSURE_LOSS_SEARCH_BACKGROUND_LIMIT,
+        loss_search_occlusion_s: float = AUTO_EXPOSURE_LOSS_SEARCH_OCCLUSION_SECONDS,
+        loss_fading_cnr: float = AUTO_EXPOSURE_LOSS_FADING_CNR,
         loss_search_return_s: float = AUTO_EXPOSURE_LOSS_SEARCH_RETURN_SECONDS,
         started_at: float = 0.0,
     ):
@@ -211,6 +215,8 @@ class AutoExposureController:
         self.loss_search_step = float(loss_search_step)
         self.loss_search_interval_s = float(loss_search_interval_s)
         self.loss_search_background_limit = float(loss_search_background_limit)
+        self.loss_search_occlusion_s = float(loss_search_occlusion_s)
+        self.loss_fading_cnr = float(loss_fading_cnr)
         self.loss_search_return_s = float(loss_search_return_s)
         self.current_exposure_us = float(
             np.clip(initial_exposure_us, self.minimum_us, self.maximum_us)
@@ -230,6 +236,8 @@ class AutoExposureController:
         self._loss_search_from_us = None
         self._loss_search_ceiling_t = None
         self._loss_search_exhausted = False
+        self._last_trusted_cnr = None
+        self._pre_loss_cnr = None
 
     def _purge(self, now: float) -> None:
         cutoff = now - self.history_seconds
@@ -332,6 +340,20 @@ class AutoExposureController:
             reason=reason,
         )
 
+    def _espera_da_busca(self) -> float:
+        """Quanto esperar antes de mexer na exposicao depois de perder o alvo.
+
+        Beacon que sumiu SAUDAVEL nao e problema de exposicao: e ocultacao, e
+        subir a exposicao nao traz de volta um feixe que esta bloqueado. No
+        enlace da baia isso e o caso comum. Beacon que vinha raspando o limite
+        de contraste e o caso oposto, e ai a rampa e a unica saida.
+
+        Na duvida (sem medida confiavel anterior) espera-se o tempo longo.
+        """
+        cnr = self._pre_loss_cnr
+        desvanecendo = cnr is not None and cnr < self.loss_fading_cnr
+        return self.loss_search_s if desvanecendo else self.loss_search_occlusion_s
+
     def _encerrar_busca(self, *, exhausted: bool) -> None:
         """Fecha a busca por alvo ausente.
 
@@ -415,6 +437,10 @@ class AutoExposureController:
         if not trusted_target:
             if self._untrusted_since is None:
                 self._untrusted_since = now
+                # O historico de qualidade dura so history_seconds (2 s): quando
+                # a perda se confirma ele ja se esvaziou. O diagnostico precisa
+                # ser CONGELADO no instante da perda.
+                self._pre_loss_cnr = self._last_trusted_cnr
             untrusted_s = max(0.0, now - self._untrusted_since)
             recent_change = (
                 self._last_change_can_rollback
@@ -450,7 +476,7 @@ class AutoExposureController:
                 not target_present
                 and scene_ready
                 and not self._loss_search_exhausted
-                and (self._loss_search_active or untrusted_s >= self.loss_search_s)
+                and (self._loss_search_active or untrusted_s >= self._espera_da_busca())
                 and now - self._last_loss_search_t >= self.loss_search_interval_s
             ):
                 if self._loss_search_from_us is None:
@@ -515,6 +541,9 @@ class AutoExposureController:
 
         self._untrusted_since = None
         self._untrusted_safety_used = False
+        self._pre_loss_cnr = None
+        if summary["cnr"] is not None:
+            self._last_trusted_cnr = float(summary["cnr"])
         self._encerrar_busca(exhausted=False)
         if unsafe_scene and now - self._last_safety_t >= self.safety_update_s:
             self._last_safety_t = now

@@ -56,12 +56,17 @@ BORDER_MIN_PEAK_RATIO = 0.25
 BORDER_MIN_SIGNATURE_SIMILARITY = 0.35
 # Este limite conta somente ausencia real da ilha travada. Aparencia turbulenta
 # mantem o mount parado, mas possui um cronometro separado e nao encerra a sessao.
-# Orcamento de uma perda, com o piso da exposicao em 200 us: 8 s de espera
-# antes de a busca comecar, ~50 s de rampa ate o teto e ~2 s para reconstruir a
-# media temporal, ou seja 60 s antes de o alvo poder voltar a ser aceito. Com
-# 75 s sobravam 15 s de margem; 90 s dobra isso. Esperar mais nao tem custo
-# mecanico: sem sinal valido o mount ja esta parado e nao faz busca alguma.
-SIGNAL_LOSS_LIMIT_SECONDS = 90.0
+#
+# O enlace UFF-CBPF atravessa a baia de Guanabara e embarcacoes cortam o feixe
+# com frequencia, tipicamente por 1 a 2 minutos. Um limite curto transforma um
+# navio passando em fim de sessao. Esperar nao tem custo nenhum: sem sinal
+# valido o mount ja esta parado, a assinatura da ilha travada e a posicao alvo
+# continuam guardadas e a exposicao fica congelada, entao o tracker volta a
+# medir com exatamente as mesmas caracteristicas de antes. O unico custo e
+# tempo de sessao. 10 min dao 5x de margem sobre a ocultacao tipica e ainda
+# cabem no orcamento de uma perda por falta de exposicao (150 s de espera,
+# ~35 s de rampa e ~2 s para reconstruir a media temporal).
+SIGNAL_LOSS_LIMIT_SECONDS = 600.0
 
 # Estimador temporal robusto. Os frames aceitos pela trava de identidade sao
 # normalizados e somados numa janela deslizante de dois segundos. O centro de
@@ -96,6 +101,25 @@ AUTO_EXPOSURE_LOSS_SEARCH_SECONDS = 8.0
 # so dobrava em 64 s, contra os 75 s do limite de perda: chegava tarde demais.
 AUTO_EXPOSURE_LOSS_SEARCH_STEP_FRACTION = 0.35
 AUTO_EXPOSURE_LOSS_SEARCH_INTERVAL_SECONDS = 3.0
+# Espera antes da busca quando o beacon sumiu SAUDAVEL, isto e, quando a perda
+# parece ocultacao e nao falta de exposicao. Uma embarcacao na baia tira o feixe
+# inteiro de um sinal em plena forma; falta de exposicao produz desvanecimento,
+# com o contraste raspando o limite por minutos antes de a ilha sumir. Sao
+# diagnosticos opostos e pedem respostas opostas: na ocultacao a resposta certa
+# e congelar tudo e esperar, porque o feixe volta como estava e o ceu nao muda
+# em dois minutos (hoje o fundo subiu 7 -> 40 contagens em 3 h, ~0,2/min).
+# 150 s cobrem a ocultacao tipica com folga.
+AUTO_EXPOSURE_LOSS_SEARCH_OCCLUSION_SECONDS = 150.0
+# CNR abaixo do qual a perda e lida como DESVANECIMENTO e a busca comeca cedo.
+# Medido nas duas sessoes reais, no ultimo alvo confiavel antes da perda:
+#   06/09 (faltava exposicao mesmo): CNR mediano 7,5-8,0, p10 7,0
+#   09/09 (ocultacao, beacon intacto): CNR mediano 16,9, p10 15,3
+# Separacao limpa e sem sobreposicao. O nivel absoluto (pico - fundo local) NAO
+# serve: deu 6,2-8,7 contra 4,1-8,0 nas mesmas janelas. O valor fica acima de
+# AUTO_EXPOSURE_CNR_LOW de proposito, para o caso duvidoso cair no lado da
+# espera: errar para ocultacao custa 150 s de um orcamento de 600 s, errar para
+# desvanecimento dispara uma rampa na cena errada.
+AUTO_EXPOSURE_LOSS_FADING_CNR = 10.0
 # Fundo maximo que a BUSCA pode produzir, em contagens. Mais baixo que o limite
 # do controle normal (210) de proposito: la existe um alvo medido e sabe-se o
 # que se esta fazendo; aqui a busca e cega e precisa preservar a margem em que
@@ -277,6 +301,8 @@ if not (
     and SHADOW_BIAS_TRIGGER_PX > 0
     and 0 < AUTO_EXPOSURE_LOSS_SEARCH_STEP_FRACTION < 1
     and AUTO_EXPOSURE_LOSS_SEARCH_INTERVAL_SECONDS > 0
+    and AUTO_EXPOSURE_LOSS_SEARCH_OCCLUSION_SECONDS >= AUTO_EXPOSURE_LOSS_SEARCH_SECONDS
+    and AUTO_EXPOSURE_CNR_LOW <= AUTO_EXPOSURE_LOSS_FADING_CNR < AUTO_EXPOSURE_CNR_HIGH
     and 0 < AUTO_EXPOSURE_LOSS_SEARCH_BACKGROUND_LIMIT
     <= AUTO_EXPOSURE_BACKGROUND_INCREASE_LIMIT
     and AUTO_EXPOSURE_LOSS_SEARCH_RETURN_SECONDS > 0
