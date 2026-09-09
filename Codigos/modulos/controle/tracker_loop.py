@@ -16,6 +16,9 @@ from modulos.configuracoes.tracker import (
     FAST_ERROR_MIN_SAMPLES,
     FAST_ERROR_WINDOW_SECONDS,
     HOLD_ENTER_RADIUS_PX,
+    HOLD_RADIUS_AB_ALTERNATE_PX,
+    HOLD_RADIUS_AB_BLOCK_SECONDS,
+    HOLD_RADIUS_AB_TEST_ENABLED,
     HOLD_EXIT_RADIUS_PX,
     MAX_TRACKING_RATE_DEG_S,
     SLOW_BIAS_WARMUP_SECONDS,
@@ -217,6 +220,12 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
     shadow_armed = True
     shadow_estimate = None
 
+    # Experimento pareado da zona de repouso: alterna o raio de entrada dentro
+    # da mesma sessao, para a comparacao nao ser contaminada pela turbulencia
+    # mudando ao longo da noite. Desligado, nada disto acontece.
+    ab_started_at = time.perf_counter()
+    ab_block = -1
+
     dt_target = 1.0 / CONTROL_HZ
     last_loop_t = time.perf_counter()
     last_seq = -1
@@ -251,6 +260,23 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
         try:
             while True:
                 loop_t0 = time.perf_counter()
+
+                if HOLD_RADIUS_AB_TEST_ENABLED:
+                    bloco = int(
+                        (loop_t0 - ab_started_at) // HOLD_RADIUS_AB_BLOCK_SECONDS
+                    )
+                    if bloco != ab_block:
+                        ab_block = bloco
+                        correction_gate.enter_radius_px = (
+                            HOLD_ENTER_RADIUS_PX
+                            if bloco % 2 == 0
+                            else HOLD_RADIUS_AB_ALTERNATE_PX
+                        )
+                        print()
+                        print(
+                            "A/B da zona de repouso: raio de entrada = "
+                            f"{correction_gate.enter_radius_px:g} px"
+                        )
                 dt_loop = max(loop_t0 - last_loop_t, 1e-4)
                 last_loop_t = loop_t0
                 if dt_loop >= 1e-3:
@@ -529,6 +555,7 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     state.brake_active = loop_t0 < brake_until
                     state.trim_mode_active = estado.trim_mode_active
                     state.hold_active = estado.hold_active
+                    state.hold_enter_radius_px = correction_gate.enter_radius_px
                     state.control_dx_px = estado.control_dx_px
                     state.control_dy_px = estado.control_dy_px
                     state.control_radius_px = estado.control_radius_px

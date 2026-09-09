@@ -21,6 +21,22 @@ FINE_CALIBRATION_RADII_DEG = (0.004, 0.008, 0.016)
 # Zona de repouso com histerese. A malha busca erro menor ou igual a 1 px e so
 # acorda por uma deriva lenta persistente acima de 2 px ou por um erro grande.
 HOLD_ENTER_RADIUS_PX = 1.0
+# Experimento pareado da zona de repouso. A sombra NAO consegue decidir se vale
+# apertar HOLD_ENTER_RADIUS_PX: ela mede o erro que sobra, mas o efeito de uma
+# correcao que nao aconteceu nao e observavel. So um teste real responde, e ele
+# precisa ser pareado, porque a turbulencia muda ao longo da noite e comparar
+# duas sessoes diferentes compara o ceu, nao o parametro.
+#
+# Ligado, o raio de entrada alterna entre HOLD_ENTER_RADIUS_PX e o alternativo
+# a cada bloco, dentro da MESMA sessao. A analise depois separa a telemetria
+# pela coluna zona_parada_raio_px e compara a distribuicao de distancia_px nos
+# dois regimes. Custo estimado com os numeros de 2026-09-09: o erro de controle
+# passa de 0,6 px em 69% do tempo contra 43% acima de 1,0 px, entao o regime
+# apertado deve fazer ~1,6x mais correcoes e levar o tempo morto de ~5% para
+# ~8% da sessao. Desligado por padrao: mexe em controle de verdade.
+HOLD_RADIUS_AB_TEST_ENABLED = False
+HOLD_RADIUS_AB_ALTERNATE_PX = 0.6
+HOLD_RADIUS_AB_BLOCK_SECONDS = 600.0
 HOLD_EXIT_RADIUS_PX = 2.0
 
 # A media de imagem de 2 s continua responsavel pela deteccao e pela seguranca.
@@ -246,6 +262,10 @@ def roi_size_for_backend(backend: str) -> int:
 
 if ASI_ROI_SIZE_PX < 200 or IDS_ROI_SIZE_PX < 128:
     raise ValueError("A ROI do tracker ficou pequena demais para operacao segura.")
+if not 0 < HOLD_RADIUS_AB_ALTERNATE_PX < HOLD_EXIT_RADIUS_PX:
+    raise ValueError("O raio alternativo do A/B precisa caber na zona de repouso.")
+if HOLD_RADIUS_AB_BLOCK_SECONDS <= 0:
+    raise ValueError("O bloco do A/B da zona de repouso precisa ser positivo.")
 if not 0 < HOLD_ENTER_RADIUS_PX < HOLD_EXIT_RADIUS_PX:
     raise ValueError("A zona de repouso precisa satisfazer 0 < entrada < saida.")
 if not (

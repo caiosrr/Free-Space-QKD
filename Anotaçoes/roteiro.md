@@ -530,3 +530,66 @@ para a exposição congelada não servir mais na volta. Hoje isso não importa
 O tracker poderia acompanhar o **fundo** durante a ausência — ele é medível sem
 o alvo — em vez de congelar às cegas. Fica para depois de haver dado de uma
 ocultação longa de verdade.
+
+### O viés não é um desvio permanente — e a sombra não consegue decidir sozinha
+
+Análise da sessão 09/09 (48.284 amostras de sombra prontas, 3 h). Duas perguntas
+diferentes que eu tinha misturado numa só:
+
+**Existe desvio permanente?** Não.
+
+| | |
+|---|---|
+| vetor médio do viés em 3 h | (+0,089, +0,082) px — módulo **0,121** |
+| módulo médio do viés | **0,880** px |
+| razão \|média\| / média\|·\| | **0,14** |
+
+Por blocos de 30 min o sinal troca nos dois eixos (y: +0,43, +0,20, −0,12, +0,31,
+−0,29, −0,04). Não há desalinhamento fixo a corrigir: a calibração e o
+apontamento estão sãos. Nada de correção estática a aplicar.
+
+**O erro tem direção no instante?** Sim, na maior parte do tempo. Coerência
+direcional dentro da janela de 60 s (|média dos vetores unitários|):
+
+| p10 | p25 | p50 | p75 | p90 |
+|---|---|---|---|---|
+| 0,200 | 0,323 | **0,515** | 0,739 | 0,873 |
+
+Ou seja: existe uma deriva de apontamento real, coerente por ~1 min, que reverte
+em escala de dezenas de minutos. É corrigível em princípio. O erro médio não é
+"turbulência pura" nem "desalinhamento" — é uma deriva lenta que vagueia.
+
+#### Custo de apertar a zona
+
+| | |
+|---|---|
+| tempo em `pulso` + `acomodacao` | **4,9%** da sessão (217 correções) |
+| custo médio por correção | 2,5 s |
+| erro de controle acima de 1,0 px (zona atual) | 43,2% do tempo |
+| erro de controle acima de 0,6 px | 69,3% do tempo |
+
+Apertar para 0,6 px levaria a ~1,6x mais correções (≈350) e o tempo morto de 5%
+para ~8%. Barato.
+
+#### O limite de fundo da sombra
+
+A sombra **não pode responder** se apertar melhora: ela mede o erro que sobra,
+mas o efeito de uma correção que não aconteceu não é observável. Contar
+travessias de limiar não é o mesmo que estimar benefício. Isso é uma limitação
+de projeto, não um parâmetro mal escolhido — e a contagem de 38 correções ainda
+é subestimada, porque o rearme abaixo da metade do gatilho limita quantas ela
+registra.
+
+Só um experimento responde, e ele precisa ser **pareado**: comparar duas sessões
+diferentes compara o céu, não o parâmetro.
+
+#### A/B da zona de repouso (`HOLD_RADIUS_AB_TEST_ENABLED`, desligado)
+
+Ligado, o raio de entrada alterna entre 1,0 px e 0,6 px a cada 10 min dentro da
+mesma sessão. A telemetria ganhou a coluna `zona_parada_raio_px`; a análise
+depois separa por ela e compara a distribuição de `distancia_px` nos dois
+regimes, com turbulência, beacon e céu iguais.
+
+Desligado por padrão de propósito: mexe em controle de verdade e uma sessão
+longa sem operador não pode ganhar isso de surpresa por um commit. Há teste que
+trava esse padrão.

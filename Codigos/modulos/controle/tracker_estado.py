@@ -23,6 +23,7 @@ class TrackerState:
     calibration_name: str = "continua"
     trim_mode_active: bool = False
     hold_active: bool = True
+    hold_enter_radius_px: float = 0.0
     control_dx_px: float = 0.0
     control_dy_px: float = 0.0
     control_radius_px: float = 0.0

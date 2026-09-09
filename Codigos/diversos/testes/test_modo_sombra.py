@@ -79,3 +79,50 @@ class ModoSombraTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ABDaZonaDeRepousoTests(unittest.TestCase):
+    """O A/B pareado da zona de repouso precisa estar DESLIGADO por padrao.
+
+    Ele mexe em controle de verdade: aperta o raio de entrada e faz o mount
+    corrigir mais. Uma sessao longa sem operador nao pode ganhar isso de
+    surpresa por um commit.
+    """
+
+    def test_desligado_por_padrao(self):
+        from modulos.configuracoes import tracker
+
+        self.assertFalse(tracker.HOLD_RADIUS_AB_TEST_ENABLED)
+
+    def test_o_raio_alternativo_e_mais_apertado_e_valido(self):
+        from modulos.configuracoes import tracker
+
+        self.assertLess(
+            tracker.HOLD_RADIUS_AB_ALTERNATE_PX, tracker.HOLD_ENTER_RADIUS_PX,
+            "o A/B so faz sentido comparando contra uma zona MAIS apertada",
+        )
+        self.assertGreater(tracker.HOLD_RADIUS_AB_ALTERNATE_PX, 0.0)
+        self.assertLess(
+            tracker.HOLD_RADIUS_AB_ALTERNATE_PX, tracker.HOLD_EXIT_RADIUS_PX,
+            "entrar precisa continuar sendo mais restrito que sair",
+        )
+
+    def test_o_bloco_cobre_varias_janelas_do_vies(self):
+        """Bloco curto demais mistura os dois regimes dentro de uma estimativa."""
+        from modulos.configuracoes import tracker
+
+        self.assertGreaterEqual(
+            tracker.HOLD_RADIUS_AB_BLOCK_SECONDS,
+            5 * tracker.SHADOW_BIAS_WINDOW_SECONDS,
+            "cada bloco precisa conter varias janelas de vies para a "
+            "comparacao entre regimes nao ficar contaminada",
+        )
+
+    def test_a_telemetria_registra_o_raio_ativo(self):
+        """Sem a coluna nao da para separar os dois regimes na analise."""
+        from modulos.controle import tracker_telemetria
+
+        self.assertIn(
+            "zona_parada_raio_px",
+            tracker_telemetria.TrackerCsvLogger.FIELDNAMES,
+        )
