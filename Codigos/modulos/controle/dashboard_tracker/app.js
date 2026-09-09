@@ -231,13 +231,20 @@
     overlayCtx.setLineDash([]);
     overlayCtx.globalAlpha = 1;
 
-    // cruz do alvo, curta e discreta
-    overlayCtx.strokeStyle = "rgba(241,231,214,.28)";
+    // Eixos X e Y do alvo, com VAO no centro. A cruz continua anterior passava
+    // exatamente por cima do ponto que interessa: o centro de massa fica a
+    // fracoes de pixel do alvo na maior parte do tempo, entao o traco cobria a
+    // propria medida. Com o vao, o miolo fica limpo e os bracos servem so de
+    // referencia de direcao, que e o que eles precisam fazer.
+    overlayCtx.strokeStyle = "rgba(250,243,230,.45)";
     overlayCtx.lineWidth = ratio;
-    const braco = 10 * ratio;
+    const vao = 13 * ratio;
+    const braco = 16 * ratio;
     overlayCtx.beginPath();
-    overlayCtx.moveTo(tx - braco, ty); overlayCtx.lineTo(tx + braco, ty);
-    overlayCtx.moveTo(tx, ty - braco); overlayCtx.lineTo(tx, ty + braco);
+    overlayCtx.moveTo(tx - vao - braco, ty); overlayCtx.lineTo(tx - vao, ty);
+    overlayCtx.moveTo(tx + vao, ty); overlayCtx.lineTo(tx + vao + braco, ty);
+    overlayCtx.moveTo(tx, ty - vao - braco); overlayCtx.lineTo(tx, ty - vao);
+    overlayCtx.moveTo(tx, ty + vao); overlayCtx.lineTo(tx, ty + vao + braco);
     overlayCtx.stroke();
 
     // rastro recente
