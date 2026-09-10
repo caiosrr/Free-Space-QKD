@@ -305,6 +305,14 @@ RETURN_ATTEMPTS = 2
 CSV_LOG_HZ = 5.0
 VARIANCE_WINDOW_SECONDS = 2.0
 CSV_FLUSH_SECONDS = 1.0
+# Periodo do resumo parcial. O resumo so era escrito no encerramento, o que
+# cobre Ctrl+C e excecoes mas nao uma morte subita: num desligamento o Windows
+# termina o processo sem rodar nada, igual a uma queda de energia. Em
+# 2026-09-10 as 03:44 a telemetria inteira sobreviveu e o resumo se perdeu.
+# 120 s deixa no disco um resumo no maximo dois minutos velho, ao custo de uma
+# escrita de poucos kB -- desprezivel ao lado dos ~520 bytes por linha de CSV
+# que ja saem 30 vezes por segundo.
+SUMMARY_PARTIAL_SECONDS = 120.0
 # Imagens de eventos sao amostradas para cobrir a sessao toda sem lotar o disco.
 # O frame terminal possui uma reserva separada e ignora estes dois limites.
 # Ausencias abaixo disso nao viram evento. Na sessao de 2026-09-06 foram 453

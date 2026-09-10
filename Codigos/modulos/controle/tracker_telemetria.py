@@ -33,6 +33,7 @@ from modulos.configuracoes.tracker import (
     BORDER_MIN_PEAK_RATIO,
     BORDER_MIN_SIGNATURE_SIMILARITY,
     CSV_FLUSH_SECONDS,
+    SUMMARY_PARTIAL_SECONDS,
     CSV_LOG_HZ,
     FAST_CORRECTION_RADIUS_PX,
     FAST_ERROR_CONFIRM_SECONDS,
@@ -131,6 +132,7 @@ class TrackerCsvLogger:
         self._session_started = session_started
         self._last_write_t = 0.0
         self._last_flush_t = session_started
+        self._last_summary_t = session_started
         self._samples = deque()
         self._event_frame_count = 0
         self._event_frames_suppressed = 0
@@ -457,6 +459,9 @@ class TrackerCsvLogger:
         if event or (now - self._last_flush_t) >= CSV_FLUSH_SECONDS:
             self._fp.flush()
             self._last_flush_t = now
+        if (now - self._last_summary_t) >= SUMMARY_PARTIAL_SECONDS:
+            self._last_summary_t = now
+            self.resumo_parcial()
 
     def save_event_frame(self, frame, event, *, critical=False):
         """Salva amostras espaçadas; eventos terminais sempre têm uma reserva."""
@@ -491,7 +496,7 @@ class TrackerCsvLogger:
             self._last_event_frame_t = time.monotonic()
         return path
 
-    def close(self, *, reason, return_result=None):
+    def _preencher_resumo(self, *, reason, return_result):
         exposure_range = None
         if np.isfinite(self._exposure_min_us) and np.isfinite(self._exposure_max_us):
             exposure_range = [
@@ -521,9 +526,40 @@ class TrackerCsvLogger:
                 self._optical_transient_rejection_rows
             ),
         })
-        self.summary_path.write_text(
+    def _gravar_resumo(self) -> None:
+        """Grava o resumo de forma atomica.
+
+        Escreve num temporario e renomeia: uma morte subita no meio da escrita
+        deixaria um JSON truncado, que e pior que nenhum -- o antigo some e o
+        novo nao presta.
+        """
+        temporario = self.summary_path.with_suffix(".json.tmp")
+        temporario.write_text(
             json.dumps(self._summary, indent=2, ensure_ascii=False), encoding="utf-8"
         )
+        temporario.replace(self.summary_path)
+
+    def resumo_parcial(self, *, reason="em_andamento") -> None:
+        """Grava o resumo com o que se sabe ate agora, marcado como parcial.
+
+        O resumo so era escrito no encerramento. Isso vale para Ctrl+C e para
+        excecoes, que passam pelo ``finally``, mas nao para uma morte subita: o
+        Windows termina o processo num desligamento sem rodar nada, igual a uma
+        queda de energia. Foi o que aconteceu em 2026-09-10 as 03:44 -- a
+        telemetria inteira sobreviveu e o resumo se perdeu, levando junto o
+        motivo do fim, a faixa de exposicao e o retorno ao inicio.
+
+        Chamado periodicamente, deixa no disco um resumo no maximo alguns
+        minutos velho. ``close`` sobrescreve com o definitivo.
+        """
+        self._preencher_resumo(reason=reason, return_result=None)
+        self._summary["parcial"] = True
+        self._gravar_resumo()
+
+    def close(self, *, reason, return_result=None):
+        self._preencher_resumo(reason=reason, return_result=return_result)
+        self._summary["parcial"] = False
+        self._gravar_resumo()
         if not self._fp.closed:
             self._fp.flush()
             self._fp.close()

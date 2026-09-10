@@ -638,3 +638,71 @@ class ReproducaoDoPassadoTests(unittest.TestCase):
         js = (Path(tracker_dashboard.ASSET_DIR) / "app.js").read_text(encoding="utf-8")
         self.assertIn('id="review-toggle"', html)
         self.assertIn("avancarReproducao", js)
+
+
+class ResumoParcialTests(unittest.TestCase):
+    """Uma morte subita nao pode levar junto os metadados da sessao.
+
+    O resumo so era escrito no encerramento. Isso cobre Ctrl+C e excecoes, que
+    passam pelo `finally`, mas nao um desligamento do Windows nem uma queda de
+    energia: em 2026-09-10 as 03:44 a telemetria inteira sobreviveu e o resumo
+    se perdeu, levando o motivo do fim, a faixa de exposicao e o retorno.
+    """
+
+    def logger(self):
+        import tempfile
+        from pathlib import Path
+
+        from modulos.controle.tracker_telemetria import TrackerCsvLogger
+
+        destino = Path(tempfile.mkdtemp())
+        registrador = TrackerCsvLogger(
+            destino, session_started=0.0,
+            initial_az=10.0, initial_alt=20.0, max_hours=12.0,
+        )
+        return registrador, registrador.session_dir
+
+    def test_o_resumo_parcial_e_gravado_e_marcado(self):
+        import json
+
+        registrador, destino = self.logger()
+        registrador.resumo_parcial()
+        caminho = destino / "resumo.json"
+        self.assertTrue(caminho.exists(), "o resumo parcial nao foi para o disco")
+        dados = json.loads(caminho.read_text(encoding="utf-8"))
+        self.assertTrue(dados["parcial"], "precisa vir marcado como parcial")
+        self.assertEqual(dados["finish_reason"], "em_andamento")
+
+    def test_close_sobrescreve_com_o_definitivo(self):
+        import json
+
+        registrador, destino = self.logger()
+        registrador.resumo_parcial()
+        registrador.close(reason="tempo_maximo_da_sessao", return_result={"ok": True})
+        dados = json.loads((destino / "resumo.json").read_text(encoding="utf-8"))
+        self.assertFalse(dados["parcial"])
+        self.assertEqual(dados["finish_reason"], "tempo_maximo_da_sessao")
+        self.assertEqual(dados["return_to_start"], {"ok": True})
+
+    def test_a_gravacao_e_atomica(self):
+        """JSON truncado e pior que nenhum: some o antigo e o novo nao presta."""
+        import json
+
+        registrador, destino = self.logger()
+        registrador.resumo_parcial()
+        for _ in range(5):
+            registrador.resumo_parcial()
+            json.loads((destino / "resumo.json").read_text(encoding="utf-8"))
+        self.assertFalse(
+            (destino / "resumo.json.tmp").exists(),
+            "o temporario tem de ser renomeado, nao deixado para tras",
+        )
+
+    def test_o_periodo_cabe_numa_sessao_longa(self):
+        from modulos.configuracoes import tracker
+
+        self.assertGreater(tracker.SUMMARY_PARTIAL_SECONDS, tracker.CSV_FLUSH_SECONDS)
+        self.assertLessEqual(
+            tracker.SUMMARY_PARTIAL_SECONDS, 600.0,
+            "periodo longo demais devolve pouco numa morte subita",
+        )
