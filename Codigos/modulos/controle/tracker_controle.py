@@ -34,6 +34,29 @@ class SlowBiasEstimator:
     def reset(self):
         self._samples = deque()
 
+    def deslocar(self, ddx_px, ddy_px) -> None:
+        """Aplica ao historico o mesmo deslocamento que o mount executou.
+
+        Depois de uma correcao as amostras guardadas descrevem um mundo que nao
+        existe mais: elas foram medidas antes de o mount se mexer. Descartar a
+        janela resolve isso, mas custa caro -- com janela de 120 s e aquecimento
+        de 60 s, e correcoes a cada ~80 s, o controlador passou 77% do tempo
+        cego na sessao de 2026-09-09 e o erro cresceu sem ninguem olhando.
+
+        Deslocar preserva a janela inteira: cada amostra leva o mesmo desconto
+        que o mount aplicou, a mediana passa a descrever o estado corrigido no
+        mesmo instante, e nao ha aquecimento nenhum. O descasamento entre o
+        comandado e o executado (medido: o encoder entrega 0,95 do comandado)
+        aparece como residuo nas amostras NOVAS, que e o comportamento certo.
+        """
+        deslocamento = np.asarray([ddx_px, ddy_px], dtype=float)
+        if not np.all(np.isfinite(deslocamento)):
+            return
+        self._samples = deque(
+            (t, x + float(deslocamento[0]), y + float(deslocamento[1]))
+            for t, x, y in self._samples
+        )
+
     def observe(self, timestamp, dx_px, dy_px) -> SlowBiasEstimate:
         timestamp = float(timestamp)
         values = np.asarray([dx_px, dy_px], dtype=float)

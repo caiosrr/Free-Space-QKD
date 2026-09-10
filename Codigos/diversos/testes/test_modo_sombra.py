@@ -413,3 +413,86 @@ class PainelIntegroTests(unittest.TestCase):
             'strokeStyle = "rgba(250,243,230,.45)"', js,
             "sobrou traco sem contorno no visor",
         )
+
+
+class DeslocamentoDaJanelaLongaTests(unittest.TestCase):
+    """Depois de corrigir, a janela longa e deslocada em vez de descartada.
+
+    Regressao do A/B de 2026-09-09 20:39. Descartar a janela apos cada pulso
+    obrigava 60 s de aquecimento; com correcoes a cada ~80 s o controlador ficou
+    77% do tempo em FORMANDO REFERENCIA LENTA, sem poder agir, e o erro mediano
+    subiu de 1,100 para 1,567 px.
+    """
+
+    def estimador(self, window_s=120.0, warmup_s=60.0):
+        from modulos.controle.tracker_controle import SlowBiasEstimator
+
+        return SlowBiasEstimator(window_s=window_s, warmup_s=warmup_s)
+
+    def encher(self, est, dx, dy, ate=70.0, passo=0.5):
+        t = 0.0
+        while t <= ate:
+            e = est.observe(t, dx, dy)
+            t += passo
+        return e
+
+    def test_deslocar_move_a_mediana_e_preserva_a_janela(self):
+        est = self.estimador()
+        antes = self.encher(est, 2.0, -1.0)
+        self.assertTrue(antes.ready)
+        est.deslocar(-1.5, 0.5)
+        depois = est.observe(70.5, 0.5, -0.5)
+        self.assertAlmostEqual(depois.dx_px, 0.5, delta=0.05)
+        self.assertAlmostEqual(depois.dy_px, -0.5, delta=0.05)
+        self.assertTrue(
+            depois.ready,
+            "deslocar nao pode custar aquecimento: era esse o defeito medido",
+        )
+
+    def test_descartar_custaria_o_aquecimento(self):
+        """Contraprova: e o reset que cega o controlador."""
+        est = self.estimador()
+        self.encher(est, 2.0, -1.0)
+        est.reset()
+        depois = est.observe(70.5, 0.5, -0.5)
+        self.assertFalse(depois.ready)
+
+    def test_deslocar_ignora_valores_invalidos(self):
+        est = self.estimador()
+        antes = self.encher(est, 1.0, 1.0)
+        est.deslocar(float("nan"), 0.0)
+        depois = est.observe(70.5, 1.0, 1.0)
+        self.assertAlmostEqual(depois.dx_px, antes.dx_px, delta=0.05)
+
+    def test_o_sinal_da_conversao_cancela_o_erro(self):
+        """m = A_inv @ (-e) e e = A @ m tem de fechar o ciclo.
+
+        Um sinal trocado aqui faria a janela andar para o lado errado e o
+        controlador insistir na direcao do erro, sem nada obvio no terminal.
+        """
+        import numpy as np
+
+        from modulos.controle.tracker_controle import pixel_error_to_mount_error
+
+        A_inv = np.array([[3.0e-4, 1.0e-5], [-8.0e-6, 2.7e-4]])
+        A_direta = np.linalg.inv(A_inv)
+        erro_px = (1.7, -0.9)
+        movimento = pixel_error_to_mount_error(erro_px[0], erro_px[1], A_inv)
+        variacao = A_direta @ np.array(movimento, dtype=float)
+        # Aplicar esse movimento deve anular o erro: erro + variacao = 0.
+        self.assertAlmostEqual(erro_px[0] + variacao[0], 0.0, places=9)
+        self.assertAlmostEqual(erro_px[1] + variacao[1], 0.0, places=9)
+
+    def test_a_janela_deslocada_libera_a_porta(self):
+        """Corrigindo 90% do desvio, a mediana cai abaixo do limiar de soltura."""
+        from modulos.configuracoes import tracker as T
+
+        est = self.estimador()
+        desvio = T.CONTROL_SLOW_TRIGGER_PX
+        self.encher(est, desvio, 0.0)
+        est.deslocar(-desvio * T.CONTROL_SLOW_FRACTION, 0.0)
+        depois = est.observe(70.5, desvio * (1 - T.CONTROL_SLOW_FRACTION), 0.0)
+        self.assertLess(
+            depois.radius_px, T.CONTROL_SLOW_RELEASE_PX,
+            "apos a correcao a porta precisa soltar, senao vira catraca",
+        )

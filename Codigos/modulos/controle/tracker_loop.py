@@ -18,6 +18,7 @@ from modulos.configuracoes.tracker import (
     CONTROL_AB_BLOCK_SECONDS,
     CONTROL_AB_TEST_ENABLED,
     CONTROL_SLOW_FRACTION,
+    CONTROL_SLOW_FRACTION_BAIXA,
     CONTROL_SLOW_RELEASE_PX,
     CONTROL_SLOW_TRIGGER_PX,
     CONTROL_SLOW_WARMUP_SECONDS,
@@ -204,6 +205,15 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
         warmup_s=CONTROL_SLOW_WARMUP_SECONDS,
     )
     regime_lento = False
+    braco = 0
+    nome_regime = "atual"
+    # Movimento aplicado no pulso em curso, para descontar da janela longa
+    # quando ele terminar. Integrado do comando de verdade, nao do pedido.
+    aplicado_az = aplicado_alt = 0.0
+    # pinv em vez de inv: uma matriz mal condicionada derrubaria o tracker na
+    # partida, e aqui ela so alimenta o desconto da janela longa. Com a
+    # calibracao continua o condicionamento fica em 1,04 e as duas coincidem.
+    A_direta = np.linalg.pinv(np.asarray(A_inv, dtype=float))
     pulse_cycle = BoundedCorrectionCycle(
         VEL_MIN_LIMITE, min_s=1.0 / CONTROL_HZ,
         image_window_s=TEMPORAL_WINDOW_SECONDS,
@@ -268,13 +278,13 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
         fine_az.reset()
         fine_alt.reset()
         slow_bias.reset()
-        # A janela longa tambem: depois de uma parada ela estaria cheia do erro
-        # ANTERIOR ao evento. Numa ocultacao de navio, que agora pode durar
-        # minutos, ela mandaria corrigir para onde o feixe estava, nao para onde
-        # esta. Os quatro pontos que chamam repousar sao raros (perda de sinal,
-        # dois freios e a acomodacao de cada pulso), entao isto nao impede o
-        # estimador de aquecer em operacao normal.
-        slow_bias_longo.reset()
+        # A janela longa e DESCARTADA so quando o estado ficou desconhecido:
+        # perda de sinal e freios. Depois de um pulso ela e DESLOCADA pelo
+        # movimento aplicado, la embaixo. Descartar tambem ali foi o que cegou o
+        # regime lento em 77% do tempo na sessao de 2026-09-09: com aquecimento
+        # de 60 s e correcoes a cada ~80 s, o controlador quase nunca podia agir.
+        if source != "acomodacao_pos_movimento":
+            slow_bias_longo.reset()
         directional_error.reset()
         correction_gate.reset()
 
@@ -289,31 +299,36 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     )
                     if bloco_c != ab_bloco_controle:
                         ab_bloco_controle = bloco_c
-                        regime_lento = bloco_c % 2 == 1
+                        braco = bloco_c % 3
+                        regime_lento = braco != 0
                         # O ganho que vale e o do pulse_cycle: e ele que
                         # calcula a duracao do pulso. O FinePulseAxis so entra
                         # como proposta, para conferir o sinal, entao mexer so
                         # nele deixaria o regime novo com o ganho de sempre.
                         if regime_lento:
+                            fracao = (
+                                CONTROL_SLOW_FRACTION if braco == 1
+                                else CONTROL_SLOW_FRACTION_BAIXA
+                            )
+                            nome_regime = (
+                                "lento_ganho_alto" if braco == 1
+                                else "lento_ganho_baixo"
+                            )
                             correction_gate.enter_radius_px = CONTROL_SLOW_RELEASE_PX
                             correction_gate.exit_radius_px = CONTROL_SLOW_TRIGGER_PX
-                            pulse_cycle.fraction = CONTROL_SLOW_FRACTION
-                            fine_az.correction_fraction = CONTROL_SLOW_FRACTION
-                            fine_alt.correction_fraction = CONTROL_SLOW_FRACTION
+                            pulse_cycle.fraction = fracao
+                            fine_az.correction_fraction = fracao
+                            fine_alt.correction_fraction = fracao
                         else:
+                            nome_regime = "atual"
                             correction_gate.enter_radius_px = HOLD_ENTER_RADIUS_PX
                             correction_gate.exit_radius_px = HOLD_EXIT_RADIUS_PX
                             pulse_cycle.fraction = FINE_PULSE_CORRECTION_FRACTION
                             fine_az.correction_fraction = FINE_PULSE_CORRECTION_FRACTION
                             fine_alt.correction_fraction = FINE_PULSE_CORRECTION_FRACTION
                         correction_gate.reset()
-                        slow_bias_longo.reset()
                         print()
-                        print(
-                            "A/B de controle: regime "
-                            + ("LENTO (janela longa, ganho alto)" if regime_lento
-                               else "ATUAL (janela de 8 s, ganho baixo)")
-                        )
+                        print(f"A/B de controle: regime {nome_regime}")
                 if HOLD_RADIUS_AB_TEST_ENABLED:
                     bloco = int(
                         (loop_t0 - ab_started_at) // HOLD_RADIUS_AB_BLOCK_SECONDS
@@ -594,11 +609,23 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     last_sent_alt = cmd_alt
                     last_sent_alt_t = loop_t0
 
+                aplicado_az += cmd_az * dt_loop
+                aplicado_alt += cmd_alt * dt_loop
+
                 if cmd_az == 0.0 and cmd_alt == 0.0 and pulse_cycle.confirm_stopped(time.perf_counter()):
                     # Nao reutilizar medianas/derivadas anteriores ao movimento.
-                    # repousar() ja zera a janela longa. Sem isso ela ainda
-                    # estaria cheia do erro anterior a correcao e mandaria
-                    # corrigir de novo o que ja foi corrigido: catraca.
+                    # A janela longa NAO e descartada: e deslocada pelo que o
+                    # mount de fato andou. As amostras foram medidas antes do
+                    # movimento, entao levam o mesmo desconto e a mediana passa
+                    # a descrever o estado corrigido sem esperar aquecimento.
+                    # A_direta leva movimento angular de volta para pixels:
+                    # de m = A_inv @ (-e) sai e = A @ m.
+                    if aplicado_az or aplicado_alt:
+                        desloc = A_direta @ np.array(
+                            [aplicado_az, aplicado_alt], dtype=float
+                        )
+                        slow_bias_longo.deslocar(float(desloc[0]), float(desloc[1]))
+                    aplicado_az = aplicado_alt = 0.0
                     repousar("acomodacao_pos_movimento")
                     target_cmd_az = target_cmd_alt = 0.0
                     err_az = err_alt = 0.0
@@ -616,7 +643,7 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     state.hold_active = estado.hold_active
                     state.hold_enter_radius_px = correction_gate.enter_radius_px
                     state.hold_exit_radius_px = correction_gate.exit_radius_px
-                    state.control_regime = "lento" if regime_lento else "atual"
+                    state.control_regime = nome_regime
                     state.control_dx_px = estado.control_dx_px
                     state.control_dy_px = estado.control_dy_px
                     state.control_radius_px = estado.control_radius_px

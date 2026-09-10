@@ -56,6 +56,12 @@ CONTROL_SLOW_RELEASE_PX = 0.25
 # motivo para deixar 65% para tras: os dados dizem que ele ultrapassa em 4% dos
 # casos e fica devendo em 96%.
 CONTROL_SLOW_FRACTION = 0.90
+# Segundo braco do experimento, identico ao primeiro menos o ganho. Sem ele o
+# A/B trocaria janela, limiar e ganho de uma vez e um resultado bom ou ruim nao
+# diria QUAL das tres mudancas foi responsavel. Com os dois bracos lentos lado a
+# lado, a diferenca entre eles isola o ganho, e a diferenca deles para o atual
+# mede o conjunto janela+limiar.
+CONTROL_SLOW_FRACTION_BAIXA = 0.35
 
 # Experimento pareado da zona de repouso. A sombra NAO consegue decidir se vale
 # apertar HOLD_ENTER_RADIUS_PX: ela mede o erro que sobra, mas o efeito de uma
@@ -374,6 +380,7 @@ if not (
     and 0 < CONTROL_SLOW_RELEASE_PX < CONTROL_SLOW_TRIGGER_PX < FAST_CORRECTION_RADIUS_PX
     and 0 < CONTROL_SLOW_WARMUP_SECONDS <= CONTROL_SLOW_WINDOW_SECONDS
     and 0 < CONTROL_SLOW_FRACTION <= 1
+    and 0 < CONTROL_SLOW_FRACTION_BAIXA < CONTROL_SLOW_FRACTION
     and CONTROL_AB_BLOCK_SECONDS >= 2 * CONTROL_SLOW_WINDOW_SECONDS
     and 0 < AUTO_EXPOSURE_LOSS_SEARCH_BACKGROUND_LIMIT
     <= AUTO_EXPOSURE_BACKGROUND_INCREASE_LIMIT
