@@ -593,3 +593,71 @@ regimes, com turbulência, beacon e céu iguais.
 Desligado por padrão de propósito: mexe em controle de verdade e uma sessão
 longa sem operador não pode ganhar isso de surpresa por um commit. Há teste que
 trava esse padrão.
+
+## A/B do regime de controle — sessão 2026-09-09 20:39–23:39 (3 h)
+
+Sessão completa e saudável: 99,88% com alvo, ausência máxima de 1,8 s, retorno
+ao início bem-sucedido, encerrada por tempo máximo. 18 blocos de 10 min,
+9 de cada regime, split de amostras 25430/25508.
+
+**O regime lento perdeu nos dois critérios.** Descartando os 2 primeiros
+minutos de cada bloco como transição:
+
+| | atual | lento |
+|---|---|---|
+| erro radial mediano | **1,100 px** | 1,567 px |
+| erro radial médio | **1,331 px** | 1,790 px |
+| erro radial p90 | **2,265 px** | 3,382 px |
+| raio de controle mediano | **0,947 px** | 1,427 px |
+| DC médio por bloco | **0,62 px** | 1,41 px |
+| correções/h | 65,4 | 44,7 |
+| tempo morto | 4,58% | 3,12% |
+| **% do tempo sem poder agir** | **6,9%** | **77,2%** |
+
+### A causa
+
+A última linha explica tudo. No regime lento o estimador de 120 s é zerado
+depois de cada pulso e precisa de 60 s de aquecimento; como as correções saem a
+cada ~80 s, o controlador fica **cego 75% do tempo** (60/80 = 0,75, e o medido
+foi 77%). Durante a cegueira o erro cresce sem ninguém olhando, e quando o
+estimador fica pronto ele já está grande — o que dispara outra correção, outro
+reset, outra cegueira.
+
+O desenho se auto-sabota: reset → cego → erro cresce → corrige → reset.
+
+E a economia de correções que o justificava **não aconteceu**. O bloco 14 do
+regime atual teve 52 correções sozinho (turbulência 0,409 px contra 0,28 px da
+mediana da sessão — foi uma rajada real, qualidade óptica normal o tempo todo).
+Tirando esse outlier:
+
+- atual, condições típicas: **34,5 correções/h**
+- lento: **44,7 correções/h**
+
+Ou seja, o regime lento corrige **mais**, com 40% mais erro. O oposto do
+objetivo nos dois eixos.
+
+### Onde a simulação errou
+
+Ela previu erro parecido e 9× menos correções. Errou porque não modelou o custo
+da cegueira pós-reset: no modelo o estimador continuava observando e só o
+`ready` gateava; na prática os 60 s de aquecimento são 60 s em que o mount não
+pode agir sobre nada. A simulação também superestimou o regime atual em 6×
+(400/h contra os 65/h reais), então a razão entre regimes nunca foi confiável.
+
+### O conserto possível
+
+O defeito é o **reset**, não a janela longa. Em vez de descartar a janela após
+cada pulso, **subtrair do histórico o deslocamento aplicado**: cada amostra
+guardada leva o mesmo desconto que o mount executou, a mediana passa a refletir
+o estado corrigido no mesmo instante, e não há aquecimento nem cegueira.
+
+O erro de 5% entre o comandado e o executado (medido: encoder entrega 0,95 do
+comandado) entra como resíduo nas amostras novas, que é exatamente o
+comportamento correto — o estimador vê e corrige de novo.
+
+### O que fica valendo por enquanto
+
+O regime atual está bem: 34,5 correções/h em condições típicas, erro mediano
+1,10 px, 4,6% de tempo morto. O desvio sistemático de 0,62 px continua sendo
+~56% do erro mediano e continua valendo a pena atacar — mas não por este
+caminho, como está.
