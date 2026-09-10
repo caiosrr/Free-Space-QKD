@@ -780,21 +780,73 @@ eventos, e **zero buracos** na gravação até o corte.
 Causa externa, portanto: reinício do Windows por atualização, logoff, suspensão
 ou queda de energia. 03:44 é horário clássico de manutenção automática.
 
-### Limite de movimento no mount: o que dá e o que não dá
+### Limite de movimento no mount: existe, e é limite de ALTITUDE
 
 Pergunta levantada em 2026-09-10, depois de o tracker ser morto sem encerrar: o
 `MoveAxis` do ASCOM não tem prazo, então um processo morto no meio de um pulso
 deixa o eixo andando — até 360°/h na velocidade máxima que o controlador pode
 comandar.
 
-**Pelo ASCOM padrão, não existe limite de posição.** O `ITelescopeV3` não tem
-propriedade de limite de eixo. O que pode existir é específico do fabricante e
-aparece em `SupportedActions` ou no passa-a-diante `CommandString`. Isso só se
-verifica com o mount ligado: `programas_principais/consultar_mount.py` lê tudo
-de uma vez, sem comandar nada.
+**Pelo ASCOM padrão não há limite de posição** — o `ITelescopeV3` não define
+propriedade nenhuma para isso. Mas o AM5 tem um limite **próprio**, fora do
+padrão, por dois caminhos (material de terceiros, ainda não conferido no nosso
+equipamento):
 
-**Sobre o PulseGuide.** Ele seria a resposta ideal — o firmware conta o tempo e
-para sozinho, então um PC que morre no meio do pulso não deixa o eixo andando.
+1. **App ASI Mount** (celular/tablet, conectado ao Wi-Fi do AM5):
+   Settings (engrenagem) → Advanced Settings → **Altitude Limit Setting**.
+   Valores comuns entre 0° e 30°, para impedir que o tubo desça em obstáculos
+   ou nas pernas do tripé.
+2. **Configuração do driver ASCOM** (a janela que abre quando o ASCOM Remote
+   conecta): seção **Altitude Limit**, com uma caixa para habilitar e um campo
+   para o corte angular.
+
+O segundo é provavelmente o que o operador lembrava de ter visto.
+
+#### O detalhe que muda tudo no nosso caso
+
+O enlace UFF–CBPF é **horizontal**. Medido na sessão de 2026-09-10:
+
+| | |
+|---|---|
+| altitude de operação | **−0,042°** (mín −0,0422, máx −0,0403) |
+| azimute de operação | 359,935° |
+
+A altitude é **negativa**. Um limite inferior em 0°, que é o valor mais baixo
+sugerido nos guias, **bloquearia a operação normal** — o mount não conseguiria
+nem apontar para o alvo.
+
+Então o limite só serve se aceitar valor **negativo**, algo como −2° ou −3°:
+longe o bastante dos −0,042° de trabalho para nunca atrapalhar, perto o
+bastante para conter uma deriva. Se o campo não aceitar negativos, esse caminho
+morre para nós.
+
+#### Duas perguntas que decidem, e só o equipamento responde
+
+1. **O limite se aplica ao `MoveAxis`?** Muitos mounts aplicam limite só a
+   *slews* (`SlewToAltAz`), tratando `MoveAxis` como comando direto de eixo. Se
+   for o caso aqui, o limite **não protege** do nosso cenário, que é
+   exatamente um `MoveAxis` sem o zero de encerramento.
+2. **O campo aceita altitude negativa?**
+
+#### O que o limite não cobre
+
+Ele é só de **altitude**. Uma fuga em **azimute** — 360°/h na velocidade máxima
+— fica completamente descoberta, e é ali que mora o risco de enrolar cabo.
+
+#### Conclusão prática
+
+Vale configurar o limite de altitude em torno de −3°, se aceitar negativo: é
+grátis e independe de qualquer software nosso. Mas ele **não substitui** a
+tarefa de parada no boot (`parar_mount.py`), por três razões: pode não valer
+para `MoveAxis`, não cobre azimute, e não devolve o mount ao estado seguro —
+apenas impede que ele passe de um ponto.
+
+### Sobre o PulseGuide: por que não funcionou, e por que não serve mesmo assim
+
+O `PulseGuide` seria a resposta ideal ao medo de deriva — o firmware conta o
+tempo e para sozinho, então um PC que morre no meio do pulso não deixa o eixo
+andando.
+
 O operador lembrava de ter testado no começo do projeto e não ter conseguido
 mover o mount. O script daquele teste está no histórico só como `.pyc`
 (`8d26dc5:__pycache__/pulseguide_control.cpython-312.pyc`), e as strings dele
@@ -810,7 +862,16 @@ Só que isso não salva a ideia para o nosso caso: o tracker chama
 taxa sideral atrás de um alvo terrestre fixo, e teríamos que corrigir essa
 deriva também. O remédio seria pior que a doença.
 
-**Conclusão prática:** a proteção contra deriva por morte súbita continua sendo
-a tarefa de parada no boot (`parar_mount.py`), não uma garantia do driver.
-Verificar `SupportedActions` e `CanPulseGuide` quando o mount voltar é barato e
-pode mudar essa conclusão — mas a expectativa é que não mude.
+### Roteiro de verificação quando o mount voltar
+
+1. `python programas_principais/consultar_mount.py` — só lê, não comanda.
+   Confere `SupportedActions`, `CanPulseGuide`, taxas de guiagem e faixas de
+   velocidade por eixo.
+2. Abrir a configuração do driver ASCOM e procurar **Altitude Limit**. Tentar
+   um valor negativo (−3°) e ver se aceita.
+3. **Teste supervisionado, com a mão no botão:** habilitar o limite em algo
+   perto da posição atual, comandar `MoveAxis` lento na direção dele, e ver se
+   o mount para sozinho. É isso que responde se o limite vale para `MoveAxis`.
+4. **Teste do homem-morto:** comandar `MoveAxis` lento e derrubar o cliente
+   (matar o processo, não mandar zero). Se o firmware parar ao perder a
+   conexão, o problema todo desaparece.
