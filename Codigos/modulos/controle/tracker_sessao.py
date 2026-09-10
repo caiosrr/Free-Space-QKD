@@ -159,6 +159,34 @@ def main(
 
         session_hours = _ler_tempo_sessao(session_hours)
         A_inv, matrix_path = carregar_matriz_calibracao()
+        # A escala fisica sai da CALIBRACAO quando ela existe, nao da optica
+        # nominal: a calibracao mede angulo contra pixel diretamente, com
+        # validacao por holdout. Em 2026-09-09 as duas discordaram por 1,70x, e
+        # relatar centimetros pela nominal errava por esse fator.
+        escala_medida = optica.escala_rad_por_px_medida(A_inv)
+        if escala_medida is not None:
+            razao = optica.escala_rad_por_px() / escala_medida
+            if not 0.9 <= razao <= 1.1:
+                print()
+                print(
+                    "ATENCAO: a optica configurada e a calibracao "
+                    f"discordam por {razao:.2f}x."
+                )
+                print(
+                    f"  nominal   : {optica.arcsec_por_px():.3f} arcsec/px "
+                    f"(focal {optica.FOCAL_LENGTH_M * 1000:.1f} mm)"
+                )
+                import numpy as _np
+
+                print(
+                    f"  calibracao: {_np.degrees(escala_medida) * 3600:.3f} arcsec/px "
+                    f"(implica focal efetiva de "
+                    f"{optica.FOCAL_LENGTH_M * razao * 1000:.0f} mm)"
+                )
+                print(
+                    "  O tracker usa a CALIBRACAO; so o relato em centimetros "
+                    "dependia da nominal, e passa a usar a medida tambem."
+                )
         target = escolher_referencia_tracker()
         if target.focus_signature is None:
             raise RuntimeError("A selecao manual nao produziu uma assinatura da ilha.")
@@ -232,6 +260,7 @@ def main(
             target_x,
             target_y,
             DISPLAY_HEIGHT_PX,
+            rad_por_px=escala_medida,
         )
 
         if executar_autoteste:

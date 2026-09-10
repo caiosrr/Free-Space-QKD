@@ -58,7 +58,10 @@ def tracking_status(
 class TrackerDisplay:
     """Renderiza o frame e os indicadores essenciais da sessao."""
 
-    def __init__(self, roi_w, roi_h, target_x, target_y, display_h=1080):
+    def __init__(
+        self, roi_w, roi_h, target_x, target_y, display_h=1080,
+        rad_por_px=None,
+    ):
         self.window_name = "Tracker continuo"
         self.display_h = int(display_h)
         self.display_w = max(1, int(round(roi_w * self.display_h / roi_h)))
@@ -70,6 +73,10 @@ class TrackerDisplay:
         self.roi_h = int(roi_h)
         self.target_x_raw = float(target_x)
         self.target_y_raw = float(target_y)
+        # Escala fisica medida pela calibracao. Quando existe, ela manda:
+        # a nominal depende de a focal efetiva configurada estar certa, e
+        # em 2026-09-09 as duas discordaram por 1,70x.
+        self.rad_por_px = rad_por_px
         self.dashboard = None
         try:
             self.dashboard = TrackerDashboard()
@@ -135,7 +142,11 @@ class TrackerDisplay:
                         "recovery_target_frames": TEMPORAL_RECOVERY_VALID_FRAMES,
                         # Escala fisica e rotulos: o painel mostra o erro em
                         # centimetros no alvo ao lado dos pixels.
-                        "cm_per_px": optica.metros_por_px_no_alvo() * 100.0,
+                        "cm_per_px": (
+                            (self.rad_por_px * optica.LINK_DISTANCE_M * 100.0)
+                            if self.rad_por_px
+                            else optica.metros_por_px_no_alvo() * 100.0
+                        ),
                         "link_label": (
                             f"enlace experimental · {optica.LINK_DISTANCE_M / 1000:.1f} km"
                         ),

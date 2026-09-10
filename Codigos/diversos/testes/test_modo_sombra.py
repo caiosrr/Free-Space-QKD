@@ -224,7 +224,7 @@ class RegimeLentoDeControleTests(unittest.TestCase):
         from modulos.controle.tracker_loop import CONTROL_HZ
 
         t = self.cfg()
-        escala_px_por_grau = 8820.0  # medido na telemetria de 2026-09-09
+        escala_px_por_grau = 9450.0  # calibracao de 2026-09-09 19:20, validada
         menor_pulso_px = (1.0 / CONTROL_HZ) * VEL_MIN_LIMITE * escala_px_por_grau
         self.assertGreater(
             t.CONTROL_SLOW_TRIGGER_PX, 2 * menor_pulso_px,
@@ -275,7 +275,7 @@ class RegimeLentoDeControleTests(unittest.TestCase):
         )
 
         t = self.cfg()
-        escala = 8820.0
+        escala = 9450.0
         eixo = FinePulseAxis(
             VEL_MIN_LIMITE,
             correction_fraction=t.CONTROL_SLOW_FRACTION,
@@ -313,7 +313,7 @@ class GanhoDoPulsoTests(unittest.TestCase):
             fraction=fraction, image_window_s=2.0,
         )
 
-    def duracao_px(self, fraction, erro_px, escala=8820.0):
+    def duracao_px(self, fraction, erro_px, escala=9450.0):
         """Quantos pixels o pulso entrega para um erro dado."""
         from modulos.controle.mount_ascom import VEL_MIN_LIMITE
 
@@ -335,7 +335,7 @@ class GanhoDoPulsoTests(unittest.TestCase):
         )
 
     def test_o_teto_de_duracao_limita_erros_grandes(self):
-        """Com 8820 px/grau, 120 ms valem 1,10 px: nenhum pulso passa disso."""
+        """Com 9450 px/grau, 120 ms valem 1,18 px: nenhum pulso passa disso."""
         entregue = self.duracao_px(1.0, 5.0)
         self.assertLess(
             entregue, 1.2,
@@ -358,7 +358,7 @@ class GanhoDoPulsoTests(unittest.TestCase):
         from modulos.controle.mount_ascom import VEL_MIN_LIMITE
 
         ciclo = self.ciclo(0.90)
-        erro = 1.5 / 8820.0
+        erro = 1.5 / 9450.0
         cmd = ciclo.command(
             0.0, 0.0, (VEL_MIN_LIMITE, VEL_MIN_LIMITE),
             (erro, erro), (-erro, -erro), fine=True, enabled=True,

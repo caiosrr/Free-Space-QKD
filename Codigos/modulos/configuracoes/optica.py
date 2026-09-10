@@ -33,8 +33,37 @@ LINK_DISTANCE_M = 7000.0
 
 
 def escala_rad_por_px() -> float:
-    """Angulo subtendido por um pixel, em radianos."""
+    """Angulo subtendido por um pixel, em radianos, pela optica NOMINAL."""
     return PIXEL_PITCH_M / FOCAL_LENGTH_M
+
+
+def escala_rad_por_px_medida(A_inv) -> float | None:
+    """Mesmo angulo, mas medido pela matriz de calibracao.
+
+    Esta e a fonte melhor quando existe: a calibracao mede angulo contra pixel
+    diretamente, com o encoder do mount de regua e validacao por holdout,
+    enquanto a nominal depende de a focal efetiva configurada estar certa. Na
+    calibracao de 2026-09-09 as duas discordaram por 1,70x -- a medida deu
+    0,381 arcsec/px contra 0,648 da nominal, o que implica uma focal efetiva de
+    1191 mm e nao os 700,4 mm configurados. Enquanto isso nao for resolvido no
+    banco optico, relatar em centimetros pela nominal erra por esse fator.
+
+    Recebe ``A_inv`` (graus de mount por pixel) e devolve ``None`` se a matriz
+    nao for utilizavel.
+    """
+    import numpy as np
+
+    try:
+        matriz = np.asarray(A_inv, dtype=float)
+        if matriz.shape != (2, 2) or not np.all(np.isfinite(matriz)):
+            return None
+        direta = np.linalg.pinv(matriz)          # pixels por grau
+        px_por_grau = float(np.mean(np.linalg.norm(direta, axis=0)))
+    except Exception:
+        return None
+    if not (100.0 < px_por_grau < 1e6):
+        return None
+    return float(np.radians(1.0 / px_por_grau))
 
 
 def arcsec_por_px() -> float:

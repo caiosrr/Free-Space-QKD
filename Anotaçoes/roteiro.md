@@ -661,3 +661,48 @@ O regime atual está bem: 34,5 correções/h em condições típicas, erro media
 1,10 px, 4,6% de tempo morto. O desvio sistemático de 0,62 px continua sendo
 ~56% do erro mediano e continua valendo a pena atacar — mas não por este
 caminho, como está.
+
+### Escala de placa: dois números meus estavam errados
+
+A calibração contínua de 2026-09-09 19:20 (validada, condicionamento 1,008,
+holdout com RMS relativo de 0,059) fixa a escala em **9450 px/grau =
+0,381 arcsec/px**.
+
+**Erro 1 — eu vinha usando 8820–8937 px/grau.** Tirei esse número da telemetria
+dividindo `distancia_px` por `hypot(erro_az_deg, erro_alt_deg)`. Não fecha: o
+numerador é o erro instantâneo e o denominador é o movimento angular derivado do
+erro de **controle** (o viés lento), duas grandezas diferentes. Os 7% de
+diferença não mudam nenhuma conclusão, mas os números corretos são:
+
+| | antes (errado) | correto |
+|---|---|---|
+| 1 px | 0,403″ | **0,381″** |
+| pulso de 1 px | 108,8 ms | **101,6 ms** |
+| menor pulso (29 ms, laço a 34 Hz) | 0,27 px | **0,290 px** |
+| maior pulso (120 ms) | 1,10 px | **1,182 px** |
+| limiar de 0,6 px | 2,2× o menor pulso | **2,1×** |
+| deriva noturna | 0,365 px/min | 0,391 px/min |
+| deriva matinal | 0,087 px/min | 0,093 px/min |
+
+**Erro 2, mais sério — a óptica nominal discorda da calibração por 1,70×.**
+
+| | arcsec/px | cm no alvo (7 km) |
+|---|---|---|
+| `optica.py` nominal (2,2 µm / 700,4 mm) | 0,648 | 2,20 |
+| **calibração medida** | **0,381** | **1,29** |
+
+A focal efetiva implicada é **1191 mm**, não 700,4 mm. Ou existe ampliação extra
+no trem óptico (relay, barlow), ou `FOCAL_LENGTH_M` está errado. **A questão
+fica aberta para o banco óptico** — daqui não dá para decidir qual dos dois está
+certo em termos absolutos, só que discordam.
+
+Consequência prática: o "cm no alvo" do painel vinha **superestimando por
+1,70×**. Onde ele mostrava 1,3 cm, o valor pela calibração é 0,75 cm. O laço de
+controle nunca dependeu disso — ele usa a matriz — só o relato físico dependia.
+
+Corrigido: `optica.escala_rad_por_px_medida(A_inv)` deriva a escala da própria
+matriz, o painel passa a usá-la, e o tracker avisa na partida quando as duas
+discordam mais de 10%, dizendo a focal efetiva implicada.
+
+Vale notar o que isso implica sobre as sessões: se a calibração estiver certa, o
+erro mediano de 1,10 px equivale a **0,42 cm** no CBPF, não 2,4 cm.
