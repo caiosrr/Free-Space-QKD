@@ -779,3 +779,38 @@ eventos, e **zero buracos** na gravação até o corte.
 
 Causa externa, portanto: reinício do Windows por atualização, logoff, suspensão
 ou queda de energia. 03:44 é horário clássico de manutenção automática.
+
+### Limite de movimento no mount: o que dá e o que não dá
+
+Pergunta levantada em 2026-09-10, depois de o tracker ser morto sem encerrar: o
+`MoveAxis` do ASCOM não tem prazo, então um processo morto no meio de um pulso
+deixa o eixo andando — até 360°/h na velocidade máxima que o controlador pode
+comandar.
+
+**Pelo ASCOM padrão, não existe limite de posição.** O `ITelescopeV3` não tem
+propriedade de limite de eixo. O que pode existir é específico do fabricante e
+aparece em `SupportedActions` ou no passa-a-diante `CommandString`. Isso só se
+verifica com o mount ligado: `programas_principais/consultar_mount.py` lê tudo
+de uma vez, sem comandar nada.
+
+**Sobre o PulseGuide.** Ele seria a resposta ideal — o firmware conta o tempo e
+para sozinho, então um PC que morre no meio do pulso não deixa o eixo andando.
+O operador lembrava de ter testado no começo do projeto e não ter conseguido
+mover o mount. O script daquele teste está no histórico só como `.pyc`
+(`8d26dc5:__pycache__/pulseguide_control.cpython-312.pyc`), e as strings dele
+mostram o que fazia: `ensure_connected`, `ensure_unparked`, `is_parked`,
+`unpark`, e então `pulseguide` com `Direction` e `Duration`.
+
+**Não há nenhuma menção a tracking.** Essa é provavelmente a explicação: o
+`PulseGuide` do ASCOM é definido como uma *correção ao rastreio*, e vários
+mounts o ignoram com o rastreio desligado, porque não há o que corrigir.
+
+Só que isso não salva a ideia para o nosso caso: o tracker chama
+`ensure_not_tracking()` de propósito. Ligar o rastreio faria o mount derivar à
+taxa sideral atrás de um alvo terrestre fixo, e teríamos que corrigir essa
+deriva também. O remédio seria pior que a doença.
+
+**Conclusão prática:** a proteção contra deriva por morte súbita continua sendo
+a tarefa de parada no boot (`parar_mount.py`), não uma garantia do driver.
+Verificar `SupportedActions` e `CanPulseGuide` quando o mount voltar é barato e
+pode mudar essa conclusão — mas a expectativa é que não mude.
