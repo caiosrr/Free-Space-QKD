@@ -365,3 +365,51 @@ class GanhoDoPulsoTests(unittest.TestCase):
         )
         self.assertEqual(float(cmd[0]), 0.0)
         self.assertEqual(float(cmd[1]), 0.0)
+
+
+class PainelIntegroTests(unittest.TestCase):
+    """O painel quebra em silencio: um id que o JS pede e o HTML nao tem vira
+    ``null.textContent`` e derruba o laco inteiro, sem nada no terminal."""
+
+    def arquivos(self):
+        from pathlib import Path
+
+        from modulos.controle import tracker_dashboard
+
+        base = Path(tracker_dashboard.ASSET_DIR)
+        return (
+            (base / "app.js").read_text(encoding="utf-8"),
+            (base / "index.html").read_text(encoding="utf-8"),
+            (base / "styles.css").read_text(encoding="utf-8"),
+        )
+
+    def test_todo_id_pedido_pelo_js_existe_no_html(self):
+        import re
+
+        js, html, _ = self.arquivos()
+        inicio = js.index("const ui = {};")
+        fim = js.index(".forEach((id) => { ui[id] = $(id); });")
+        pedidos = re.findall(r'"([a-z0-9-]+)"', js[inicio:fim])
+        existentes = set(re.findall(r'id="([^"]+)"', html))
+        faltando = sorted(set(pedidos) - existentes)
+        self.assertEqual(faltando, [], f"ids ausentes no HTML: {faltando}")
+        self.assertGreater(len(pedidos), 20, "a lista de ids nao foi encontrada")
+
+    def test_hidden_vence_os_display_flex(self):
+        """Sem isto, `el.hidden = true` nao esconde nada.
+
+        Regressao real: a faixa de revisao continuava na tela depois de
+        "voltar ao vivo", porque `.review { display: flex }` sobrepoe o
+        `[hidden] { display: none }` do navegador.
+        """
+        _, _, css = self.arquivos()
+        self.assertIn("[hidden] { display: none !important; }", css)
+
+    def test_a_reticula_tem_contorno(self):
+        """Sobre o nucleo saturado do beacon so o contorno preto da contraste."""
+        js, _, _ = self.arquivos()
+        self.assertIn("function contornado(", js)
+        self.assertNotIn(
+            'strokeStyle = "rgba(250,243,230,.45)"', js,
+            "sobrou traco sem contorno no visor",
+        )

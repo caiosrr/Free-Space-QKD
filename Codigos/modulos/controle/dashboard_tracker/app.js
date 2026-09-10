@@ -16,7 +16,7 @@
     "link-distance", "session-time", "system-state",
     "viewer-meta", "live-frame", "beacon-overlay", "camera-label",
     "measurement-rate", "coordinates", "sigma", "inset-caption",
-    "review-banner", "review-when", "review-back",
+    "review-banner", "review-when", "review-back", "live-corner",
     "radial-error", "radial-metric",
     "scale", "tick-rest", "tick-wake", "scale-bar",
     "error-x", "error-y", "sigma-inline", "state-detail",
@@ -55,6 +55,23 @@
     const base = el.className.split(" ").filter((c) => c && !c.startsWith("is-")).join(" ");
     el.className = kind ? `${base} is-${kind}` : base;
   };
+
+  // Todo traco do visor sai duas vezes: um contorno preto mais grosso por
+  // baixo e a cor por cima. Sem isso a reticula some, e some justamente onde
+  // ela mais importa: sobre o nucleo do beacon, que satura em branco. Contra
+  // fundo preto o contorno nao aparece, entao nao custa nada.
+  function contornado(ctx, caminho, cor, largura, ratio) {
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "rgba(0,0,0,.85)";
+    ctx.lineWidth = largura + 2.5 * ratio;
+    caminho();
+    ctx.stroke();
+    ctx.strokeStyle = cor;
+    ctx.lineWidth = largura;
+    caminho();
+    ctx.stroke();
+  }
 
   function resizeCanvas(canvas) {
     const rect = canvas.getBoundingClientRect();
@@ -219,34 +236,31 @@
 
     // aneis de repouso e retomada: o que da significado imediato ao numero
     overlayCtx.setLineDash([4 * ratio, 5 * ratio]);
-    overlayCtx.lineWidth = 1.1 * ratio;
     [[s.hold_enter_radius_px, tone("--rest")], [s.hold_exit_radius_px, tone("--sodium")]]
       .forEach(([raio, cor]) => {
         if (!raio) return;
-        overlayCtx.strokeStyle = cor;
-        overlayCtx.globalAlpha = 0.5;
-        overlayCtx.beginPath();
-        overlayCtx.arc(tx, ty, Math.max(raio * escala, 3 * ratio), 0, Math.PI * 2);
-        overlayCtx.stroke();
+        const r = Math.max(raio * escala, 3 * ratio);
+        contornado(overlayCtx, () => {
+          overlayCtx.beginPath();
+          overlayCtx.arc(tx, ty, r, 0, Math.PI * 2);
+        }, cor, 1.3 * ratio, ratio);
       });
     overlayCtx.setLineDash([]);
-    overlayCtx.globalAlpha = 1;
 
     // Eixos X e Y do alvo, com VAO no centro. A cruz continua anterior passava
     // exatamente por cima do ponto que interessa: o centro de massa fica a
     // fracoes de pixel do alvo na maior parte do tempo, entao o traco cobria a
     // propria medida. Com o vao, o miolo fica limpo e os bracos servem so de
     // referencia de direcao, que e o que eles precisam fazer.
-    overlayCtx.strokeStyle = "rgba(250,243,230,.45)";
-    overlayCtx.lineWidth = ratio;
     const vao = 13 * ratio;
     const braco = 16 * ratio;
-    overlayCtx.beginPath();
-    overlayCtx.moveTo(tx - vao - braco, ty); overlayCtx.lineTo(tx - vao, ty);
-    overlayCtx.moveTo(tx + vao, ty); overlayCtx.lineTo(tx + vao + braco, ty);
-    overlayCtx.moveTo(tx, ty - vao - braco); overlayCtx.lineTo(tx, ty - vao);
-    overlayCtx.moveTo(tx, ty + vao); overlayCtx.lineTo(tx, ty + vao + braco);
-    overlayCtx.stroke();
+    contornado(overlayCtx, () => {
+      overlayCtx.beginPath();
+      overlayCtx.moveTo(tx - vao - braco, ty); overlayCtx.lineTo(tx - vao, ty);
+      overlayCtx.moveTo(tx + vao, ty); overlayCtx.lineTo(tx + vao + braco, ty);
+      overlayCtx.moveTo(tx, ty - vao - braco); overlayCtx.lineTo(tx, ty - vao);
+      overlayCtx.moveTo(tx, ty + vao); overlayCtx.lineTo(tx, ty + vao + braco);
+    }, tone("--reticula"), 1.4 * ratio, ratio);
 
     // rastro recente
     if (trail.length > 1) {
@@ -266,14 +280,16 @@
       const cx = ox + s.x_cm_px * escala;
       const cy = oy + s.y_cm_px * escala;
       const cor = s.hold_active ? tone("--rest") : tone("--sodium");
-      overlayCtx.strokeStyle = cor;
-      overlayCtx.lineWidth = 1.4 * ratio;
-      overlayCtx.beginPath();
-      overlayCtx.arc(cx, cy, 7 * ratio, 0, Math.PI * 2);
-      overlayCtx.stroke();
-      overlayCtx.fillStyle = cor;
+      contornado(overlayCtx, () => {
+        overlayCtx.beginPath();
+        overlayCtx.arc(cx, cy, 7 * ratio, 0, Math.PI * 2);
+      }, cor, 1.6 * ratio, ratio);
+      overlayCtx.strokeStyle = "rgba(0,0,0,.85)";
+      overlayCtx.lineWidth = 2.5 * ratio;
       overlayCtx.beginPath();
       overlayCtx.arc(cx, cy, 1.8 * ratio, 0, Math.PI * 2);
+      overlayCtx.stroke();
+      overlayCtx.fillStyle = cor;
       overlayCtx.fill();
     }
 
@@ -324,6 +340,12 @@
     } catch (e) {
       // imagem ainda nao decodificada; o proximo quadro desenha
     }
+    // O recorte cai INTEIRO dentro do nucleo do beacon, que satura: sem isto a
+    // lupa e um retangulo branco e nada da reticula aparece. A imagem aqui e
+    // so contexto -- quem importa e a geometria (alvo, aneis, centro de massa),
+    // e ela precisa do fundo mais escuro para ser lida.
+    overlayCtx.fillStyle = "rgba(6, 4, 3, .55)";
+    overlayCtx.fillRect(x0, y0, lado, lado);
 
     // do sensor para dentro da lupa
     const k = lado / LUPA_LADO_PX;
@@ -332,31 +354,27 @@
     const ax = px(s.target_x_px);
     const ay = py(s.target_y_px);
 
+    overlayCtx.setLineDash([4 * ratio, 5 * ratio]);
     [[s.hold_enter_radius_px, tone("--rest")], [s.hold_exit_radius_px, tone("--sodium")]]
       .forEach(([raio, cor]) => {
         if (!raio) return;
-        overlayCtx.strokeStyle = cor;
-        overlayCtx.globalAlpha = 0.65;
-        overlayCtx.lineWidth = 1.1 * ratio;
-        overlayCtx.setLineDash([4 * ratio, 5 * ratio]);
-        overlayCtx.beginPath();
-        overlayCtx.arc(ax, ay, raio * k, 0, Math.PI * 2);
-        overlayCtx.stroke();
+        contornado(overlayCtx, () => {
+          overlayCtx.beginPath();
+          overlayCtx.arc(ax, ay, raio * k, 0, Math.PI * 2);
+        }, cor, 1.4 * ratio, ratio);
       });
     overlayCtx.setLineDash([]);
-    overlayCtx.globalAlpha = 1;
 
     // eixos com vao, como no visor grande
-    overlayCtx.strokeStyle = "rgba(250,243,230,.45)";
-    overlayCtx.lineWidth = ratio;
     const vao = 9 * ratio;
     const bra = 13 * ratio;
-    overlayCtx.beginPath();
-    overlayCtx.moveTo(ax - vao - bra, ay); overlayCtx.lineTo(ax - vao, ay);
-    overlayCtx.moveTo(ax + vao, ay); overlayCtx.lineTo(ax + vao + bra, ay);
-    overlayCtx.moveTo(ax, ay - vao - bra); overlayCtx.lineTo(ax, ay - vao);
-    overlayCtx.moveTo(ax, ay + vao); overlayCtx.lineTo(ax, ay + vao + bra);
-    overlayCtx.stroke();
+    contornado(overlayCtx, () => {
+      overlayCtx.beginPath();
+      overlayCtx.moveTo(ax - vao - bra, ay); overlayCtx.lineTo(ax - vao, ay);
+      overlayCtx.moveTo(ax + vao, ay); overlayCtx.lineTo(ax + vao + bra, ay);
+      overlayCtx.moveTo(ax, ay - vao - bra); overlayCtx.lineTo(ax, ay - vao);
+      overlayCtx.moveTo(ax, ay + vao); overlayCtx.lineTo(ax, ay + vao + bra);
+    }, tone("--reticula"), 1.4 * ratio, ratio);
 
     if (s.has_signal && s.x_cm_px != null && s.y_cm_px != null) {
       // Fora do recorte o marcador encosta na borda, em vez de sumir: assim a
@@ -366,14 +384,16 @@
       const dentro = bx === px(s.x_cm_px) && by === py(s.y_cm_px);
       const cor = s.hold_active ? tone("--rest") : tone("--sodium");
       overlayCtx.globalAlpha = dentro ? 1 : 0.5;
-      overlayCtx.strokeStyle = cor;
-      overlayCtx.lineWidth = 1.6 * ratio;
+      contornado(overlayCtx, () => {
+        overlayCtx.beginPath();
+        overlayCtx.arc(bx, by, 9 * ratio, 0, Math.PI * 2);
+      }, cor, 1.8 * ratio, ratio);
+      overlayCtx.strokeStyle = "rgba(0,0,0,.85)";
+      overlayCtx.lineWidth = 2.5 * ratio;
       overlayCtx.beginPath();
-      overlayCtx.arc(bx, by, 9 * ratio, 0, Math.PI * 2);
+      overlayCtx.arc(bx, by, 2.6 * ratio, 0, Math.PI * 2);
       overlayCtx.stroke();
       overlayCtx.fillStyle = cor;
-      overlayCtx.beginPath();
-      overlayCtx.arc(bx, by, 2.4 * ratio, 0, Math.PI * 2);
       overlayCtx.fill();
       overlayCtx.globalAlpha = 1;
     }
@@ -437,6 +457,40 @@
     trendCtx.fillText("−120 s", pad.left, height - 4 * ratio);
     const fim = "agora";
     trendCtx.fillText(fim, width - pad.right - trendCtx.measureText(fim).width, height - 4 * ratio);
+
+    // Cursor de tempo: o traco vertical que diz QUAL instante o clique vai
+    // buscar. Sem ele o clique e um chute, porque o eixo so tem as duas pontas
+    // rotuladas. O da revisao fica preso onde o frame foi buscado.
+    const marca = (xCss, cor, rotulo) => {
+      const x = pad.left + Math.max(0, Math.min(1, (xCss * ratio - pad.left) / plotW)) * plotW;
+      trendCtx.strokeStyle = cor;
+      trendCtx.lineWidth = ratio;
+      trendCtx.beginPath();
+      trendCtx.moveTo(x, pad.top);
+      trendCtx.lineTo(x, pad.top + plotH);
+      trendCtx.stroke();
+      if (!rotulo) return;
+      trendCtx.fillStyle = cor;
+      const largura = trendCtx.measureText(rotulo).width;
+      const alvo = Math.min(Math.max(x - largura / 2, pad.left), width - pad.right - largura);
+      trendCtx.fillText(rotulo, alvo, pad.top + 9 * ratio);
+    };
+    if (revendoUnixS !== null) {
+      const fracao = 1 - (agora - revendoUnixS * 1000) / HISTORY_MS;
+      marca(
+        (pad.left + Math.max(0, Math.min(1, fracao)) * plotW) / ratio,
+        tone("--sodium"),
+        new Date(revendoUnixS * 1000).toTimeString().slice(0, 8),
+      );
+    } else if (cursorXCss !== null) {
+      const fracao = Math.max(0, Math.min(1, (cursorXCss * ratio - pad.left) / plotW));
+      const quando = agora - (1 - fracao) * HISTORY_MS;
+      marca(
+        cursorXCss,
+        "rgba(159,216,255,.75)",
+        "−" + Math.round((agora - quando) / 1000) + " s",
+      );
+    }
   }
 
   // ── ciclo ─────────────────────────────────────────────────────────
@@ -490,6 +544,7 @@
   // bytes num anel de 120 s custa memoria e nada de CPU: e a diferenca entre
   // "perdeu sinal as 19:42" e ver o que estava no campo as 19:42.
   let revendoUnixS = null;
+  let cursorXCss = null;
 
   function instanteDoClique(evento) {
     const canvas = ui["trend-canvas"];
@@ -518,18 +573,33 @@
     const hhmmss = quando.toTimeString().slice(0, 8);
     const atras = Math.round((Date.now() - alvoMs) / 1000);
     ui["review-banner"].hidden = false;
+    // O canto "ao vivo" sai de cena enquanto o visor esta congelado: os dois
+    // juntos, sobrepostos, eram a propria duvida do operador.
+    ui["live-corner"].hidden = true;
     ui["review-when"].textContent = `${hhmmss} · ${atras} s atrás`;
+    desenharGrafico();
   }
 
   function voltarAoVivo() {
     revendoUnixS = null;
     ui["review-banner"].hidden = true;
+    ui["live-corner"].hidden = false;
+    desenharGrafico();
     atualizarFrame();
   }
 
   ui["trend-canvas"].addEventListener("click", (evento) => {
     const alvo = instanteDoClique(evento);
     if (alvo !== null) reverEm(alvo);
+  });
+  ui["trend-canvas"].addEventListener("mousemove", (evento) => {
+    const caixa = ui["trend-canvas"].getBoundingClientRect();
+    cursorXCss = evento.clientX - caixa.left;
+    desenharGrafico();
+  });
+  ui["trend-canvas"].addEventListener("mouseleave", () => {
+    cursorXCss = null;
+    desenharGrafico();
   });
   ui["review-back"].addEventListener("click", voltarAoVivo);
   document.addEventListener("keydown", (evento) => {
