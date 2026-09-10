@@ -59,6 +59,26 @@ HOLD_ENTER_RADIUS_PX = 1.0
 # proprio equipamento e 8820 px/grau, 1 px de correcao e um pulso de 108,8 ms;
 # o pulso minimo de 22 ms vale 0,20 px. O limiar de 0,6 px fica em 2,5x a
 # incerteza da estimativa e em 3x o menor pulso possivel.
+# Regime de controle usado quando o A/B esta desligado, ou seja, em operacao
+# normal. Medido no A/B de tres bracos de 2026-09-10 (7 blocos por braco,
+# 3h21 de madrugada), com os 2 primeiros minutos de cada bloco descartados:
+#
+#                        atual   lento_alto   lento_baixo
+#   erro mediano (px)    1,073      0,989        0,939
+#   erro p90 (px)        2,132      1,843        1,816
+#   DC mediano/bloco     0,647      0,443        0,347
+#   correcoes/h           46,3       51,4         37,2
+#   tempo morto          3,15%      3,49%        2,54%
+#
+# lento_ganho_baixo ganha em TODAS, inclusive corrigindo menos. E a vantagem
+# cresce onde importa: com o ceu calmo os dois empatam (+2%), com turbulencia
+# forte ele ganha 23%. Coerente com a fisica, porque a janela de 120 s promedia
+# turbulencia e a vantagem dela cresce quando ha mais turbulencia para promediar.
+#
+# Ressalvas do dado: 7 blocos por braco, so de madrugada, sem cobrir o
+# amanhecer. Trocar de volta e mudar esta linha.
+CONTROL_REGIME_PADRAO = "lento_ganho_baixo"
+
 CONTROL_AB_TEST_ENABLED = _chave("QKD_AB_CONTROLE", False)
 CONTROL_AB_BLOCK_SECONDS = 600.0
 CONTROL_SLOW_WINDOW_SECONDS = 120.0
@@ -405,6 +425,7 @@ if not (
     and 0 < CONTROL_SLOW_WARMUP_SECONDS <= CONTROL_SLOW_WINDOW_SECONDS
     and 0 < CONTROL_SLOW_FRACTION <= 1
     and 0 < CONTROL_SLOW_FRACTION_BAIXA < CONTROL_SLOW_FRACTION
+    and CONTROL_REGIME_PADRAO in ("atual", "lento_ganho_alto", "lento_ganho_baixo")
     and CONTROL_AB_BLOCK_SECONDS >= 2 * CONTROL_SLOW_WINDOW_SECONDS
     and 0 < AUTO_EXPOSURE_LOSS_SEARCH_BACKGROUND_LIMIT
     <= AUTO_EXPOSURE_BACKGROUND_INCREASE_LIMIT

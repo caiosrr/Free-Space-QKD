@@ -706,3 +706,70 @@ class ResumoParcialTests(unittest.TestCase):
             tracker.SUMMARY_PARTIAL_SECONDS, 600.0,
             "periodo longo demais devolve pouco numa morte subita",
         )
+
+
+class RegimePadraoTests(unittest.TestCase):
+    """O regime padrao passou a ser lento_ganho_baixo.
+
+    Medido no A/B de tres bracos de 2026-09-10 (7 blocos por braco, 3h21): erro
+    mediano 0,939 contra 1,073 px, DC mediano por bloco 0,347 contra 0,647, e
+    ainda MENOS correcoes (37,2/h contra 46,3). A vantagem cresce com a
+    turbulencia: empate com ceu calmo, 23% melhor com turbulencia forte.
+    """
+
+    def cfg(self):
+        from modulos.configuracoes import tracker
+
+        return tracker
+
+    def test_o_padrao_e_o_braco_vencedor(self):
+        self.assertEqual(self.cfg().CONTROL_REGIME_PADRAO, "lento_ganho_baixo")
+
+    def test_o_nome_do_padrao_e_valido(self):
+        """Um nome errado cairia silenciosamente no regime antigo."""
+        self.assertIn(
+            self.cfg().CONTROL_REGIME_PADRAO,
+            ("atual", "lento_ganho_alto", "lento_ganho_baixo"),
+        )
+
+    def test_os_freios_nao_encolhem_com_a_zona(self):
+        """A porta ficou muito mais apertada; freio e autoteste NAO podem seguir.
+
+        Os freios so podem agir acima de 2x TOLERANCIA_PX, que sai de
+        HOLD_ENTER_RADIUS_PX. Se acompanhassem o novo limiar de soltura
+        (0,25 px), agiriam a partir de 0,5 px -- abaixo do erro tipico de
+        turbulencia -- e o tracker viveria freando.
+
+        O outro lado tambem foi verificado, na telemetria de 2026-09-10: no
+        regime novo o raio de controle ainda passa de 2,0 px em 1,2% do tempo,
+        com maximo de 6,2 px, entao o freio NAO virou codigo morto. Ele age
+        menos, que e o desejado, sem deixar de existir.
+        """
+        from modulos.controle.tracker_loop import TOLERANCIA_PX
+
+        t = self.cfg()
+        self.assertEqual(TOLERANCIA_PX, t.HOLD_ENTER_RADIUS_PX)
+        self.assertGreaterEqual(
+            2.0 * TOLERANCIA_PX, 3.0 * t.CONTROL_SLOW_TRIGGER_PX,
+            "o limiar do freio ficou perto demais do limiar de correcao: ele "
+            "dispararia durante correcoes normais",
+        )
+
+    def test_o_autoteste_mantem_o_criterio_antigo(self):
+        """"Voltou ao alvo?" nao e a mesma pergunta que "vale corrigir?"."""
+        import inspect
+
+        from modulos.controle import tracker_autoteste
+
+        fonte = inspect.getsource(tracker_autoteste)
+        self.assertIn("HOLD_ENTER_RADIUS_PX", fonte)
+        self.assertNotIn("CONTROL_SLOW_RELEASE_PX", fonte)
+
+    def test_o_ab_continua_podendo_comparar_com_o_antigo(self):
+        """Trocar o padrao nao pode tornar o regime antigo inalcancavel."""
+        import inspect
+
+        from modulos.controle import tracker_loop
+
+        fonte = inspect.getsource(tracker_loop.executar_loop_controle)
+        self.assertIn('"atual", "lento_ganho_alto", "lento_ganho_baixo"', fonte)

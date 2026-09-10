@@ -17,6 +17,7 @@ from modulos.configuracoes.tracker import (
     FAST_ERROR_WINDOW_SECONDS,
     CONTROL_AB_BLOCK_SECONDS,
     CONTROL_AB_TEST_ENABLED,
+    CONTROL_REGIME_PADRAO,
     CONTROL_SLOW_FRACTION,
     CONTROL_SLOW_FRACTION_BAIXA,
     CONTROL_SLOW_RELEASE_PX,
@@ -205,7 +206,6 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
         warmup_s=CONTROL_SLOW_WARMUP_SECONDS,
     )
     regime_lento = False
-    braco = 0
     nome_regime = "atual"
     # Movimento aplicado no pulso em curso, para descontar da janela longa
     # quando ele terminar. Integrado do comando de verdade, nao do pedido.
@@ -288,6 +288,38 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
         directional_error.reset()
         correction_gate.reset()
 
+    def aplicar_regime(nome: str) -> None:
+        """Aponta a porta de correcao e o ganho do pulso para um regime.
+
+        Só o que a PORTA usa muda aqui. HOLD_ENTER/HOLD_EXIT continuam valendo
+        para os freios (2x TOLERANCIA_PX) e para o autoteste: encolher aqueles
+        junto faria o freio disparar com turbulencia normal.
+
+        O ganho que vale e o do pulse_cycle, que calcula a duracao do pulso; o
+        FinePulseAxis so entra como proposta, para conferir o sinal.
+        """
+        nonlocal regime_lento, nome_regime
+        nome_regime = nome
+        regime_lento = nome != "atual"
+        if regime_lento:
+            fracao = (
+                CONTROL_SLOW_FRACTION if nome == "lento_ganho_alto"
+                else CONTROL_SLOW_FRACTION_BAIXA
+            )
+            correction_gate.enter_radius_px = CONTROL_SLOW_RELEASE_PX
+            correction_gate.exit_radius_px = CONTROL_SLOW_TRIGGER_PX
+        else:
+            fracao = FINE_PULSE_CORRECTION_FRACTION
+            correction_gate.enter_radius_px = HOLD_ENTER_RADIUS_PX
+            correction_gate.exit_radius_px = HOLD_EXIT_RADIUS_PX
+        pulse_cycle.fraction = fracao
+        fine_az.correction_fraction = fracao
+        fine_alt.correction_fraction = fracao
+        correction_gate.reset()
+
+    aplicar_regime(CONTROL_REGIME_PADRAO)
+    print(f"Regime de controle: {nome_regime}")
+
     with ThreadPoolExecutor(max_workers=2) as executor:
         try:
             while True:
@@ -299,34 +331,11 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     )
                     if bloco_c != ab_bloco_controle:
                         ab_bloco_controle = bloco_c
-                        braco = bloco_c % 3
-                        regime_lento = braco != 0
-                        # O ganho que vale e o do pulse_cycle: e ele que
-                        # calcula a duracao do pulso. O FinePulseAxis so entra
-                        # como proposta, para conferir o sinal, entao mexer so
-                        # nele deixaria o regime novo com o ganho de sempre.
-                        if regime_lento:
-                            fracao = (
-                                CONTROL_SLOW_FRACTION if braco == 1
-                                else CONTROL_SLOW_FRACTION_BAIXA
-                            )
-                            nome_regime = (
-                                "lento_ganho_alto" if braco == 1
-                                else "lento_ganho_baixo"
-                            )
-                            correction_gate.enter_radius_px = CONTROL_SLOW_RELEASE_PX
-                            correction_gate.exit_radius_px = CONTROL_SLOW_TRIGGER_PX
-                            pulse_cycle.fraction = fracao
-                            fine_az.correction_fraction = fracao
-                            fine_alt.correction_fraction = fracao
-                        else:
-                            nome_regime = "atual"
-                            correction_gate.enter_radius_px = HOLD_ENTER_RADIUS_PX
-                            correction_gate.exit_radius_px = HOLD_EXIT_RADIUS_PX
-                            pulse_cycle.fraction = FINE_PULSE_CORRECTION_FRACTION
-                            fine_az.correction_fraction = FINE_PULSE_CORRECTION_FRACTION
-                            fine_alt.correction_fraction = FINE_PULSE_CORRECTION_FRACTION
-                        correction_gate.reset()
+                        aplicar_regime(
+                            ("atual", "lento_ganho_alto", "lento_ganho_baixo")[
+                                bloco_c % 3
+                            ]
+                        )
                         print()
                         print(f"A/B de controle: regime {nome_regime}")
                 if HOLD_RADIUS_AB_TEST_ENABLED:
