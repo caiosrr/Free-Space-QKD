@@ -16,7 +16,8 @@
     "link-distance", "session-time", "system-state",
     "viewer-meta", "live-frame", "beacon-overlay", "camera-label",
     "measurement-rate", "coordinates", "sigma", "inset-caption",
-    "review-banner", "review-when", "review-back", "live-corner",
+    "review-banner", "review-when", "review-back", "review-toggle",
+    "live-corner",
     "radial-error", "radial-metric",
     "scale", "tick-rest", "tick-wake", "scale-bar",
     "error-x", "error-y", "sigma-inline", "state-detail",
@@ -543,7 +544,14 @@
   // painel ja codifica um JPEG por quadro exibido, entao guardar os mesmos
   // bytes num anel de 120 s custa memoria e nada de CPU: e a diferenca entre
   // "perdeu sinal as 19:42" e ver o que estava no campo as 19:42.
-  let revendoUnixS = null;
+  // Reproducao do passado. O anel guarda 120 s a 4 Hz, entao clicar no grafico
+  // nao precisa parar num quadro: da para RODAR dali para frente, na velocidade
+  // real, e ver o que aconteceu. Congelar num instante so mostra o resultado;
+  // ver a sequencia mostra o processo, que e o que responde "o que causou
+  // aquilo?". Ao alcancar o presente, volta sozinho ao vivo.
+  let revendoUnixS = null;      // posicao atual da reproducao, em unix s
+  let reproduzindo = false;
+  let ultimoAvancoMs = 0;
   let cursorXCss = null;
 
   function instanteDoClique(evento) {
@@ -560,28 +568,61 @@
     return Date.now() - (1 - fracao) * HISTORY_MS;
   }
 
-  function reverEm(alvoMs) {
+  function buscarQuadroDoPassado(unixS) {
     const imagem = new Image();
     imagem.onload = () => {
       ui["live-frame"].src = imagem.src;
       if (latest) desenharVisor(latest);
     };
     imagem.onerror = () => voltarAoVivo();
-    imagem.src = `/api/historico.jpg?t=${(alvoMs / 1000).toFixed(3)}`;
+    imagem.src = `/api/historico.jpg?t=${unixS.toFixed(3)}`;
+  }
+
+  function atualizarFaixaRevisao() {
+    if (revendoUnixS === null) return;
+    const quando = new Date(revendoUnixS * 1000);
+    const atras = Math.max(0, Math.round(Date.now() / 1000 - revendoUnixS));
+    ui["review-when"].textContent =
+      `${quando.toTimeString().slice(0, 8)} · ${atras} s atrás`;
+    ui["review-toggle"].textContent = reproduzindo ? "pausar" : "continuar";
+  }
+
+  function reverEm(alvoMs) {
     revendoUnixS = alvoMs / 1000;
-    const quando = new Date(alvoMs);
-    const hhmmss = quando.toTimeString().slice(0, 8);
-    const atras = Math.round((Date.now() - alvoMs) / 1000);
+    reproduzindo = true;
+    ultimoAvancoMs = performance.now();
+    buscarQuadroDoPassado(revendoUnixS);
     ui["review-banner"].hidden = false;
-    // O canto "ao vivo" sai de cena enquanto o visor esta congelado: os dois
+    // O canto "ao vivo" sai de cena enquanto o visor mostra o passado: os dois
     // juntos, sobrepostos, eram a propria duvida do operador.
     ui["live-corner"].hidden = true;
-    ui["review-when"].textContent = `${hhmmss} · ${atras} s atrás`;
+    atualizarFaixaRevisao();
+    desenharGrafico();
+  }
+
+  // Avanca a reproducao no tempo de parede, para a sequencia sair na velocidade
+  // em que de fato aconteceu. Chamado mais rapido que os 4 Hz do anel: pedir o
+  // quadro mais proximo repetido nao custa nada e evita engasgo no ritmo.
+  function avancarReproducao() {
+    if (revendoUnixS === null) return;
+    const agoraMs = performance.now();
+    const passou = (agoraMs - ultimoAvancoMs) / 1000;
+    ultimoAvancoMs = agoraMs;
+    if (!reproduzindo) return;
+    revendoUnixS += passou;
+    if (revendoUnixS >= Date.now() / 1000 - 1.0) {
+      // Alcancou o presente: nao ha mais passado para mostrar.
+      voltarAoVivo();
+      return;
+    }
+    buscarQuadroDoPassado(revendoUnixS);
+    atualizarFaixaRevisao();
     desenharGrafico();
   }
 
   function voltarAoVivo() {
     revendoUnixS = null;
+    reproduzindo = false;
     ui["review-banner"].hidden = true;
     ui["live-corner"].hidden = false;
     desenharGrafico();
@@ -602,10 +643,16 @@
     desenharGrafico();
   });
   ui["review-back"].addEventListener("click", voltarAoVivo);
+  ui["review-toggle"].addEventListener("click", () => {
+    reproduzindo = !reproduzindo;
+    ultimoAvancoMs = performance.now();
+    atualizarFaixaRevisao();
+  });
   document.addEventListener("keydown", (evento) => {
     if (evento.key === "Escape") voltarAoVivo();
   });
 
+  setInterval(avancarReproducao, 200);
   setInterval(poll, 200);
   setInterval(atualizarFrame, 1000);
   window.addEventListener("resize", () => { if (latest) desenharVisor(latest); desenharGrafico(); });

@@ -166,6 +166,7 @@ main {
   font-size: .9rem;
 }
 .review b { color: var(--sodium); }
+.review button + button { margin-left: 0; }
 .review button {
   margin-left: auto;
   padding: 3px 10px;

@@ -554,3 +554,87 @@ class ChavesDeExperimentoTests(unittest.TestCase):
         t = self.recarregar(QKD_AB_CONTROLE="1", QKD_AB_ZONA_REPOUSO="0")
         self.assertTrue(t.CONTROL_AB_TEST_ENABLED)
         self.assertFalse(t.HOLD_RADIUS_AB_TEST_ENABLED)
+
+
+class ReproducaoDoPassadoTests(unittest.TestCase):
+    """Clicar no grafico roda o passado dali para frente, nao congela um quadro.
+
+    Congelar num instante mostra o resultado; ver a sequencia mostra o processo,
+    que e o que responde "o que causou aquilo?". O servidor precisa devolver
+    quadros DISTINTOS e em ordem para uma varredura de instantes.
+    """
+
+    def painel_com_historia(self, quantidade=10, passo=0.3):
+        import time
+
+        import numpy as np
+
+        from modulos.controle.tracker_dashboard import TrackerDashboard
+
+        painel = TrackerDashboard(frame_hz=4.0, open_browser=False)
+        self.addCleanup(painel.close)
+        marcas = []
+        for i in range(quantidade):
+            valor = 20 + i * 20
+            painel.update(np.full((64, 64), valor, dtype=np.uint8), {"passo": i})
+            marcas.append((time.time(), valor))
+            time.sleep(passo)
+        return painel, marcas
+
+    def ler(self, painel, unix_s):
+        import urllib.request
+
+        import cv2
+        import numpy as np
+
+        resposta = urllib.request.urlopen(
+            f"{painel.url}api/historico.jpg?t={unix_s:.3f}"
+        )
+        dados = resposta.read()
+        img = cv2.imdecode(np.frombuffer(dados, np.uint8), cv2.IMREAD_GRAYSCALE)
+        return float(resposta.headers["X-Frame-Unix-S"]), int(np.median(img))
+
+    def test_uma_varredura_devolve_quadros_em_ordem(self):
+        painel, marcas = self.painel_com_historia()
+        inicio, fim = marcas[0][0], marcas[-1][0]
+        vistos = []
+        passos = 24
+        for k in range(passos):
+            t = inicio + (fim - inicio) * k / (passos - 1)
+            vistos.append(self.ler(painel, t))
+        instantes = [v[0] for v in vistos]
+        self.assertEqual(
+            instantes, sorted(instantes),
+            "a reproducao andaria para tras: os quadros nao vem em ordem",
+        )
+        valores = [v[1] for v in vistos]
+        self.assertEqual(
+            valores, sorted(valores),
+            "os quadros nao acompanham a linha do tempo",
+        )
+        distintos = len(set(valores))
+        self.assertGreaterEqual(
+            distintos, len(marcas) - 2,
+            f"a varredura viu so {distintos} quadros distintos de {len(marcas)}: "
+            "a reproducao ficaria travada no mesmo frame",
+        )
+
+    def test_pedir_o_presente_entrega_o_quadro_mais_novo(self):
+        """E o que encerra a reproducao e devolve o painel ao vivo."""
+        import time
+
+        painel, marcas = self.painel_com_historia(quantidade=6)
+        _, valor = self.ler(painel, time.time())
+        self.assertEqual(valor, marcas[-1][1])
+
+    def test_o_botao_de_pausa_existe_no_painel(self):
+        from pathlib import Path
+
+        from modulos.controle import tracker_dashboard
+
+        html = (Path(tracker_dashboard.ASSET_DIR) / "index.html").read_text(
+            encoding="utf-8"
+        )
+        js = (Path(tracker_dashboard.ASSET_DIR) / "app.js").read_text(encoding="utf-8")
+        self.assertIn('id="review-toggle"', html)
+        self.assertIn("avancarReproducao", js)
