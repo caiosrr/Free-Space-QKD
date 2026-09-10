@@ -706,3 +706,76 @@ discordam mais de 10%, dizendo a focal efetiva implicada.
 
 Vale notar o que isso implica sobre as sessões: se a calibração estiver certa, o
 erro mediano de 1,10 px equivale a **0,42 cm** no CBPF, não 2,4 cm.
+
+## A/B de três braços — sessão 2026-09-10 00:23–03:44 (3h21 de 12 h pedidas)
+
+Primeira sessão com a janela longa **deslocada** em vez de descartada, e com três
+braços para separar o efeito do ganho.
+
+### A cegueira acabou
+
+| tempo em FORMANDO REFERENCIA LENTA | 09/09 | 10/09 |
+|---|---|---|
+| regime lento | **77,2%** | **5,2% / 5,4%** |
+
+Era o defeito que arruinou o A/B anterior. O deslocamento resolveu.
+
+### Resultado agregado (7 blocos por braço, 2 min de transição descartados)
+
+| | atual | lento_ganho_alto | lento_ganho_baixo |
+|---|---|---|---|
+| erro mediano (px) | 1,073 | 0,989 | **0,939** |
+| erro médio (px) | 1,199 | 1,057 | **1,041** |
+| erro p90 (px) | 2,132 | 1,843 | **1,816** |
+| DC mediano/bloco (px) | 0,647 | 0,443 | **0,347** |
+| correções/h | 46,3 | 51,4 | **37,2** |
+| tempo morto | 3,15% | 3,49% | **2,54%** |
+
+`lento_ganho_baixo` ganha em **todas** as métricas: menos erro, muito menos
+desvio sistemático (−46% na mediana por bloco), **menos** correções e menos
+tempo morto.
+
+**Ganho baixo bate ganho alto.** Isso contradiz a hipótese que motivou o
+experimento — eu argumentei que a fração de 0,35 era tímida demais porque a
+correção ficava devendo em 96% dos pulsos. Com a estimativa limpa, corrigir
+pouco e com frequência bate corrigir muito de uma vez. Provável razão: com ganho
+alto a estimativa cai para 0,1× e a porta solta, obrigando a janela a reconstruir
+antes do próximo disparo; com ganho baixo ela cai para 0,65×, fica acima do
+limiar de soltura e o controlador continua ajustando suavemente.
+
+### O achado que vale mais que o agregado
+
+Comparando ciclo a ciclo, a vantagem depende da **turbulência**:
+
+| | atual | lento_ganho_baixo | diferença |
+|---|---|---|---|
+| turbulência baixa (< 0,305 px) | 0,869 | 0,885 | **+2%** |
+| turbulência alta (≥ 0,305 px) | 1,319 | 1,009 | **−23%** |
+
+Com o céu calmo os dois empatam; com turbulência forte o regime lento ganha 23%.
+Faz sentido físico direto: a janela de 120 s promedia turbulência, então a
+vantagem dela cresce exatamente quando há mais turbulência para promediar. O
+regime atual dispara sobre uma janela de 8 s que a turbulência corrompe, e
+persegue ruído justamente quando há mais ruído.
+
+Isso é mais acionável que o número agregado: **o regime lento não é melhor em
+absoluto, é melhor quando as condições pioram** — que é quando importa.
+
+### Ressalvas
+
+- 7 blocos por braço. O padrão com a turbulência é coerente e monotônico, mas
+  as vitórias por ciclo (4/7 para o lento_baixo) não são fortes isoladamente.
+- Sessão **só de madrugada** (00:23–03:44). Não cobriu o amanhecer, que é o
+  regime de maior variação de fundo e onde o comportamento pode ser outro.
+- Falta repetir com o céu ruim de verdade.
+
+### Por que a sessão morreu às 03:44
+
+**Não foi o tracker.** Não existe `resumo.json`, que é escrito num bloco
+`finally` e sobrevive a Ctrl+C e a exceções — a ausência dele significa que o
+processo foi morto sem chance de encerrar. E a telemetria mostra o tracker em
+plena forma na última linha: centralizado, erro de 0,2–0,5 px, CNR 16, sem
+eventos, e **zero buracos** na gravação até o corte.
+
+Causa externa, portanto: reinício do Windows por atualização, logoff, suspensão
+ou queda de energia. 03:44 é horário clássico de manutenção automática.
