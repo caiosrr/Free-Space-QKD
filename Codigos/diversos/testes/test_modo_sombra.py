@@ -496,3 +496,61 @@ class DeslocamentoDaJanelaLongaTests(unittest.TestCase):
             depois.radius_px, T.CONTROL_SLOW_RELEASE_PX,
             "apos a correcao a porta precisa soltar, senao vira catraca",
         )
+
+
+class ChavesDeExperimentoTests(unittest.TestCase):
+    """As chaves de experimento saem do ambiente, com o arquivo de padrao.
+
+    Editar o arquivo versionado na maquina da bancada para ligar um teste faz
+    todo `git pull` conflitar -- aconteceu com camera_ids.py e de novo com
+    tracker.py, no meio de uma noite de medicao.
+    """
+
+    def recarregar(self, **ambiente):
+        import importlib
+        import os
+
+        from modulos.configuracoes import tracker
+
+        antigos = {k: os.environ.get(k) for k in ambiente}
+        os.environ.update({k: v for k, v in ambiente.items() if v is not None})
+        for k, v in ambiente.items():
+            if v is None:
+                os.environ.pop(k, None)
+
+        def restaurar():
+            for k, v in antigos.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            importlib.reload(tracker)
+
+        self.addCleanup(restaurar)
+        return importlib.reload(tracker)
+
+    def test_padrao_e_desligado(self):
+        t = self.recarregar(QKD_AB_CONTROLE=None, QKD_AB_ZONA_REPOUSO=None)
+        self.assertFalse(t.CONTROL_AB_TEST_ENABLED)
+        self.assertFalse(t.HOLD_RADIUS_AB_TEST_ENABLED)
+
+    def test_o_ambiente_liga_sem_tocar_no_arquivo(self):
+        t = self.recarregar(QKD_AB_CONTROLE="1")
+        self.assertTrue(t.CONTROL_AB_TEST_ENABLED)
+
+    def test_aceita_as_formas_usuais_e_recusa_o_resto(self):
+        for ligado in ("1", "true", "sim", "on", "YES"):
+            self.assertTrue(
+                self.recarregar(QKD_AB_CONTROLE=ligado).CONTROL_AB_TEST_ENABLED,
+                f"{ligado!r} deveria ligar",
+            )
+        for desligado in ("0", "false", "nao", "", "talvez"):
+            self.assertFalse(
+                self.recarregar(QKD_AB_CONTROLE=desligado).CONTROL_AB_TEST_ENABLED,
+                f"{desligado!r} nao deveria ligar",
+            )
+
+    def test_as_duas_chaves_sao_independentes(self):
+        t = self.recarregar(QKD_AB_CONTROLE="1", QKD_AB_ZONA_REPOUSO="0")
+        self.assertTrue(t.CONTROL_AB_TEST_ENABLED)
+        self.assertFalse(t.HOLD_RADIUS_AB_TEST_ENABLED)

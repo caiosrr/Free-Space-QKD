@@ -3,7 +3,23 @@
 Os valores deste arquivo sao deliberadamente conservadores para sessoes longas.
 Camera, ganho e exposicao ficam em ``configuracoes/camera_asi.py`` ou
 ``configuracoes/camera_ids.py``. Os drivers ficam em ``controle/cameras``.
+
+As chaves de experimento saem do AMBIENTE, com o valor daqui de padrao. Editar
+este arquivo na maquina da bancada para ligar um teste versiona uma escolha
+local e faz todo ``git pull`` conflitar -- ja aconteceu duas vezes. Com a
+variavel de ambiente a arvore fica limpa e o experimento se liga na linha de
+comando, sem nada para desfazer depois.
 """
+
+import os
+
+
+def _chave(nome: str, padrao: bool) -> bool:
+    """Le uma chave de experimento do ambiente, caindo no padrao do arquivo."""
+    valor = os.environ.get(nome)
+    if valor is None:
+        return bool(padrao)
+    return valor.strip().lower() in {"1", "true", "sim", "on", "yes", "y", "s"}
 
 # ROI fixa ao redor da luz escolhida. Uma ROI maior facilita reencontrar um spot
 # largo sem processar o sensor inteiro. A IDS mantem seu tamanho otimizado.
@@ -43,7 +59,7 @@ HOLD_ENTER_RADIUS_PX = 1.0
 # proprio equipamento e 8820 px/grau, 1 px de correcao e um pulso de 108,8 ms;
 # o pulso minimo de 22 ms vale 0,20 px. O limiar de 0,6 px fica em 2,5x a
 # incerteza da estimativa e em 3x o menor pulso possivel.
-CONTROL_AB_TEST_ENABLED = False
+CONTROL_AB_TEST_ENABLED = _chave("QKD_AB_CONTROLE", False)
 CONTROL_AB_BLOCK_SECONDS = 600.0
 CONTROL_SLOW_WINDOW_SECONDS = 120.0
 CONTROL_SLOW_WARMUP_SECONDS = 60.0
@@ -76,7 +92,7 @@ CONTROL_SLOW_FRACTION_BAIXA = 0.35
 # passa de 0,6 px em 69% do tempo contra 43% acima de 1,0 px, entao o regime
 # apertado deve fazer ~1,6x mais correcoes e levar o tempo morto de ~5% para
 # ~8% da sessao. Desligado por padrao: mexe em controle de verdade.
-HOLD_RADIUS_AB_TEST_ENABLED = False
+HOLD_RADIUS_AB_TEST_ENABLED = _chave("QKD_AB_ZONA_REPOUSO", False)
 HOLD_RADIUS_AB_ALTERNATE_PX = 0.6
 HOLD_RADIUS_AB_BLOCK_SECONDS = 600.0
 HOLD_EXIT_RADIUS_PX = 2.0
