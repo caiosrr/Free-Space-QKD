@@ -1,16 +1,25 @@
-"""Publica o estado do PC de bancada num arquivo, para consulta remota.
+"""Publica o estado da sessao do tracker num arquivo, para consulta remota.
 
-Existe para uma pergunta simples que o AnyDesk nao responde: o PC esta livre?
-O ponto verde do AnyDesk diz apenas que a maquina esta ligada e o programa
-rodando; nao diz se ha alguem sentado nela. E conectar so para olhar da a
-impressao de estar vigiando ou disputando a maquina.
+Existe para saber de longe se a sessao ainda esta gravando, sem abrir o acesso
+remoto. Em 2026-09-10 uma sessao morreu as 03:44 e so se descobriu horas
+depois, ao chegar no PC.
 
-Este programa roda NA maquina de bancada, a cada minuto, e escreve um arquivo
-pequeno com o que importa. Apontado para uma pasta sincronizada (Google Drive,
-OneDrive), o arquivo aparece no seu computador sem nenhum acesso remoto.
+Este programa roda NA maquina de bancada, a cada minuto, e escreve dois
+arquivos pequenos. Apontado para uma pasta sincronizada (Google Drive,
+OneDrive), eles aparecem no seu celular sem nenhum acesso remoto.
 
-Nao le tela, nao registra teclas e nao identifica o que a pessoa faz. So o
-tempo desde a ultima interacao, que e o que responde "esta livre?".
+Por padrao reporta SO o experimento: se ha telemetria sendo escrita, qual
+sessao, ha quanto tempo. Nada sobre pessoas.
+
+``--incluir-ociosidade`` acrescenta o tempo desde o ultimo teclado ou mouse,
+util para saber se a maquina esta livre. Esta DESLIGADO por padrao de
+proposito: numa maquina compartilhada isso e informacao sobre a presenca de
+colegas, e publicar sem que eles saibam nao e razoavel. Se for usar, avise o
+pessoal do laboratorio primeiro. A frase e simples e ninguem se opoe: "deixei
+um script que publica se o PC esta livre e se meu experimento esta rodando,
+para eu nao precisar ficar entrando pelo AnyDesk".
+
+Em nenhum modo ele le tela, registra teclas ou identifica o que alguem faz.
 
 Uso:
 
@@ -28,7 +37,6 @@ import json
 import os
 import socket
 import subprocess
-import sys
 from ctypes import wintypes
 from datetime import datetime, timezone
 from pathlib import Path
@@ -95,12 +103,14 @@ def sessao_do_tracker() -> dict:
     }
 
 
-def montar() -> dict:
-    ocioso = segundos_ocioso()
+def montar(incluir_ociosidade: bool) -> dict:
+    ocioso = segundos_ocioso() if incluir_ociosidade else None
     ativos = processos()
     tracker = sessao_do_tracker()
     if tracker["gravando"]:
-        veredito = "OCUPADO: sessao do tracker gravando"
+        veredito = "TRACKER GRAVANDO"
+    elif not incluir_ociosidade:
+        veredito = "tracker parado"
     elif ocioso is None:
         veredito = "INDETERMINADO: nao consegui ler o tempo de ociosidade"
     elif ocioso < 300:
@@ -109,17 +119,21 @@ def montar() -> dict:
         veredito = "PROVAVELMENTE LIVRE: sem interacao ha mais de 5 min"
     else:
         veredito = "LIVRE: sem interacao ha mais de 1 h"
-    return {
+    estado = {
         "maquina": socket.gethostname(),
-        "usuario_logado": os.environ.get("USERNAME", "?"),
         "momento": datetime.now().astimezone().isoformat(timespec="seconds"),
         "momento_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "veredito": veredito,
-        "minutos_sem_interacao": None if ocioso is None else round(ocioso / 60, 1),
-        "processos_no_ar": ativos,
-        "anydesk_no_ar": "AnyDesk.exe" in ativos,
         "tracker": tracker,
+        "python_no_ar": "python.exe" in ativos,
     }
+    if incluir_ociosidade:
+        estado["usuario_logado"] = os.environ.get("USERNAME", "?")
+        estado["minutos_sem_interacao"] = (
+            None if ocioso is None else round(ocioso / 60, 1)
+        )
+        estado["anydesk_no_ar"] = "AnyDesk.exe" in ativos
+    return estado
 
 
 def main() -> int:
@@ -128,8 +142,15 @@ def main() -> int:
         "--saida", type=Path, required=True,
         help="pasta onde gravar (aponte para uma pasta sincronizada na nuvem)",
     )
+    parser.add_argument(
+        "--incluir-ociosidade", action="store_true",
+        help=(
+            "acrescenta o tempo desde o ultimo teclado ou mouse. Numa maquina "
+            "compartilhada, avise o pessoal do laboratorio antes de ligar."
+        ),
+    )
     args = parser.parse_args()
-    estado = montar()
+    estado = montar(args.incluir_ociosidade)
     args.saida.mkdir(parents=True, exist_ok=True)
 
     # Escrita atomica: um leitor na nuvem nunca pega o arquivo pela metade.
@@ -144,11 +165,14 @@ def main() -> int:
     linhas = [
         estado["veredito"],
         "",
-        f"maquina            : {estado['maquina']} ({estado['usuario_logado']})",
+        f"maquina            : {estado['maquina']}",
         f"momento            : {estado['momento']}",
-        f"sem interacao ha   : {estado['minutos_sem_interacao']} min",
-        f"anydesk no ar      : {'sim' if estado['anydesk_no_ar'] else 'nao'}",
     ]
+    if args.incluir_ociosidade:
+        linhas += [
+            f"sem interacao ha   : {estado['minutos_sem_interacao']} min",
+            f"anydesk no ar      : {'sim' if estado['anydesk_no_ar'] else 'nao'}",
+        ]
     t = estado["tracker"]
     if t.get("gravando"):
         linhas.append(f"tracker            : GRAVANDO {t['sessao']} ({t['tamanho_mb']} MB)")
