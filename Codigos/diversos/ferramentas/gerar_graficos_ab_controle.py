@@ -134,7 +134,7 @@ def figura_metricas(dados: dict, saida: Path) -> Path:
 
 
 def figura_turbulencia(dados: dict, saida: Path) -> Path:
-    fig, ax = plt.subplots(figsize=(11.5, 6.4))
+    fig, ax = plt.subplots(figsize=(11.5, 7.4))
     for nome, rotulo, cor in REGIMES:
         d = dados[nome]
         ax.scatter(d["turb"], d["erro"], s=150, color=cor, edgecolor="white",
@@ -146,13 +146,17 @@ def figura_turbulencia(dados: dict, saida: Path) -> Path:
     for lado in ("top", "right"):
         ax.spines[lado].set_visible(False)
     ax.legend(frameon=False, loc="upper left", fontsize=12)
-    fig.suptitle("A vantagem do regime lento cresce com a turbulência",
+    fig.suptitle("O regime anterior degrada mais quando a turbulência aumenta",
                  x=0.012, y=0.975, ha="left", fontsize=20, fontweight="bold", color=TINTA)
-    fig.text(0.012, 0.928,
-             "cada ponto é um bloco de 10 min · a janela de 120 s promedia "
-             "turbulência, então rende mais quando há mais o que promediar",
-             ha="left", fontsize=12.5, color=TINTA_2)
-    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.90])
+    fig.text(0.012, 0.905,
+             "cada ponto é um bloco de 10 min · com o céu calmo os três "
+             "empatam; à direita o regime anterior se separa",
+             ha="left", fontsize=13, color=TINTA_2)
+    fig.text(0.012, 0.862,
+             "coerente com o mecanismo: a janela de 120 s promedia "
+             "turbulência, e rende mais quando há mais o que promediar",
+             ha="left", fontsize=12, color=TINTA_2, style="italic")
+    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.835])
     caminho = saida / "07_ab_turbulencia.png"
     fig.savefig(caminho, dpi=200, facecolor=SLIDE_DARK)
     plt.close(fig)
