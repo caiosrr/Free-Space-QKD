@@ -875,3 +875,46 @@ deriva também. O remédio seria pior que a doença.
 4. **Teste do homem-morto:** comandar `MoveAxis` lento e derrubar o cliente
    (matar o processo, não mandar zero). Se o firmware parar ao perder a
    conexão, o problema todo desaparece.
+
+### O ganho de 0,35 não é ótimo, é o melhor de dois testados
+
+Pergunta levantada em 2026-09-14: sabemos que 0,35 bateu 0,90, mas um valor
+intermediário poderia ser melhor? Dois pontos não determinam um mínimo.
+
+Medindo, para cada pulso, o raio de controle antes (janela de −6 a −0,5 s) e
+depois (+3 a +10 s), na sessão de 2026-09-10:
+
+| braço | ganho nominal | antes | depois | fração realmente removida |
+|---|---|---|---|---|
+| lento_ganho_baixo | 0,35 | 0,631 px | 0,477 px | **0,26** |
+| lento_ganho_alto | 0,90 | 0,581 px | 0,269 px | **0,53** |
+| atual (janela de 8 s) | 0,35 | 1,873 px | 1,845 px | **0,04** |
+
+#### O que a medida decide
+
+**Nenhum dos dois ultrapassa.** Sobrecorreção apareceria como fração real acima
+de 1, ou como o erro trocando de sinal. Não acontece em nenhum braço.
+
+Isso importa porque ultrapassar é o que tornaria o ganho alto ruim. Como
+ninguém ultrapassa, **o ganho alto não perdeu por instabilidade** — perdeu por
+outro motivo, ainda não identificado. E, mais útil: o intervalo entre 0,35 e
+0,90 é seguro de explorar.
+
+**A fração entregue é sempre menor que a pedida** (0,26 de 0,35; 0,53 de 0,90).
+Duas causas prováveis: a trava `min(|estimativa|, |erro de 2 s|)` encurta o
+pulso quando a turbulência do momento está menor que a estimativa, e o mount
+entrega ~95% do comandado (medido no encoder).
+
+**A linha do regime antigo é a mais reveladora:** removia 4% de um erro de
+1,87 px. É a medida mais crua de por que ele perdia.
+
+#### O que fica em aberto
+
+Não há base para afirmar que 0,35 é ótimo. A vitória sobre 0,90 foi de ~5% no
+erro mediano, com 7 blocos por braço. Um varrimento com **0,35 / 0,55 / 0,75**
+responderia, e a mecânica já está pronta: basta trocar `CONTROL_SLOW_FRACTION`
+e `CONTROL_SLOW_FRACTION_BAIXA` e ligar `QKD_AB_CONTROLE=1`.
+
+**Prioridade: abaixo da sessão do amanhecer.** A diferença entre ganhos é de
+~5%; o amanhecer é um regime inteiro nunca testado com o controle atual, e onde
+o sistema já morreu duas vezes por impasse de exposição.
