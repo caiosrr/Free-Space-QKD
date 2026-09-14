@@ -15,7 +15,8 @@ sensor precisa ficar parada num ponto escolhido, por horas, sem ninguém olhando
 
 Três coisas atrapalham:
 
-- **turbulência atmosférica** — move a imagem uns 1,3 px a cada frame, em torno
+- **turbulência atmosférica** — move a imagem ~1,3 px a cada frame, e ~0,85 px
+  depois da média de 2 s, em torno
   da posição verdadeira. É ruído: não adianta corrigir, ela volta sozinha.
 - **deriva** — o apontamento sai do lugar devagar, uns 0,1 a 0,4 px por minuto.
   É isso que precisa ser corrigido.
@@ -171,9 +172,23 @@ Roda a ~34 Hz. Não toca na câmera.
 
 ### 3.1 Estima o desvio real
 
-A média de 2 s ainda tem turbulência. Ela alimenta uma **mediana de 120 s**
-(`SlowBiasEstimator`, em `tracker_controle.py`). Com ~30 amostras independentes
-na janela, a incerteza dessa estimativa cai para ~0,24 px.
+A média de 2 s ainda tem turbulência: o desvio padrão dela é **0,85 px**,
+medido numa hora contínua da sessão de 2026-09-10. Ela alimenta uma
+**mediana de 120 s** (`SlowBiasEstimator`, em `tracker_controle.py`).
+
+A janela de 2 s é deslizante e recalculada a cada frame, então em 120 s entram
+~4300 valores. Mas quase nenhum é independente: duas médias separadas por
+0,03 s compartilham quase todos os frames. O que conta é quantas vezes a
+atmosfera trocou de configuração, e isso é dado pelo **tempo de correlação**.
+
+Medido na mesma hora: a autocorrelação cai a 1/e em **3,9 s**, e o tempo
+integral é **6,9 s**. Em 120 s cabem então ~8,7 amostras independentes, o que
+prevê uma incerteza de 0,29 px. **Medindo direto** a dispersão da mediana de
+120 s em torno de uma referência de 600 s, dá **0,247 px**.
+
+Compare com a janela antiga de 8 s: ela continha **0,6** amostra independente.
+Ou seja, não promediava nada, e a incerteza dela era o próprio ruído, 0,85 px.
+Como o gatilho era 2,0 px, o sistema disparava a 2,4 desvios do ruído.
 
 **Essa mediana é o que decide.** A média de 2 s não vai direto para a correção.
 
