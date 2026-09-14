@@ -17,3 +17,6 @@
 
 # Codigo externo mantido apenas para comparacao local.
 /Codigos/Tracker amnd/
+
+# Configuracao local do Obsidian (vault da pasta Anotacoes).
+/Anotaçoes/.obsidian/
