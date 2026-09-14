@@ -939,3 +939,82 @@ class TrackerSafetyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ParadaNoDesligamentoTests(unittest.TestCase):
+    """O Windows avisa antes de matar o processo; o Python ignora o aviso.
+
+    Em 2026-09-10 as 03:44 uma sessao foi encerrada por reinicio do Windows e o
+    `finally` do tracker nao rodou, deixando o mount sem o MoveAxis(0) de
+    encerramento. Medido no proprio equipamento: o eixo NAO para sozinho, nem
+    quando o servidor ASCOM cai -- andou 266 arcsec quando 246 eram previstos.
+    """
+
+    def test_registrar_devolve_falso_fora_do_windows_sem_quebrar(self):
+        import sys as _sys
+        from unittest import mock
+
+        from modulos.controle import desligamento_windows
+
+        with mock.patch.object(_sys, "platform", "linux"):
+            self.assertFalse(desligamento_windows.registrar(lambda: None))
+
+    def test_o_handler_e_mantido_vivo(self):
+        """Se o Python coletar o objeto, o Windows chama ponteiro invalido."""
+        import inspect
+
+        from modulos.controle import desligamento_windows
+
+        fonte = inspect.getsource(desligamento_windows)
+        self.assertIn("global _HANDLER_VIVO", fonte)
+        self.assertIn("_HANDLER_VIVO = PROTOTIPO", fonte)
+
+    def test_cobre_os_tres_eventos_de_encerramento(self):
+        from modulos.controle import desligamento_windows as d
+
+        for evento in (d.CTRL_CLOSE_EVENT, d.CTRL_LOGOFF_EVENT, d.CTRL_SHUTDOWN_EVENT):
+            self.assertIn(evento, d.NOMES)
+
+    def test_o_tracker_arma_a_parada_na_partida(self):
+        import inspect
+
+        from modulos.controle import tracker_sessao
+
+        fonte = inspect.getsource(tracker_sessao.main)
+        self.assertIn("desligamento_windows.registrar(stop_axes_safely)", fonte)
+
+
+class VigiaDoMountTests(unittest.TestCase):
+    """O vigia so pode agir depois de ver o tracker vivo.
+
+    Parar o mount sem esse cuidado atrapalharia uma calibracao ou um movimento
+    manual, que e pior que o problema que ele resolve.
+    """
+
+    def test_o_disparo_vem_depois_do_armamento(self):
+        import inspect
+        import sys
+        from pathlib import Path
+
+        raiz = Path(__file__).resolve().parents[2]
+        if str(raiz) not in sys.path:
+            sys.path.insert(0, str(raiz))
+        import programas_principais.vigia_mount as vigia
+
+        fonte = inspect.getsource(vigia.main)
+        self.assertIn("elif armado and idade > args.disparar_em", fonte)
+        self.assertIn("armado = False", fonte)
+
+    def test_os_limiares_padrao_sao_coerentes(self):
+        import inspect
+        import sys
+        from pathlib import Path
+
+        raiz = Path(__file__).resolve().parents[2]
+        if str(raiz) not in sys.path:
+            sys.path.insert(0, str(raiz))
+        import programas_principais.vigia_mount as vigia
+
+        fonte = inspect.getsource(vigia.main)
+        # disparar tem de ser maior que armar, e o programa recusa o contrario
+        self.assertIn("if args.disparar_em <= args.armar_em", fonte)

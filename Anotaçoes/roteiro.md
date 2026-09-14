@@ -918,3 +918,60 @@ e `CONTROL_SLOW_FRACTION_BAIXA` e ligar `QKD_AB_CONTROLE=1`.
 **Prioridade: abaixo da sessão do amanhecer.** A diferença entre ganhos é de
 ~5%; o amanhecer é um regime inteiro nunca testado com o controle atual, e onde
 o sistema já morreu duas vezes por impasse de exposição.
+
+### O MoveAxis não para sozinho: medido, e é da especificação
+
+Testado no equipamento em 2026-09-14, com o telescópio na UFF.
+
+**Teste 1, timeout de firmware.** Comandado o eixo na velocidade mínima, sem
+mandar mais nada: na segunda metade da janela andou 102,0 arcsec contra 101,7
+previstos. Linha reta até o fim. **Não há timeout interno.**
+
+**Teste 2, homem-morto.** Com o eixo andando, o servidor ASCOM foi **fechado**:
+o mount andou 266 arcsec quando 246 eram previstos para a janela inteira.
+**Não para nem quando a conexão cai.**
+
+Não é defeito do ZWO. A documentação do ASCOM diz que o `MoveAxis` faz o
+telescópio mover "e continuar indefinidamente", e há relato do mesmo
+comportamento em outros drivers ao puxar o cabo USB, com o agravante de o
+driver reportar `Slewing = false` enquanto o mount ainda se move.
+
+O caso de uso incomum é o nosso: sessões não assistidas de 12 h. Astrofotografia
+usa `MoveAxis` para movimentos curtos com o operador presente.
+
+#### Caminhos fechados
+
+| | por quê |
+|---|---|
+| limite de altitude do AM5 | só aceita 0 a 30°, e o enlace opera a −0,042° |
+| `PulseGuide` | `CanPulseGuide = True`, mas não move, nem com rastreio ligado |
+| `SupportedActions` | só `ShutdownIfIdle` e `BeginShutdown`, sem documentação |
+
+O `PulseGuide` provavelmente não funciona porque o mount está em
+`AlignmentMode = 0` (AltAz) e as direções são conceitos de RA/Dec. O mesmo
+explica o `CanSlewAltAz = False`.
+
+#### As três proteções, e o que cada uma cobre
+
+1. **Handler de desligamento** (`desligamento_windows.py`) — o Windows avisa os
+   processos de console antes de matá-los, mas o Python ignora o aviso. Foi por
+   isso que o `finally` não rodou às 03:44. Com o handler registrado, sobram
+   alguns segundos para mandar zero. Cobre desligamento ordenado: Windows
+   Update, logoff, shutdown pedido.
+
+2. **Vigia** (`vigia_mount.py`) — processo separado que para o mount se a
+   telemetria parar de ser escrita. Cobre o tracker morrer sozinho com o
+   Windows de pé, e reduz a janela de reação de ~90 s para segundos. Só age
+   depois de ver o tracker vivo, senão atrapalharia calibração e movimento
+   manual.
+
+3. **Tarefa de boot** (`parar_mount.py`) — cobre o PC reiniciar. Janela de 60 a
+   120 s até o Windows subir, o que dá 4 a 8 arcmin na velocidade dos
+   micropulsos.
+
+#### O risco residual
+
+Queda de energia prolongada em que o PC não volta. Aí nada em software age, e
+só um nobreak resolve. Nota do operador, correta: se faltar energia no prédio o
+mount perde alimentação junto e para, então o caso ruim é o PC reiniciar
+**sozinho** com o mount ainda alimentado.

@@ -34,6 +34,7 @@ from modulos.configuracoes.tracker import (
     roi_size_for_backend,
 )
 from modulos.controle.cameras.backend import backend_name
+from modulos.controle import desligamento_windows
 from modulos.controle.mount_ascom import (
     ensure_connected,
     ensure_not_tracking,
@@ -141,6 +142,12 @@ def main(
     try:
         # 1. Prepara mount, camera, calibracao e alvo.
         ensure_connected()
+        # O Windows avisa antes de matar o processo num desligamento, mas o
+        # Python ignora esse aviso: foi por isso que o finally daqui nao rodou
+        # no reinicio de 2026-09-10 as 03:44, deixando o mount sem o zero de
+        # encerramento. Com o handler registrado, sobra tempo para para-lo.
+        if desligamento_windows.registrar(stop_axes_safely):
+            print("Parada de emergencia armada para o desligamento do Windows.")
         ensure_unparked()
         ensure_not_tracking()
         connect_camera()
