@@ -32,11 +32,14 @@ As instrucoes ficam no final deste arquivo.
 from __future__ import annotations
 
 import argparse
+import csv
 import ctypes
 import json
 import os
 import socket
 import subprocess
+import urllib.parse
+import urllib.request
 from ctypes import wintypes
 from datetime import datetime, timezone
 from pathlib import Path
@@ -93,14 +96,72 @@ def sessao_do_tracker() -> dict:
         return {"gravando": False, "motivo": "nenhuma sessao"}
     recente = max(telemetrias, key=lambda p: p.stat().st_mtime)
     idade = (datetime.now().timestamp() - recente.stat().st_mtime)
+    gravando = idade < 90
+    extras = numeros_da_sessao(recente) if gravando else {}
     return {
+        **extras,
         # Gravando de verdade escreve a cada segundo; 90 s de folga cobre
         # qualquer engasgo sem dar falso positivo numa sessao ja encerrada.
-        "gravando": idade < 90,
+        "gravando": gravando,
         "sessao": recente.parent.name,
         "segundos_desde_a_ultima_linha": round(idade, 1),
         "tamanho_mb": round(recente.stat().st_size / 1048576, 1),
     }
+
+
+def ultimas_linhas(caminho: Path, quantas: int = 400) -> list[dict]:
+    """Le so o fim do CSV. Um arquivo de 30 MB nao cabe na memoria a cada minuto."""
+    try:
+        tamanho = caminho.stat().st_size
+        with caminho.open("rb") as f:
+            cabecalho = f.readline().decode("utf-8", "replace").strip().split(",")
+            f.seek(max(0, tamanho - 220 * quantas))
+            bruto = f.read().decode("utf-8", "replace")
+        linhas = bruto.splitlines()[1:]
+        return [
+            dict(zip(cabecalho, valores, strict=False))
+            for valores in csv.reader(linhas)
+            if len(valores) == len(cabecalho)
+        ]
+    except Exception:
+        return []
+
+
+def numeros_da_sessao(caminho: Path) -> dict:
+    """Erro, exposicao e disponibilidade nos ultimos instantes gravados."""
+    linhas = ultimas_linhas(caminho)
+    if not linhas:
+        return {}
+    def numero(chave):
+        vals = []
+        for linha in linhas:
+            try:
+                vals.append(float(linha.get(chave, "")))
+            except ValueError:
+                pass
+        return sorted(vals)[len(vals) // 2] if vals else None
+    com_sinal = sum(1 for linha in linhas if linha.get("sinal_encontrado") == "1")
+    return {
+        "horas_de_sessao": round(float(linhas[-1].get("tempo_decorrido_s", 0)) / 3600, 2),
+        "erro_mediano_px": round(numero("distancia_px") or 0.0, 2),
+        "exposicao_us": round(numero("exposicao_us") or 0.0),
+        "cnr": round(numero("cnr_autoexposicao") or 0.0, 1),
+        "percentual_com_sinal": round(100.0 * com_sinal / len(linhas), 1),
+        "estado": linhas[-1].get("estado", "?"),
+    }
+
+
+def avisar_telegram(token: str, chat: str, texto: str) -> bool:
+    """Envia uma mensagem. Falha em silencio: avisar nao pode derrubar nada."""
+    try:
+        dados = urllib.parse.urlencode({"chat_id": chat, "text": texto}).encode()
+        pedido = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage", data=dados
+        )
+        with urllib.request.urlopen(pedido, timeout=15) as r:
+            return r.status == 200
+    except Exception:
+        return False
 
 
 def montar(incluir_ociosidade: bool) -> dict:
@@ -143,6 +204,14 @@ def main() -> int:
         help="pasta onde gravar (aponte para uma pasta sincronizada na nuvem)",
     )
     parser.add_argument(
+        "--telegram-token", default=os.environ.get("QKD_TELEGRAM_TOKEN"),
+        help="token do bot; tambem lido de QKD_TELEGRAM_TOKEN",
+    )
+    parser.add_argument(
+        "--telegram-chat", default=os.environ.get("QKD_TELEGRAM_CHAT"),
+        help="id do chat; tambem lido de QKD_TELEGRAM_CHAT",
+    )
+    parser.add_argument(
         "--incluir-ociosidade", action="store_true",
         help=(
             "acrescenta o tempo desde o ultimo teclado ou mouse. Numa maquina "
@@ -176,11 +245,43 @@ def main() -> int:
     t = estado["tracker"]
     if t.get("gravando"):
         linhas.append(f"tracker            : GRAVANDO {t['sessao']} ({t['tamanho_mb']} MB)")
+        for rotulo, chave, sufixo in (
+            ("erro mediano", "erro_mediano_px", " px"),
+            ("exposicao", "exposicao_us", " us"),
+            ("CNR", "cnr", ""),
+            ("com sinal", "percentual_com_sinal", "%"),
+            ("horas de sessao", "horas_de_sessao", " h"),
+            ("estado", "estado", ""),
+        ):
+            if chave in t:
+                linhas.append(f"{rotulo:19s}: {t[chave]}{sufixo}")
     else:
         linhas.append(f"tracker            : parado ({t.get('motivo', 'ultima sessao encerrada')})")
     (args.saida / "estado_pc_uff.txt").write_text("\n".join(linhas) + "\n", encoding="utf-8")
 
     print("\n".join(linhas))
+
+    # Avisa apenas quando o estado MUDA. Uma mensagem por minuto viraria ruido
+    # e o operador deixaria de ler justamente a que importa.
+    if args.telegram_token and args.telegram_chat:
+        marcador = args.saida / ".ultimo_estado"
+        anterior = marcador.read_text(encoding="utf-8").strip() if marcador.exists() else ""
+        atual = "gravando" if t.get("gravando") else "parado"
+        if atual != anterior:
+            texto = None
+            if atual == "gravando":
+                texto = f"Tracker COMECOU a gravar\n{t['sessao']}"
+            elif anterior:
+                # Primeira execucao nao avisa: nao houve mudanca, so falta de
+                # historico, e um alarme falso na estreia mina a confianca.
+                texto = (
+                    "Tracker PAROU de gravar\n"
+                    f"ultima sessao: {t.get('sessao', '?')}\n"
+                    f"sem escrever ha {t.get('segundos_desde_a_ultima_linha', 0):.0f} s"
+                )
+            if texto and avisar_telegram(args.telegram_token, args.telegram_chat, texto):
+                print("  (aviso enviado ao Telegram)")
+            marcador.write_text(atual, encoding="utf-8")
     return 0
 
 
