@@ -13,10 +13,33 @@
     "python.analysis.extraPaths": [
         "${workspaceFolder}\\Codigos"
     ],
+    // Esconde do explorador o que e dado bruto, cache ou codigo externo.
+    // Nada e apagado: continua no disco e acessivel pelo terminal e pelos
+    // scripts de analise. Para ver tudo de novo, comente este bloco.
     "files.exclude": {
         "**/__pycache__": true,
         "**/*.pyc": true,
-        "Codigos/foco_multiplos": true
+        "**/.ruff_cache": true,
+        "Codigos/.venv": true,
+        "Codigos/foco_multiplos": true,
+        "Codigos/Tracker amnd": true,
+        "Codigos/resultados": true,
+        "Codigos/Link UFF/resultados": true
+    },
+    // A busca tambem ignora esses caminhos, senao Ctrl+Shift+F varre 200 MB
+    // de telemetria a cada consulta.
+    "search.exclude": {
+        "**/.venv": true,
+        "**/resultados": true,
+        "Arquivos": true,
+        "Codigos/Tracker amnd": true
+    },
+    // Nao vigia as pastas de dados: o watcher do VS Code fica pesado quando o
+    // tracker esta gravando telemetria a 30 linhas por segundo.
+    "files.watcherExclude": {
+        "**/.venv/**": true,
+        "**/resultados/**": true,
+        "Arquivos/**": true
     },
     "explorer.compactFolders": false,
 
