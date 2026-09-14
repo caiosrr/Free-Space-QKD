@@ -9,6 +9,13 @@ Exemplo, a partir da raiz do repositorio:
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path as _Path
+
+_CODIGOS = _Path(__file__).resolve().parents[2]
+if str(_CODIGOS) not in sys.path:
+    sys.path.insert(0, str(_CODIGOS))
+
 import argparse
 import json
 import math
@@ -92,11 +99,20 @@ def rotulo_duracao(df: pd.DataFrame) -> tuple[str, str]:
     return f"{minutes} min", f"{minutes}min"
 
 
-def carregar(sessao: Path) -> tuple[pd.DataFrame, dict]:
+def carregar(sessao: Path, regime: str | None = None) -> tuple[pd.DataFrame, dict]:
     csv_path = sessao / "telemetria.csv"
     resumo_path = sessao / "resumo.json"
     df = pd.read_csv(csv_path)
-    resumo = json.loads(resumo_path.read_text(encoding="utf-8"))
+    # O resumo some quando a sessao e morta sem encerrar (desligamento, queda de
+    # energia). A telemetria sobrevive inteira, entao os graficos nao podem
+    # depender dele: faltando, usa-se o padrao da configuracao.
+    if resumo_path.exists():
+        resumo = json.loads(resumo_path.read_text(encoding="utf-8"))
+    else:
+        print(f"AVISO: {resumo_path.name} ausente; usando limiares da configuracao.")
+        resumo = {}
+    resumo.setdefault("hold_enter_radius_px", 1.0)
+    resumo.setdefault("hold_exit_radius_px", 2.0)
 
     required = {
         "tempo_decorrido_s",
@@ -113,12 +129,79 @@ def carregar(sessao: Path) -> tuple[pd.DataFrame, dict]:
     if missing:
         raise ValueError(f"Colunas ausentes no CSV: {', '.join(missing)}")
 
+    if regime is not None:
+        if "regime_controle" not in df.columns:
+            raise ValueError(
+                "Esta sessao nao tem a coluna regime_controle; "
+                "filtrar por regime so vale para sessoes do A/B de controle."
+            )
+        antes = len(df)
+        df = df[df["regime_controle"] == regime].copy()
+        if df.empty:
+            disponiveis = sorted(pd.read_csv(csv_path)["regime_controle"].unique())
+            raise ValueError(
+                f"Nenhuma linha com regime_controle={regime!r}. "
+                f"Disponiveis: {', '.join(map(str, disponiveis))}"
+            )
+        # O tempo decorrido vira DESCONTINUO: os blocos do regime escolhido
+        # estao espalhados pela sessao. Mantemos o eixo original de proposito,
+        # para o grafico mostrar onde cada bloco caiu na noite -- os buracos
+        # sao os outros bracos do experimento, nao falhas de rastreio.
+        print(
+            f"Filtrando regime {regime!r}: {len(df)} de {antes} linhas "
+            f"({100 * len(df) / antes:.1f}%)."
+        )
+        resumo["regime_controle"] = regime
+        # Cada regime tem a SUA zona de repouso. Desenhar a do regime antigo
+        # sobre os dados do novo mostraria uma referencia que nunca valeu ali.
+        if regime.startswith("lento"):
+            from modulos.configuracoes.tracker import (
+                CONTROL_SLOW_RELEASE_PX,
+                CONTROL_SLOW_TRIGGER_PX,
+            )
+
+            resumo["hold_enter_radius_px"] = CONTROL_SLOW_RELEASE_PX
+            resumo["hold_exit_radius_px"] = CONTROL_SLOW_TRIGGER_PX
+
+        # Os blocos do regime escolhido estao espalhados pela sessao, com os
+        # outros bracos no meio. Sem separador, as curvas ligam o fim de um
+        # bloco ao inicio do seguinte com uma reta -- que parece medida e nao e.
+        # Uma linha de NaN entre blocos quebra o traco em todos os graficos.
+        df = _separar_blocos(df)
+
     df["tempo_h"] = df["tempo_decorrido_s"] / 3600.0
     df["valido"] = df["sinal_encontrado"].eq(1)
     df["comando_ativo"] = np.hypot(
         df["velocidade_az_deg_s"], df["velocidade_alt_deg_s"]
     ).gt(1e-12)
     return df, resumo
+
+
+def _separar_blocos(df: pd.DataFrame, folga_s: float = 5.0) -> pd.DataFrame:
+    """Insere uma linha vazia onde o tempo salta, para quebrar as curvas.
+
+    As colunas numericas ficam NaN, entao nada e desenhado ali. ``valido`` fica
+    True de proposito: a linha nao e uma perda de sinal e nao pode aparecer como
+    tal na faixa de indisponibilidade.
+    """
+    tempos = df["tempo_decorrido_s"].to_numpy()
+    saltos = np.flatnonzero(np.diff(tempos) > folga_s)
+    if not len(saltos):
+        return df
+    numericas = df.select_dtypes(include="number").columns
+    pedacos = []
+    inicio = 0
+    for corte in saltos:
+        pedacos.append(df.iloc[inicio : corte + 1])
+        vazia = df.iloc[[corte]].copy()
+        vazia[numericas] = np.nan
+        vazia["tempo_decorrido_s"] = (tempos[corte] + tempos[corte + 1]) / 2.0
+        vazia["sinal_encontrado"] = 1
+        pedacos.append(vazia)
+        inicio = corte + 1
+    pedacos.append(df.iloc[inicio:])
+    print(f"  {len(saltos) + 1} blocos separados por {len(saltos)} intervalos.")
+    return pd.concat(pedacos, ignore_index=True)
 
 
 def intervalos_sem_sinal(df: pd.DataFrame, minimo_s: float = 2.0):
@@ -140,6 +223,9 @@ def grafico_estabilidade(df: pd.DataFrame, resumo: dict, saida: Path) -> Path:
     dt = float(df["tempo_decorrido_s"].diff().median())
     rolling_window = max(5, int(round(120.0 / dt)))
     rolling = erro.rolling(rolling_window, center=True, min_periods=rolling_window // 5).median()
+    # A janela movel ignora NaN e por isso atravessa os separadores entre
+    # blocos, desenhando um patamar reto onde nao houve medida nenhuma.
+    rolling = rolling.where(erro.notna())
     duration_label, duration_slug = rotulo_duracao(df)
 
     fig, (ax, activity_ax) = plt.subplots(
@@ -187,7 +273,7 @@ def grafico_estabilidade(df: pd.DataFrame, resumo: dict, saida: Path) -> Path:
     activity_ax.bar(all_minutes / 60.0, correction_s, width=0.013, color=ORANGE, alpha=0.90)
     activity_ax.set_ylabel("Comando por\nminuto (s)")
     activity_ax.set_xlabel("Tempo de sessão (h)")
-    activity_ax.set_xlim(0, df["tempo_h"].iloc[-1])
+    activity_ax.set_xlim(0, float(np.nanmax(df["tempo_h"])))
     activity_ax.set_ylim(0, max(1.7, correction_s.max() * 1.18))
     activity_ax.grid(True, axis="y")
     activity_ax.spines[["top", "right"]].set_visible(False)
@@ -283,7 +369,7 @@ def grafico_mount(df: pd.DataFrame, resumo: dict, saida: Path) -> Path:
     # vem como null: "or {}" cobre ausente e nulo.
     returned = bool((resumo.get("return_to_start") or {}).get("success"))
     if returned:
-        final_t = float(smooth["tempo_h"].iloc[-1])
+        final_t = float(np.nanmax(smooth["tempo_h"]))
         time_ax.plot([final_t, final_t], [smooth["alt_arcsec"].iloc[-1], 0], color=GREEN, ls="--", lw=1.7)
         time_ax.scatter([final_t], [0], color=GREEN, s=65, zorder=5, label="retorno seguro após a sessão")
     time_ax.set(xlabel="Tempo de sessão (h)", ylabel="Deslocamento desde o início (arcsec)")
@@ -296,18 +382,22 @@ def grafico_mount(df: pd.DataFrame, resumo: dict, saida: Path) -> Path:
     points = np.vstack([[0.0, 0.0], points])
     path_times = np.r_[0.0, smooth["tempo_h"].to_numpy()]
     segments = np.stack([points[:-1], points[1:]], axis=1)
-    collection = LineCollection(segments, cmap="viridis", norm=plt.Normalize(0, smooth["tempo_h"].iloc[-1]))
+    collection = LineCollection(segments, cmap="viridis", norm=plt.Normalize(0, float(np.nanmax(smooth["tempo_h"]))))
     collection.set_array(path_times[:-1])
     collection.set_linewidth(2.8)
     path_ax.add_collection(collection)
     path_ax.scatter(*points[0], s=95, color=GREEN, edgecolor="white", zorder=5, label="início")
-    path_ax.scatter(*points[-1], s=95, color=ORANGE, edgecolor="white", zorder=5, label="fim do tracking")
+    # Com filtro por regime ha linhas separadoras de NaN entre os blocos; o
+    # ultimo ponto real e o que interessa marcar, e os limites precisam
+    # ignora-las.
+    finitos = points[np.isfinite(points).all(axis=1)]
+    path_ax.scatter(*finitos[-1], s=95, color=ORANGE, edgecolor="white", zorder=5, label="fim do tracking")
     if returned:
-        path_ax.plot([points[-1, 0], 0], [points[-1, 1], 0], color=GREEN, ls="--", lw=1.7, label="retorno seguro")
-    xpad = max(1.5, np.ptp(points[:, 0]) * 0.2)
-    ypad = max(1.5, np.ptp(points[:, 1]) * 0.2)
-    path_ax.set_xlim(points[:, 0].min() - xpad, points[:, 0].max() + xpad)
-    path_ax.set_ylim(points[:, 1].min() - ypad, points[:, 1].max() + ypad)
+        path_ax.plot([finitos[-1, 0], 0], [finitos[-1, 1], 0], color=GREEN, ls="--", lw=1.7, label="retorno seguro")
+    xpad = max(1.5, np.ptp(finitos[:, 0]) * 0.2)
+    ypad = max(1.5, np.ptp(finitos[:, 1]) * 0.2)
+    path_ax.set_xlim(finitos[:, 0].min() - xpad, finitos[:, 0].max() + xpad)
+    path_ax.set_ylim(finitos[:, 1].min() - ypad, finitos[:, 1].max() + ypad)
     path_ax.set(xlabel="Azimute (arcsec)", ylabel="Altitude (arcsec)")
     path_ax.set_title("Trajetória relativa do mount", loc="left")
     path_ax.grid(True)
@@ -323,13 +413,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Gera os graficos 2, 4 e 5 de uma sessao longa do tracker.")
     parser.add_argument("--sessao", type=Path, required=True, help="pasta contendo telemetria.csv e resumo.json")
     parser.add_argument("--saida", type=Path, required=True, help="pasta em que os PNGs serao gravados")
+    parser.add_argument(
+        "--regime",
+        default=None,
+        help=(
+            "Se informado, usa so as linhas desse regime de controle "
+            "(atual, lento_ganho_alto, lento_ganho_baixo). Para sessoes do A/B."
+        ),
+    )
     args = parser.parse_args()
 
     configurar_estilo()
     sessao = args.sessao.resolve()
     saida = args.saida.resolve()
     saida.mkdir(parents=True, exist_ok=True)
-    df, resumo = carregar(sessao)
+    df, resumo = carregar(sessao, args.regime)
     caminhos = [
         grafico_estabilidade(df, resumo, saida),
         grafico_mapa(df, resumo, saida),
