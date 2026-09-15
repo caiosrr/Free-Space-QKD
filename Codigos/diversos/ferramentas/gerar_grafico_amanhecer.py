@@ -44,7 +44,13 @@ PAINEIS = (
     ("fundo_local_autoexposicao", "Fundo local do céu", "contagens", None, False),
     ("cnr_autoexposicao", "CNR", "", (8.0, 16.0), False),
     ("raio_controle_px", "Erro que o controlador enxerga", "px", None, False),
+    ("correcoes_por_hora", "Correções por hora", "correções/h", None, False),
 )
+
+# Janela para a taxa de correcao. Com 45 correcoes por hora, uma janela de 15
+# min pega umas 11: curta o bastante para mostrar o pico do crepusculo, longa o
+# bastante para a contagem nao virar ruido de Poisson.
+JANELA_TAXA_MIN = 15.0
 
 
 def configurar_estilo() -> None:
@@ -72,7 +78,22 @@ def carregar(sessao: Path) -> pd.DataFrame:
     # A sessao comeca antes da meia-noite virar; sem isto as horas voltam a zero.
     if df["hora_do_dia"].iloc[0] > df["hora_do_dia"].iloc[-1]:
         df.loc[df.index[df["hora_do_dia"] > 12], "hora_do_dia"] -= 24
+    df["correcoes_por_hora"] = taxa_de_correcao(df)
     return df
+
+
+def taxa_de_correcao(df: pd.DataFrame) -> pd.Series:
+    """Correcoes por hora, de uma contagem acumulada que so cresce.
+
+    ``ciclos_correcao`` conta desde o inicio da sessao; a taxa e a diferenca
+    dentro de uma janela deslizante, dividida pelo tempo que a janela cobre.
+    """
+    ciclos = pd.to_numeric(df["ciclos_correcao"], errors="coerce").ffill()
+    tempo_h = pd.to_numeric(df["tempo_decorrido_s"], errors="coerce") / 3600.0
+    passos = max(3, int(JANELA_TAXA_MIN * 60 * 5))
+    feitas = ciclos - ciclos.shift(passos)
+    decorrido = tempo_h - tempo_h.shift(passos)
+    return (feitas / decorrido).where(decorrido > 0)
 
 
 def suavizar(df: pd.DataFrame, coluna: str, janela_s: float = 120.0) -> pd.Series:
@@ -85,7 +106,7 @@ def suavizar(df: pd.DataFrame, coluna: str, janela_s: float = 120.0) -> pd.Serie
 def desenhar(df: pd.DataFrame, saida: Path, escuro: bool) -> Path:
     configurar_estilo()
     fig, axes = plt.subplots(
-        len(PAINEIS), 1, figsize=(11, 9.5), sharex=True,
+        len(PAINEIS), 1, figsize=(11, 11.5), sharex=True,
         gridspec_kw={"hspace": 0.32, "left": 0.09, "right": 0.97, "top": 0.93, "bottom": 0.07},
     )
     if escuro:
@@ -96,8 +117,15 @@ def desenhar(df: pd.DataFrame, saida: Path, escuro: bool) -> Path:
 
     for ax, (coluna, titulo, unidade, faixa, log) in zip(axes, PAINEIS, strict=True):
         cru = pd.to_numeric(df[coluna], errors="coerce")
-        ax.plot(df["hora_do_dia"], cru, color=NAVY, lw=0.4, alpha=0.18)
-        ax.plot(df["hora_do_dia"], suavizar(df, coluna), color=NAVY, lw=2.0)
+        if coluna == "correcoes_por_hora":
+            # Ja e uma taxa numa janela de 15 min: suavizar de novo esconderia
+            # justamente o pico que ela existe para mostrar.
+            ax.fill_between(df["hora_do_dia"], 0, cru, color=NAVY, alpha=0.18, lw=0)
+            ax.plot(df["hora_do_dia"], cru, color=NAVY, lw=1.6)
+            ax.set_ylim(bottom=0)
+        else:
+            ax.plot(df["hora_do_dia"], cru, color=NAVY, lw=0.4, alpha=0.18)
+            ax.plot(df["hora_do_dia"], suavizar(df, coluna), color=NAVY, lw=2.0)
         if log:
             ax.set_yscale("log")
         if faixa is not None:
