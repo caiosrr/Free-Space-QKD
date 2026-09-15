@@ -35,7 +35,7 @@ CODIGOS_DIR = Path(__file__).resolve().parent.parent
 if str(CODIGOS_DIR) not in sys.path:
     sys.path.insert(0, str(CODIGOS_DIR))
 
-from modulos.controle.mount_ascom import mount_address, stop_axes_safely
+from modulos.controle.mount_ascom import call, mount_address, stop_axes_safely
 from modulos.controle.mount_em_uso import motivo_de_uso
 
 DIARIO = CODIGOS_DIR / "resultados" / "parar_mount.txt"
@@ -61,10 +61,20 @@ def anotar(texto: str) -> None:
 
 def tentar_parar() -> tuple[bool, str]:
     """Uma tentativa. Devolve (parou, descricao do que aconteceu)."""
+    # Sonda o servidor antes de mandar parar. Sem isto os dois desfechos ruins
+    # sao indistinguiveis: stop_axes_safely engole a excecao de cada eixo e
+    # devolve False tanto quando o servidor esta fora do ar quanto quando o
+    # mount ignora o comando. No boot de 2026-09-14 isso gerou um "verifique o
+    # mount FISICAMENTE" quando o problema era so o ASCOM ainda nao ter subido,
+    # e um alarme desses a cada reinicio ensina o operador a ignorar alarmes.
+    try:
+        call("GET", "connected", timeout=3.0)
+    except Exception as exc:
+        return False, f"servidor ASCOM fora do ar: {type(exc).__name__}: {exc}"
     try:
         if stop_axes_safely(attempts=3, timeout=3.0):
             return True, "eixos confirmados em velocidade zero"
-        return False, "ALERTA: nao confirmou a parada dos eixos"
+        return False, "ALERTA: servidor no ar mas os eixos nao confirmaram parada"
     except Exception as exc:
         return False, f"sem contato com o mount: {type(exc).__name__}: {exc}"
 
@@ -110,7 +120,7 @@ def main() -> int:
         time.sleep(max(1.0, args.intervalo))
 
     print(descricao)
-    if "sem contato" in descricao:
+    if "sem contato" in descricao or "fora do ar" in descricao:
         print("Se o driver estiver fora do ar, o eixo pode seguir em movimento:")
         print("abra o servidor ASCOM e rode este programa de novo.")
     else:
