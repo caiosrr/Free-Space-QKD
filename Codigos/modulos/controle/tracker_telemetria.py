@@ -32,6 +32,10 @@ from modulos.configuracoes.tracker import (
     BORDER_CONFIRM_SECONDS,
     BORDER_MIN_PEAK_RATIO,
     BORDER_MIN_SIGNATURE_SIMILARITY,
+    CONTROL_SLOW_RELEASE_PX,
+    CONTROL_SLOW_TRIGGER_PX,
+    CONTROL_SLOW_WARMUP_SECONDS,
+    CONTROL_SLOW_WINDOW_SECONDS,
     CSV_FLUSH_SECONDS,
     SUMMARY_PARTIAL_SECONDS,
     CSV_LOG_HZ,
@@ -142,6 +146,11 @@ class TrackerCsvLogger:
         self._exposure_max_us = float("-inf")
         self._auto_exposure_adjustments = 0
         self._logged_rows = 0
+        # Regimes que de fato rodaram, na ordem em que apareceram. O resumo
+        # nasce com as constantes do modulo, mas aplicar_regime as substitui
+        # no arranque: sem isto o resumo declara a janela de 8 s enquanto a
+        # sessao roda com 120 s, e quem analisar depois erra a leitura.
+        self._regimes_usados: list[str] = []
         self._target_present_rows = 0
         self._optical_transient_rejection_rows = 0
         self._max_target_absent_s = 0.0
@@ -442,6 +451,9 @@ class TrackerCsvLogger:
             int(state_values["auto_exposure_adjustments"]),
         )
         self._logged_rows += 1
+        regime = state_values["control_regime"]
+        if regime and regime not in self._regimes_usados:
+            self._regimes_usados.append(regime)
         self._target_present_rows += int(bool(state_values["target_present"]))
         self._optical_transient_rejection_rows += int(
             bool(state_values["optical_transient_rejection"])
@@ -503,7 +515,16 @@ class TrackerCsvLogger:
                 round(self._exposure_min_us, 1),
                 round(self._exposure_max_us, 1),
             ]
+        if len(self._regimes_usados) == 1 and self._regimes_usados[0] != "atual":
+            # Regime unico e lento: os valores que valeram sao os do regime.
+            self._summary.update({
+                "hold_enter_radius_px": CONTROL_SLOW_RELEASE_PX,
+                "hold_exit_radius_px": CONTROL_SLOW_TRIGGER_PX,
+                "slow_bias_window_seconds": CONTROL_SLOW_WINDOW_SECONDS,
+                "slow_bias_warmup_seconds": CONTROL_SLOW_WARMUP_SECONDS,
+            })
         self._summary.update({
+            "control_regimes_used": list(self._regimes_usados),
             "finished_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "finish_reason": reason,
             "return_to_start": return_result,
