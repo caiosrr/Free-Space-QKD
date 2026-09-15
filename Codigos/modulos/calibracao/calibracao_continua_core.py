@@ -91,6 +91,40 @@ MIN_CALIBRATION_SIMILARITY = 0.25
 # Independente da ROI enxuta do tracker. A varredura longa precisa de espaco
 # para ~300 px de excursao sem chegar perto da borda.
 CALIBRATION_ROI_SIZE_PX = 1024
+
+# Exposicao da calibracao: escolhida para o nucleo NAO ceifar.
+#
+# O nivel em si quase nao importa. Medido no caminho real do detector (modo
+# dual) sobre os quadros de 2026-09-14, passar da exposicao de calibracao para
+# a de operacao move o centro de massa 0,03 px, e um amanhecer inteiro (fundo
+# de 2 a 140 contagens) move 0,03 px: o modo dual ja subtrai um pedestal por
+# quadro e limiariza sobre a imagem normalizada, entao ele e praticamente
+# imune a nivel e a ceu.
+#
+# Ceifar, sim, importa, e muito. Com o pico grampeado em 255 o limiar relativo
+# cai junto dele e a mascara engorda para o lado da pluma. Medido nos mesmos
+# quadros: 3 px ceifados custam 0,01 px, 24 px custam 0,16 px, 96 px custam
+# 0,60 px e 224 px custam 1,08 px. O raio de repouso e 0,25 px.
+#
+# O alvo e o MAXIMO observado na janela de amostragem, nao a mediana. O beacon
+# cintila: o pico chegou a 1,5x a mediana em 2026-09-14 e a 2,6x em 2026-09-10.
+# Mirar na mediana deixaria a cauda ceifando exatamente nas noites agitadas,
+# que sao as que mais precisam de uma matriz confiavel.
+CALIBRATION_PEAK_TARGET = 200.0
+CALIBRATION_PEAK_TOLERANCE = 30.0
+CALIBRATION_PEAK_CEILING = 250.0
+CALIBRATION_EXPOSURE_SAMPLE_S = 2.0
+CALIBRATION_EXPOSURE_MAX_STEPS = 8
+# Passo maximo para cima. Sem ele, um quadro escuro pede um salto enorme e
+# a tentativa seguinte chega saturada, gastando passos para voltar.
+CALIBRATION_EXPOSURE_MAX_RISE = 4.0
+# Quantas contagens o pico precisa ter acima do fundo para o ajuste fazer
+# sentido. Abaixo disso nao ha sinal para mirar, e escalar por um pico que
+# e so fundo jogaria a exposicao no teto.
+CALIBRATION_EXPOSURE_MIN_CONTRAST = 5.0
+CALIBRATION_EXPOSURE_MIN_S = 100e-6
+CALIBRATION_EXPOSURE_MAX_S = 60e-3
+
 # Limites iniciais de repetibilidade, nao uma garantia de precisao subpixel.
 MAX_DIRECTION_SCALE_RATIO = 1.35
 MIN_DIRECTION_COSINE = 0.98
@@ -1063,6 +1097,102 @@ def _output_dirs():
     )
 
 
+def _medir_pico(exposicao_s: float) -> dict:
+    """Amostra o pico bruto por alguns segundos, na ROI ja recortada."""
+    picos: list[float] = []
+    fundos: list[float] = []
+    ceifados: list[int] = []
+    fracoes: list[float] = []
+    fim = time.perf_counter() + CALIBRATION_EXPOSURE_SAMPLE_S
+    while time.perf_counter() < fim or not picos:
+        foco.capture_frame(exposicao_s, light=True)
+        stats = foco.LAST_CAPTURE_STATS or {}
+        picos.append(float(stats.get("raw_max", 0.0)))
+        fundos.append(float(stats.get("raw_median", 0.0)))
+        bruto = foco.LAST_RAW_FRAME
+        if isinstance(bruto, np.ndarray) and bruto.size:
+            n = int(np.count_nonzero(bruto >= 255.0))
+            ceifados.append(n)
+            fracoes.append(n / float(bruto.size))
+        else:
+            ceifados.append(0)
+            fracoes.append(0.0)
+    return {
+        "exposicao_s": float(exposicao_s),
+        "quadros": len(picos),
+        "pico_maximo": float(max(picos)),
+        "pico_mediano": float(np.median(picos)),
+        "fundo_mediano": float(np.median(fundos)) if fundos else 0.0,
+        "pixels_ceifados_maximo": int(max(ceifados)),
+        "fracao_ceifada_maxima": float(max(fracoes)),
+    }
+
+
+def _ajustar_exposicao_sem_ceifar(exposicao_s: float) -> dict:
+    """Leva a exposicao ao ponto em que nem o pico da cintilacao satura.
+
+    Nao mexe no ganho: ganho e escolha do operador, e mover dois eixos ao mesmo
+    tempo tornaria o resultado impossivel de interpretar depois.
+
+    A exposicao escolhida vale para TODA a calibracao, varreduras inclusive.
+    Mudar de exposicao no meio de uma varredura mudaria o centroide no meio do
+    ajuste, que e justamente o erro que este bloco existe para evitar.
+    """
+    historico = []
+    escolhida = float(exposicao_s)
+    for passo in range(1, CALIBRATION_EXPOSURE_MAX_STEPS + 1):
+        medida = _medir_pico(escolhida)
+        medida["passo"] = passo
+        historico.append(medida)
+        pico = medida["pico_maximo"]
+        print(
+            f"  exposicao {escolhida * 1e6:8.0f} us -> pico maximo {pico:5.0f}"
+            f" (mediana {medida['pico_mediano']:5.0f},"
+            f" {medida['pixels_ceifados_maximo']} px ceifados,"
+            f" {medida['quadros']} quadros)"
+        )
+        dentro = abs(pico - CALIBRATION_PEAK_TARGET) <= CALIBRATION_PEAK_TOLERANCE
+        if dentro and medida["pixels_ceifados_maximo"] == 0:
+            break
+        if pico - medida["fundo_mediano"] < CALIBRATION_EXPOSURE_MIN_CONTRAST:
+            # So fundo. Escalar por um pico que nao e sinal jogaria a exposicao
+            # no teto e ainda deixaria o operador achando que houve ajuste.
+            print("  sem contraste para ajustar; mantendo a exposicao de partida.")
+            escolhida = float(exposicao_s)
+            break
+        fator = CALIBRATION_PEAK_TARGET / pico
+        # Ceifado, o pico medido MENTE para baixo: ele diz 255 quando o
+        # verdadeiro e maior, entao a razao acima subestima o corte. Desce-se
+        # por passo fixo, mais agressivo quanto maior a area grampeada.
+        if medida["pixels_ceifados_maximo"] > 0:
+            fator = 0.25 if medida["fracao_ceifada_maxima"] > 0.01 else 0.5
+        fator = min(fator, CALIBRATION_EXPOSURE_MAX_RISE)
+        nova = float(np.clip(escolhida * fator,
+                             CALIBRATION_EXPOSURE_MIN_S,
+                             CALIBRATION_EXPOSURE_MAX_S))
+        if nova == escolhida:
+            print("  exposicao no limite configurado; parando o ajuste.")
+            break
+        escolhida = nova
+    else:
+        print("  numero maximo de passos atingido.")
+
+    final = historico[-1]
+    if final["pixels_ceifados_maximo"] > 0 or final["pico_maximo"] > CALIBRATION_PEAK_CEILING:
+        print(
+            "  AVISO: o nucleo ainda satura. A matriz sai, mas o alvo salvo"
+            " pode carregar um vies de ate ~0,5 px."
+        )
+    return {
+        "exposure_seconds": escolhida,
+        "peak_target": CALIBRATION_PEAK_TARGET,
+        "peak_max_observed": final["pico_maximo"],
+        "peak_median_observed": final["pico_mediano"],
+        "clipped_pixels_max": final["pixels_ceifados_maximo"],
+        "steps": historico,
+    }
+
+
 def _raw_target_from_display(sensor_w, sensor_h, x, y):
     return (sensor_w - 1 - x, sensor_h - 1 - y) if foco.ROTATE_IMAGE_180 else (x, y)
 
@@ -1137,6 +1267,15 @@ def main(profile_name: str | None = None) -> None:
             )
         else:
             print("Mascara de pixels ruins: ausente.")
+        # Depois da ROI: o pico que interessa e o de dentro do recorte, e so
+        # aqui a mascara de pixels ruins ja esta ancorada.
+        print("\nAjustando a exposicao para o nucleo nao ceifar:")
+        ajuste_exposicao = _ajustar_exposicao_sem_ceifar(foco.EXPOSURE_SECONDS)
+        exposicao_s = ajuste_exposicao["exposure_seconds"]
+        # Vale para todo o resto da calibracao, varreduras inclusive.
+        foco.EXPOSURE_SECONDS = exposicao_s
+        print(f"  exposicao da calibracao: {exposicao_s * 1e6:.0f} us\n")
+
         initial_position = read_altaz()
         initial_az, initial_alt = initial_position
         summary.update(initial_az_deg=initial_az, initial_alt_deg=initial_alt,
@@ -1144,8 +1283,9 @@ def main(profile_name: str | None = None) -> None:
                        target_full_px=[selection["x_px"], selection["y_px"]],
                        target_local_px=list(target_local), sweep_rate_deg_s=SWEEP_RATE_DEG_S,
                        sweep_half_range_deg=SWEEP_HALF_RANGE_DEG,
-                       exposure_seconds=foco.EXPOSURE_SECONDS, gain=foco.CAMERA_GAIN,
-                       exposure_strategy="fixed_during_calibration",
+                       exposure_seconds=exposicao_s, gain=foco.CAMERA_GAIN,
+                       exposure_strategy="peak_fitted_then_fixed",
+                       exposure_fit=ajuste_exposicao,
                        baseline_valid_frames=REFERENCE_MIN_FRAMES,
                        baseline_window_seconds=REFERENCE_WINDOW_S)
         print(f"\nCalibracao continua {profile.name} | camera={backend_name()} | ROI={actual_w}x{actual_h}")
