@@ -154,7 +154,7 @@ def numeros_da_sessao(caminho: Path) -> dict:
     }
 
 
-def avisar_telegram(token: str, chat: str, texto: str) -> bool:
+def avisar_telegram(token: str, chat: str, texto: str, silencioso: bool = True) -> bool:
     """Envia uma mensagem. Falha em silencio: avisar nao pode derrubar nada."""
     try:
         dados = urllib.parse.urlencode({"chat_id": chat, "text": texto}).encode()
@@ -163,7 +163,9 @@ def avisar_telegram(token: str, chat: str, texto: str) -> bool:
         )
         with urllib.request.urlopen(pedido, timeout=15) as r:
             return r.status == 200
-    except Exception:
+    except Exception as exc:
+        if not silencioso:
+            print(f"  FALHA ao enviar: {type(exc).__name__}: {exc}")
         return False
 
 
@@ -215,6 +217,10 @@ def main() -> int:
         help="id do chat; tambem lido de QKD_TELEGRAM_CHAT",
     )
     parser.add_argument(
+        "--testar-telegram", action="store_true",
+        help="envia uma mensagem agora e relata o erro, para conferir token e chat",
+    )
+    parser.add_argument(
         "--incluir-ociosidade", action="store_true",
         help=(
             "acrescenta o tempo desde o ultimo teclado ou mouse. Numa maquina "
@@ -222,6 +228,19 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    if args.testar_telegram:
+        if not (args.telegram_token and args.telegram_chat):
+            print("Informe --telegram-token e --telegram-chat.")
+            return 2
+        print(f"token com {len(args.telegram_token)} caracteres, chat {args.telegram_chat}")
+        ok = avisar_telegram(
+            args.telegram_token, args.telegram_chat,
+            "Teste do vigia do tracker. Se voce recebeu isto, esta configurado.",
+            silencioso=False,
+        )
+        print("Mensagem enviada." if ok else "NAO enviou.")
+        return 0 if ok else 1
+
     estado = montar(args.incluir_ociosidade)
     # Sem --saida so o Telegram avisa, mas ainda e preciso um lugar para o
     # marcador de estado: sem ele o programa nao sabe o que mudou.
