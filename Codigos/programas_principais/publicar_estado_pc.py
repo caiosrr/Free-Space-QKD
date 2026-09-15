@@ -71,6 +71,13 @@ def segundos_ocioso() -> float | None:
         return None
 
 
+# Sob pythonw.exe o processo nao tem console, e cada programa de console que
+# ele lanca ganha uma JANELA NOVA. Era a origem do terminal que piscava a cada
+# minuto no PC da bancada, mesmo com a tarefa agendada ja usando pythonw: nao
+# era o Python aparecendo, era o tasklist.
+SEM_JANELA = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 def processos() -> list[str]:
     """Nomes dos processos relevantes que estao no ar."""
     interessantes = ("python.exe", "AnyDesk.exe", "soffice.bin", "Code.exe")
@@ -78,6 +85,7 @@ def processos() -> list[str]:
         saida = subprocess.run(
             ["tasklist", "/fo", "csv", "/nh"],
             capture_output=True, text=True, timeout=20,
+            creationflags=SEM_JANELA,
         ).stdout
     except Exception:
         return []
