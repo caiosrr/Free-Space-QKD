@@ -48,12 +48,36 @@ class BoundedCorrectionCycle:
         proposed, error, current_error = map(lambda a: np.asarray(a, dtype=float),
                                              (proposed, error, current_error))
         # Um historico antigo nao pode comandar contra o erro angular atual.
-        eligible = (np.isfinite(error) & np.isfinite(current_error) & np.isfinite(proposed)
-                    & (error * current_error > 0) & (proposed * error > 0))
-        budget = np.minimum(np.abs(error), np.abs(current_error)) * self.fraction
+        pedido = (np.isfinite(error) & np.isfinite(current_error) & np.isfinite(proposed)
+                  & (error * current_error > 0) & (proposed * error > 0))
+        confiavel = np.minimum(np.abs(error), np.abs(current_error))
+        budget = confiavel * self.fraction
         duration = np.minimum(budget / self.min_rate, self.fine_max_s if fine else self.large_max_s)
         # Nao arredondar um erro minusculo para um pulso maior que seu orcamento.
-        eligible &= duration >= self.min_s
+        eligible = pedido & (duration >= self.min_s)
+
+        if not np.any(eligible) and np.any(pedido):
+            # Canto da zona morta. A porta que decide corrigir e RADIAL, mas esta
+            # permissao e POR EIXO: um erro diagonal passa do raio de gatilho e
+            # nao alcanca o pulso minimo em nenhuma das duas componentes, entao o
+            # controlador pede correcao e nada sai. Medido na sessao de 10 h de
+            # 2026-09-15: na faixa de raio em que isso morde, 93,6% do erro estava
+            # nas diagonais contra 1,1% acima dela, e foram 47 min pedindo sem
+            # mover. Na pratica a zona morta virava um quadrado de lado 1,23 px em
+            # vez do circulo de raio 0,6 px que o projeto pretende.
+            #
+            # A saida e pulsar o eixo dominante pelo tempo minimo. So se o erro
+            # daquele eixo for pelo menos o proprio passo minimo: mover mais do que
+            # o erro passaria do zero e criaria oscilacao onde antes havia so
+            # inercia.
+            passo_minimo = self.min_s * self.min_rate
+            alcancavel = pedido & (confiavel >= passo_minimo)
+            if np.any(alcancavel):
+                dominante = int(np.argmax(np.where(alcancavel, confiavel, -np.inf)))
+                eligible = np.zeros(2, dtype=bool)
+                eligible[dominante] = True
+                duration = np.where(eligible, self.min_s, 0.0)
+
         self.rates = np.where(eligible, np.sign(error) * self.min_rate, 0.0)
         if not np.any(self.rates):
             return np.zeros(2)
