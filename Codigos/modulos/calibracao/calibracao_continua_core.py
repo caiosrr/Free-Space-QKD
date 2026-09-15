@@ -1097,6 +1097,34 @@ def _output_dirs():
     )
 
 
+def _avisar_se_quadro_sem_sinal(frame: np.ndarray) -> None:
+    """Explica a janela preta em vez de deixar o operador adivinhando.
+
+    ``capture_frame`` zera o quadro inteiro quando o pico bruto nao chega a
+    ``RAW_SIGNAL_MIN``. A janela de selecao entao abre completamente preta, sem
+    dizer por que, e a reacao natural e achar que a camera ou o beacon
+    falharam, quando o que falta e exposicao.
+
+    O ajuste automatico de exposicao roda DEPOIS, porque so faz sentido dentro
+    da ROI ja recortada. Ate la vale a exposicao configurada, e ela precisa ser
+    generosa o bastante para a luz aparecer a olho nu.
+    """
+    stats = foco.LAST_CAPTURE_STATS or {}
+    pico = float(stats.get("raw_max", 0.0))
+    if pico >= foco.RAW_SIGNAL_MIN and np.any(frame):
+        return
+    print(
+        "\nQUADRO SEM SINAL UTIL: pico bruto de "
+        f"{pico:.0f} contagens, abaixo do piso de {foco.RAW_SIGNAL_MIN:.0f}."
+    )
+    print(
+        f"A exposicao atual e {foco.EXPOSURE_SECONDS * 1e6:.0f} us. Suba-a ate a"
+        " luz aparecer na janela e rode de novo; a calibracao ajusta a exposicao"
+        " sozinha depois que voce recortar a ilha."
+    )
+    print("A tecla R captura um quadro novo sem sair da selecao.\n")
+
+
 def _medir_pico(exposicao_s: float) -> dict:
     """Amostra o pico bruto por alguns segundos, na ROI ja recortada."""
     picos: list[float] = []
@@ -1244,7 +1272,16 @@ def main(profile_name: str | None = None) -> None:
         camera = direct_camera()
         camera.reset_roi()
         full_frame = foco.capture_frame(foco.EXPOSURE_SECONDS, light=True)
-        selection = foco.escolher_ilha_manualmente(full_frame, max_jump_px=TRACKER_MAX_SPOT_JUMP_PX)
+        _avisar_se_quadro_sem_sinal(full_frame)
+        # ``recapturar`` faz a tecla R pegar um quadro NOVO, nao so refazer o
+        # recorte. O tracker ja fazia isso; aqui a selecao acontecia sobre um
+        # unico quadro congelado, e bastava ele ter pego uma cintilacao baixa
+        # para o operador ficar sem saida a nao ser cancelar tudo.
+        selection = foco.escolher_ilha_manualmente(
+            full_frame,
+            max_jump_px=TRACKER_MAX_SPOT_JUMP_PX,
+            recapturar=lambda: foco.capture_frame(foco.EXPOSURE_SECONDS, light=True),
+        )
         sensor_h, sensor_w = full_frame.shape[:2]
         roi_size = max(CALIBRATION_ROI_SIZE_PX, roi_size_for_backend(backend_name()))
         raw_x, raw_y = _raw_target_from_display(sensor_w, sensor_h, selection["x_px"], selection["y_px"])
