@@ -975,3 +975,73 @@ Queda de energia prolongada em que o PC não volta. Aí nada em software age, e
 só um nobreak resolve. Nota do operador, correta: se faltar energia no prédio o
 mount perde alimentação junto e para, então o caso ruim é o PC reiniciar
 **sozinho** com o mount ainda alimentado.
+
+### O handler de desligamento não dispara no reinício, medido
+
+Testado em 2026-09-14 com um programa que registra o mesmo handler mas só
+escreve num arquivo, sem tocar no mount.
+
+| evento | handler disparou? |
+|---|---|
+| janela do console fechada no X | **sim** |
+| reinício do Windows Update | **não** |
+
+O mecanismo de registro funciona; o Windows simplesmente não avisa o processo
+num reinício. A proteção 1 da lista acima vale menos do que parecia, e a defesa
+real contra reinício passa a ser a tarefa de boot.
+
+Uma armadilha de método: fechar a janela e reiniciar chegam pelo **mesmo**
+handler. O teste que só registra "fui chamado" aprova o reinício depois de um
+simples fechar de janela. Ele precisa registrar **qual** evento chegou.
+
+### A parada por LX200 direto: o que fecha o buraco do reinício
+
+A tarefa de boot com `parar_mount.py` só alcança o mount através do servidor
+ASCOM, que é programa de janela e exige alguém logado. Numa conta com senha,
+depois de um reinício o eixo seguiria andando até o operador conectar.
+
+O AM5 responde **LX200 direto**: identificado em 2026-09-14 como `AM5N` em
+**COM5 a 9600 baud**. A serial não precisa de desktop nem de login, então uma
+tarefa de boot rodando como SYSTEM para o eixo com a máquina trancada.
+
+**O teste que importava** (2026-09-14, com o telescópio na UFF): eixo de azimute
+comandado a 3,75 arcsec/s, servidor ASCOM **fechado** com o eixo andando, e
+então `parar_mount_direto.py`.
+
+| | valor |
+|---|---|
+| azimute inicial (ASCOM) | 0,01694° = 61″ = `000*01:01` |
+| azimute final (serial) | `000*02:40` = 160″ |
+| deslocamento | **99″**, ou 26 s de movimento |
+| altitude lida pela serial | −8″, igual à inicial do ASCOM |
+
+A parada **deteve um eixo em movimento com o servidor ASCOM fora do ar**. A
+altitude batendo com a leitura do ASCOM confirma de quebra que as posições pela
+serial são confiáveis, e que só o eixo comandado se moveu.
+
+O programa manda os cinco comandos de parada do LX200 (`:Q#` e as quatro
+direções), porque o driver pode estar movendo por eixo ou por direção, e
+confirma lendo a posição duas vezes com 1,5 s entre elas: se mudar, reporta
+`AINDA EM MOVIMENTO` em vez de declarar sucesso.
+
+#### Duas travas contra parar o que não devia
+
+1. Aborta se houver telemetria de tracker ou escrita de calibração recente.
+2. Com o servidor ASCOM no ar, ele segura a porta serial com exclusividade e o
+   programa nem abre. Ele só consegue agir no cenário em que é necessário.
+
+A primeira trava nasceu de um quase-acidente: ela olhava só a telemetria do
+tracker, e uma parada direta rodada durante uma **calibração** passou reto,
+porque calibração não escreve telemetria de tracker. O mount estava entre varreduras e
+nada se perdeu. A pergunta certa é "alguém está comandando o mount", não "o
+tracker está gravando".
+
+#### Cobertura depois desta mudança
+
+| cenário | quem cobre |
+|---|---|
+| tracker morre com o Windows de pé | vigia |
+| desligamento ordenado | tarefa de boot (o handler não dispara) |
+| PC reinicia sozinho, ninguém logado | **parada direta por LX200, como SYSTEM** |
+| queda de energia | o mount perde alimentação junto |
+| PC não volta | nada em software; só nobreak ou tomada remota |
