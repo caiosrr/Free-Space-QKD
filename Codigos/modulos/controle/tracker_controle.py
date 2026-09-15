@@ -6,6 +6,11 @@ from dataclasses import dataclass
 import numpy as np
 
 
+# Tempo de correlacao integral da turbulencia, medido nas sessoes longas: as
+# medias temporais de 2 s so viram amostras independentes a cada ~6,9 s.
+TEMPO_CORRELACAO_S = 6.9
+
+
 @dataclass(frozen=True)
 class SlowBiasEstimate:
     dx_px: float
@@ -21,6 +26,19 @@ class SlowBiasEstimate:
 class SlowBiasEstimator:
     """Mediana temporal longa usada apenas para decidir correcoes finas."""
 
+    # Liberacao antecipada do aquecimento. O aquecimento e metade da janela e
+    # foi dimensionado para o caso DIFICIL: separar um vies pequeno da
+    # turbulencia. O desvio com que uma sessao COMECA e o caso facil, e pagava o
+    # mesmo preco. Medido em 2026-09-15: a primeira correcao so saia em t=65 s,
+    # e ate la o erro ficava em 1,5 a 2,0 px de mediana, contra 1,1 a 1,2 px em
+    # regime, com picos acima de 3 px.
+    #
+    # A liberacao sai quando o proprio historico disponivel diz que o desvio nao
+    # e ruido, pela dispersao das amostras, e nao por um limiar fixo em pixels,
+    # que nao sobreviveria a uma noite de turbulencia diferente.
+    LIBERACAO_SPAN_MINIMO_S = 8.0
+    LIBERACAO_SIGMAS = 4.0
+
     def __init__(self, window_s=8.0, warmup_s=4.0, min_samples=5):
         self.window_s = float(window_s)
         self.warmup_s = float(warmup_s)
@@ -33,6 +51,10 @@ class SlowBiasEstimator:
 
     def reset(self):
         self._samples = deque()
+        # Trava de uma via: depois de liberado, segue liberado ate o proximo
+        # reset. Sem isso o estado oscilaria assim que a correcao reduzisse o
+        # desvio, e a porta de correcao veria "pronto" piscando.
+        self._liberado_cedo = False
 
     def deslocar(self, ddx_px, ddy_px) -> None:
         """Aplica ao historico o mesmo deslocamento que o mount executou.
@@ -73,12 +95,36 @@ class SlowBiasEstimator:
         span_s = max(0.0, timestamp - self._samples[0][0])
         median = np.median(samples, axis=0)
         ready = len(self._samples) >= self.min_samples and span_s >= self.warmup_s
+
+        if not ready and not self._liberado_cedo:
+            self._liberado_cedo = self._desvio_inequivoco(samples, median, span_s)
+        ready = ready or self._liberado_cedo
+
         return SlowBiasEstimate(
             float(median[0]),
             float(median[1]),
             span_s,
             bool(ready),
         )
+
+    def _desvio_inequivoco(self, samples, median, span_s) -> bool:
+        """O desvio ja e grande demais para ser ruido do proprio historico?
+
+        Compara a mediana com a incerteza DELA, estimada pela dispersao robusta
+        das amostras dividida pela raiz do numero de amostras independentes. Sao
+        medias de 2 s e a turbulencia tem tempo de correlacao de ~6,9 s, entao
+        amostras vizinhas nao sao independentes: o numero efetivo e o intervalo
+        coberto dividido pelo tempo de correlacao, nunca maior que a contagem.
+        """
+        if span_s < self.LIBERACAO_SPAN_MINIMO_S or len(samples) < self.min_samples:
+            return False
+        desvio = np.median(np.abs(samples - median), axis=0) * 1.4826
+        sigma = float(np.hypot(*desvio))
+        if not np.isfinite(sigma) or sigma <= 0.0:
+            return False
+        n_efetivo = max(1.0, min(float(len(samples)), span_s / TEMPO_CORRELACAO_S))
+        incerteza = sigma / np.sqrt(n_efetivo)
+        return bool(np.hypot(*median) >= self.LIBERACAO_SIGMAS * incerteza)
 
 
 @dataclass(frozen=True)
