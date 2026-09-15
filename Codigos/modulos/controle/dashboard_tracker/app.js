@@ -405,6 +405,16 @@
   }
 
   // ── historico ─────────────────────────────────────────────────────
+  // Congela o eixo no ultimo dado assim que o feed para. A folga de 2 s evita
+  // tremer entre leituras normais, que chegam a cada 200 ms.
+  const FEED_PARADO_MS = 2000;
+
+  function baseDeTempo() {
+    if (!history.length) return Date.now();
+    const ultimo = history[history.length - 1].t;
+    return Date.now() - ultimo > FEED_PARADO_MS ? ultimo : Date.now();
+  }
+
   function desenharGrafico() {
     const { width, height, ratio } = resizeCanvas(ui["trend-canvas"]);
     const pad = { left: 30 * ratio, right: 6 * ratio, top: 8 * ratio, bottom: 18 * ratio };
@@ -433,7 +443,12 @@
       trendCtx.fillText(String(v).replace("-", "−"), 6 * ratio, y + 3.5 * ratio);
     });
 
-    const agora = Date.now();
+    // Base de tempo do eixo. Enquanto chegam dados ela e o relogio; quando o
+    // feed morre ela passa a ser o ULTIMO ponto recebido. Com o relogio, cada
+    // redesenho depois do fim da sessao empurrava as curvas mais para a
+    // esquerda, e como passar o mouse redesenha, o grafico "andava para tras"
+    // sozinho ao mover o cursor.
+    const agora = baseDeTempo();
     const traco = (chave, cor) => {
       trendCtx.lineCap = "round";
       trendCtx.lineJoin = "round";
@@ -455,7 +470,9 @@
 
     trendCtx.fillStyle = "rgba(109,94,72,.9)";
     trendCtx.fillText("−120 s", pad.left, height - 4 * ratio);
-    const fim = "agora";
+    const fim = Date.now() - agora > FEED_PARADO_MS
+      ? new Date(agora).toTimeString().slice(0, 8)
+      : "agora";
     trendCtx.fillText(fim, width - pad.right - trendCtx.measureText(fim).width, height - 4 * ratio);
 
     // Cursor de tempo: o traco vertical que diz QUAL instante o clique vai
@@ -564,7 +581,7 @@
     const x = evento.clientX - caixa.left - esq;
     if (largura <= 0) return null;
     const fracao = Math.max(0, Math.min(1, x / largura));
-    return Date.now() - (1 - fracao) * HISTORY_MS;
+    return baseDeTempo() - (1 - fracao) * HISTORY_MS;
   }
 
   function buscarQuadroDoPassado(unixS) {

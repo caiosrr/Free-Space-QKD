@@ -150,7 +150,7 @@ class TrackerCsvLogger:
         # nasce com as constantes do modulo, mas aplicar_regime as substitui
         # no arranque: sem isto o resumo declara a janela de 8 s enquanto a
         # sessao roda com 120 s, e quem analisar depois erra a leitura.
-        self._regimes_usados: list[str] = []
+        self._regimes_usados: dict[str, int] = {}
         self._target_present_rows = 0
         self._optical_transient_rejection_rows = 0
         self._max_target_absent_s = 0.0
@@ -452,8 +452,8 @@ class TrackerCsvLogger:
         )
         self._logged_rows += 1
         regime = state_values["control_regime"]
-        if regime and regime not in self._regimes_usados:
-            self._regimes_usados.append(regime)
+        if regime:
+            self._regimes_usados[regime] = self._regimes_usados.get(regime, 0) + 1
         self._target_present_rows += int(bool(state_values["target_present"]))
         self._optical_transient_rejection_rows += int(
             bool(state_values["optical_transient_rejection"])
@@ -515,8 +515,16 @@ class TrackerCsvLogger:
                 round(self._exposure_min_us, 1),
                 round(self._exposure_max_us, 1),
             ]
-        if len(self._regimes_usados) == 1 and self._regimes_usados[0] != "atual":
-            # Regime unico e lento: os valores que valeram sao os do regime.
+        # Dominancia, nao unicidade. A primeira linha da sessao e gravada com o
+        # valor anterior a aplicar_regime, entao um regime espurio com UMA linha
+        # aparece sempre: na sessao de 2026-09-15, 1 linha "atual" contra 167336
+        # de lento_ganho_baixo bastava para o resumo voltar a declarar a janela
+        # de 8 s e o raio de 1,0 px que nao valeram em momento nenhum.
+        total = sum(self._regimes_usados.values())
+        dominante = max(self._regimes_usados, key=self._regimes_usados.get, default=None)
+        if (dominante and dominante != "atual"
+                and self._regimes_usados[dominante] >= 0.99 * total):
+            # Regime dominante e lento: os valores que valeram sao os do regime.
             self._summary.update({
                 "hold_enter_radius_px": CONTROL_SLOW_RELEASE_PX,
                 "hold_exit_radius_px": CONTROL_SLOW_TRIGGER_PX,
@@ -524,7 +532,7 @@ class TrackerCsvLogger:
                 "slow_bias_warmup_seconds": CONTROL_SLOW_WARMUP_SECONDS,
             })
         self._summary.update({
-            "control_regimes_used": list(self._regimes_usados),
+            "control_regimes_used": dict(self._regimes_usados),
             "finished_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "finish_reason": reason,
             "return_to_start": return_result,
