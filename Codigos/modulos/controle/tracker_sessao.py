@@ -146,7 +146,9 @@ def main(
         # Python ignora esse aviso: foi por isso que o finally daqui nao rodou
         # no reinicio de 2026-09-10 as 03:44, deixando o mount sem o zero de
         # encerramento. Com o handler registrado, sobra tempo para para-lo.
-        if desligamento_windows.registrar(stop_axes_safely):
+        # O handler passa o nome do evento; stop_axes_safely espera
+        # attempts/timeout, entao o lambda descarta o argumento.
+        if desligamento_windows.registrar(lambda _evento: stop_axes_safely()):
             print("Parada de emergencia armada para o desligamento do Windows.")
         ensure_unparked()
         ensure_not_tracking()

@@ -39,11 +39,18 @@ from modulos.controle import desligamento_windows
 MARCA = CODIGOS_DIR / "resultados" / "handler_desligamento.txt"
 
 
-def registrar_marca() -> None:
+# Fechar a janela e reiniciar o Windows chegam pelo MESMO handler. Registrar
+# so "fui chamado" faria um fechar de janela passar por prova de que o reinicio
+# esta coberto, que e exatamente a conclusao errada.
+EVENTO_DO_REINICIO = "desligamento do Windows"
+
+
+def registrar_marca(evento: str) -> None:
     """Faz as vezes da parada de emergencia, sem tocar em hardware."""
     MARCA.parent.mkdir(parents=True, exist_ok=True)
     with MARCA.open("a", encoding="utf-8") as arquivo:
-        arquivo.write(f"{datetime.now().astimezone().isoformat(timespec='seconds')}  handler chamado\n")
+        momento = datetime.now().astimezone().isoformat(timespec="seconds")
+        arquivo.write(f"{momento}  evento: {evento}\n")
 
 
 def main() -> int:
@@ -52,14 +59,22 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.ver:
-        if MARCA.exists():
-            print(f"O handler FOI chamado. Registro em {MARCA}:")
-            print(MARCA.read_text(encoding="utf-8").rstrip())
-            print()
-            print("O tracker vai parar o mount num reinicio ordenado do Windows.")
+        if not MARCA.exists():
+            print(f"Nenhum registro em {MARCA}.")
+            print("Ou o programa nao estava rodando, ou o Windows nao avisou.")
+            return 1
+        conteudo = MARCA.read_text(encoding="utf-8").rstrip()
+        print(f"Registro em {MARCA}:")
+        print(conteudo)
+        print()
+        if EVENTO_DO_REINICIO in conteudo:
+            print("O Windows avisou o processo ANTES de reiniciar.")
+            print("O tracker vai parar o mount num reinicio ordenado.")
             return 0
-        print(f"Nenhum registro em {MARCA}.")
-        print("Ou o programa nao estava rodando, ou o Windows nao avisou a tempo.")
+        print("O handler funciona, mas NAO ha registro de desligamento do Windows.")
+        print("Fechar a janela dispara o mesmo handler e nao prova nada sobre o")
+        print("reinicio. Enquanto nao aparecer o evento acima, a protecao que")
+        print("vale num reinicio e a tarefa de boot com parar_mount.py.")
         return 1
 
     ok = desligamento_windows.registrar(registrar_marca)

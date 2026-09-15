@@ -47,8 +47,13 @@ NOMES = {
 _HANDLER_VIVO = None
 
 
-def registrar(parada_de_emergencia: Callable[[], None]) -> bool:
+def registrar(parada_de_emergencia: Callable[[str], None]) -> bool:
     """Chama ``parada_de_emergencia`` quando o Windows for encerrar o processo.
+
+    A funcao recebe o NOME do evento que disparou. Sem isso nao da para
+    distinguir "fecharam a janela" de "o Windows esta reiniciando", e os dois
+    chegam pelo mesmo handler: um teste que so registra "fui chamado" concluiria
+    que o reinicio esta coberto depois de um simples fechar de janela.
 
     Devolve se conseguiu registrar. Fora do Windows, devolve ``False`` sem
     levantar excecao: quem chama segue a vida.
@@ -65,7 +70,7 @@ def registrar(parada_de_emergencia: Callable[[], None]) -> bool:
             print(f"\n{nome} detectado: parando o mount antes de sair.", flush=True)
             # Num thread separado com prazo: se o ASCOM travar, o processo ainda
             # e morto pelo Windows, e ficar preso aqui nao ajudaria em nada.
-            t = threading.Thread(target=parada_de_emergencia, daemon=True)
+            t = threading.Thread(target=parada_de_emergencia, args=(nome,), daemon=True)
             t.start()
             t.join(timeout=4.0)
             print("mount parado." if not t.is_alive() else "tempo esgotado.", flush=True)
