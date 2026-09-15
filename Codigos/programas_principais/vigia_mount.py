@@ -43,6 +43,26 @@ if str(CODIGOS_DIR) not in sys.path:
 from modulos.controle.mount_ascom import mount_address, stop_axes_safely
 
 SESSOES = CODIGOS_DIR / "Link UFF" / "resultados" / "tracker" / "sessoes"
+# Mesmo diario das paradas de emergencia: um disparo deste vigia e do mesmo
+# tipo de evento, e concentrar os dois num arquivo so evita ter de lembrar de
+# dois lugares quando algo der errado de madrugada.
+DIARIO = CODIGOS_DIR / "resultados" / "parar_mount.txt"
+
+
+def anotar(texto: str) -> None:
+    """Deixa rastro em disco.
+
+    O vigia so imprimia na tela, e uma janela fechada ou rolada levava junto a
+    unica evidencia de que ele agiu.
+    """
+    try:
+        DIARIO.parent.mkdir(parents=True, exist_ok=True)
+        with DIARIO.open("a", encoding="utf-8") as arquivo:
+            momento = datetime.now().astimezone().isoformat(timespec="seconds")
+            arquivo.write(f"{momento}  [vigia] {texto}\n")
+    except Exception:
+        # Parar o mount importa mais do que anotar que parou.
+        pass
 
 
 def idade_da_telemetria() -> float | None:
@@ -91,6 +111,7 @@ def main() -> int:
             elif idade <= args.armar_em:
                 if not armado:
                     print(f"[{agora()}] ARMADO: tracker gravando.")
+                    anotar("armado: tracker gravando")
                 armado = True
                 estado = f"gravando (telemetria de {idade:.0f} s atras)"
             elif armado and idade > args.disparar_em:
@@ -98,6 +119,10 @@ def main() -> int:
                 print("[{}] parando os eixos...".format(agora()))
                 ok = stop_axes_safely(attempts=3, timeout=3.0)
                 print(f"[{agora()}] {'eixos zerados.' if ok else 'FALHA ao zerar, verifique o mount.'}")
+                anotar(
+                    f"DISPAROU apos {idade:.0f} s sem telemetria: "
+                    + ("eixos zerados" if ok else "FALHA ao zerar, verifique o mount")
+                )
                 # Desarma para nao ficar repetindo; rearma sozinho se o
                 # tracker voltar, o que cobre o operador reiniciando a sessao.
                 armado = False
