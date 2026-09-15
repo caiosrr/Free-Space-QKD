@@ -154,19 +154,22 @@ def numeros_da_sessao(caminho: Path) -> dict:
     }
 
 
-def avisar_telegram(token: str, chat: str, texto: str, silencioso: bool = True) -> bool:
-    """Envia uma mensagem. Falha em silencio: avisar nao pode derrubar nada."""
+def avisar_telegram(token: str, chat: str, texto: str) -> tuple[bool, str]:
+    """Envia uma mensagem. Nunca levanta: avisar nao pode derrubar nada.
+
+    Devolve ``(enviou, detalhe)``. O detalhe existe porque, numa tarefa
+    agendada, ninguem le a saida do programa: o motivo da falha precisa chegar
+    ao diario, ou um token errado passa semanas despercebido.
+    """
     try:
         dados = urllib.parse.urlencode({"chat_id": chat, "text": texto}).encode()
         pedido = urllib.request.Request(
             f"https://api.telegram.org/bot{token}/sendMessage", data=dados
         )
         with urllib.request.urlopen(pedido, timeout=15) as r:
-            return r.status == 200
+            return r.status == 200, f"HTTP {r.status}"
     except Exception as exc:
-        if not silencioso:
-            print(f"  FALHA ao enviar: {type(exc).__name__}: {exc}")
-        return False
+        return False, f"{type(exc).__name__}: {exc}"
 
 
 def montar(incluir_ociosidade: bool) -> dict:
@@ -233,12 +236,11 @@ def main() -> int:
             print("Informe --telegram-token e --telegram-chat.")
             return 2
         print(f"token com {len(args.telegram_token)} caracteres, chat {args.telegram_chat}")
-        ok = avisar_telegram(
+        ok, detalhe = avisar_telegram(
             args.telegram_token, args.telegram_chat,
             "Teste do vigia do tracker. Se voce recebeu isto, esta configurado.",
-            silencioso=False,
         )
-        print("Mensagem enviada." if ok else "NAO enviou.")
+        print("Mensagem enviada." if ok else f"NAO enviou: {detalhe}")
         return 0 if ok else 1
 
     estado = montar(args.incluir_ociosidade)
@@ -292,25 +294,52 @@ def main() -> int:
 
     # Avisa apenas quando o estado MUDA. Uma mensagem por minuto viraria ruido
     # e o operador deixaria de ler justamente a que importa.
-    if args.telegram_token and args.telegram_chat:
-        marcador = args.saida / ".ultimo_estado"
-        anterior = marcador.read_text(encoding="utf-8").strip() if marcador.exists() else ""
-        atual = "gravando" if t.get("gravando") else "parado"
-        if atual != anterior:
-            texto = None
-            if atual == "gravando":
-                texto = f"Tracker COMECOU a gravar\n{t['sessao']}"
-            elif anterior:
-                # Primeira execucao nao avisa: nao houve mudanca, so falta de
-                # historico, e um alarme falso na estreia mina a confianca.
-                texto = (
-                    "Tracker PAROU de gravar\n"
-                    f"ultima sessao: {t.get('sessao', '?')}\n"
-                    f"sem escrever ha {t.get('segundos_desde_a_ultima_linha', 0):.0f} s"
-                )
-            if texto and avisar_telegram(args.telegram_token, args.telegram_chat, texto):
-                print("  (aviso enviado ao Telegram)")
+    marcador = args.saida / ".ultimo_estado"
+    anterior = marcador.read_text(encoding="utf-8").strip() if marcador.exists() else ""
+    atual = "gravando" if t.get("gravando") else "parado"
+
+    if not (args.telegram_token and args.telegram_chat):
+        nota = f"{atual}; sem token ou chat, nenhum aviso configurado"
+        marcador.write_text(atual, encoding="utf-8")
+    elif atual == anterior:
+        nota = f"{atual}; sem mudanca"
+    else:
+        texto = None
+        if atual == "gravando":
+            texto = f"Tracker COMECOU a gravar\n{t['sessao']}"
+        elif anterior:
+            texto = (
+                "Tracker PAROU de gravar\n"
+                f"ultima sessao: {t.get('sessao', '?')}\n"
+                f"sem escrever ha {t.get('segundos_desde_a_ultima_linha', 0):.0f} s"
+            )
+        if texto is None:
+            # Primeira execucao nao avisa: nao houve mudanca, so falta de
+            # historico, e um alarme falso na estreia mina a confianca.
+            nota = f"{atual}; primeira execucao, so gravando a linha de base"
             marcador.write_text(atual, encoding="utf-8")
+        else:
+            enviou, detalhe = avisar_telegram(
+                args.telegram_token, args.telegram_chat, texto
+            )
+            nota = f"{anterior or 'sem historico'} -> {atual}; {detalhe}"
+            if enviou:
+                print("  (aviso enviado ao Telegram)")
+                marcador.write_text(atual, encoding="utf-8")
+            else:
+                # De proposito NAO avanca o marcador: a mudanca continua
+                # pendente e a proxima execucao tenta de novo. Avancar aqui
+                # apagaria para sempre justamente o alarme que importa.
+                print(f"  (FALHA ao avisar: {detalhe}; tentara de novo)")
+
+    # Uma linha por execucao. E o unico lugar onde da para descobrir por que um
+    # aviso nao chegou, ja que a tarefa agendada joga fora a saida do programa.
+    diario = args.saida / "diario.txt"
+    if diario.exists() and diario.stat().st_size > 1_000_000:
+        recentes = diario.read_text(encoding="utf-8").splitlines()[-2000:]
+        diario.write_text("\n".join(recentes) + "\n", encoding="utf-8")
+    with diario.open("a", encoding="utf-8") as arquivo:
+        arquivo.write(f"{estado['momento']}  {nota}\n")
     return 0
 
 
