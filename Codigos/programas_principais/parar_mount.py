@@ -26,6 +26,7 @@ que a tarefa agendada registre a falha.
 """
 
 import sys
+from datetime import datetime
 from pathlib import Path
 
 CODIGOS_DIR = Path(__file__).resolve().parent.parent
@@ -33,6 +34,25 @@ if str(CODIGOS_DIR) not in sys.path:
     sys.path.insert(0, str(CODIGOS_DIR))
 
 from modulos.controle.mount_ascom import mount_address, stop_axes_safely
+
+DIARIO = CODIGOS_DIR / "resultados" / "parar_mount.txt"
+
+
+def anotar(texto: str) -> None:
+    """Deixa rastro em disco, porque como tarefa agendada ninguem le a tela.
+
+    Sem isto nao havia como saber se a protecao de boot chegou a rodar: a
+    unica evidencia era o LastTaskResult do agendador, que diz que o processo
+    saiu com zero, nao o que ele encontrou no mount.
+    """
+    try:
+        DIARIO.parent.mkdir(parents=True, exist_ok=True)
+        with DIARIO.open("a", encoding="utf-8") as arquivo:
+            momento = datetime.now().astimezone().isoformat(timespec="seconds")
+            arquivo.write(f"{momento}  {texto}\n")
+    except Exception:
+        # Parar o mount importa mais do que registrar que parou.
+        pass
 
 
 def main() -> int:
@@ -44,11 +64,14 @@ def main() -> int:
         # sem servidor ASCOM nao ha quem mantenha um MoveAxis em curso.
         print(f"Nao foi possivel falar com o mount: {exc}")
         print("Se o driver estiver fora do ar, nao ha comando de movimento ativo.")
+        anotar(f"sem contato com o mount: {type(exc).__name__}: {exc}")
         return 1
     if ok:
         print("Ambos os eixos confirmados em velocidade zero.")
+        anotar("eixos confirmados em velocidade zero")
         return 0
     print("ALERTA: nao consegui confirmar a parada. Verifique o mount FISICAMENTE.")
+    anotar("ALERTA: nao confirmou a parada dos eixos")
     return 1
 
 
