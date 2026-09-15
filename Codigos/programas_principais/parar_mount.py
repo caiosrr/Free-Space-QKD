@@ -38,6 +38,30 @@ if str(CODIGOS_DIR) not in sys.path:
 from modulos.controle.mount_ascom import mount_address, stop_axes_safely
 
 DIARIO = CODIGOS_DIR / "resultados" / "parar_mount.txt"
+SESSOES = CODIGOS_DIR / "Link UFF" / "resultados" / "tracker" / "sessoes"
+# Telemetria mais nova que isto significa sessao viva agora.
+TRACKER_VIVO_S = 30.0
+
+
+def tracker_gravando() -> bool:
+    """Ha uma sessao escrevendo telemetria neste instante?
+
+    A espera do boot existe para alcancar um eixo que ficou andando sozinho.
+    Mas se o operador voltou e comecou uma sessao dentro da janela de espera,
+    mandar velocidade zero interromperia um rastreio legitimo -- a protecao
+    viraria a avaria. Na duvida sobre o estado do disco, devolve False: deixar
+    de parar um mount a deriva e pior do que uma leitura falhada.
+    """
+    try:
+        if not SESSOES.is_dir():
+            return False
+        arquivos = list(SESSOES.glob("*/telemetria.csv"))
+        if not arquivos:
+            return False
+        recente = max(arquivos, key=lambda caminho: caminho.stat().st_mtime)
+        return (time.time() - recente.stat().st_mtime) < TRACKER_VIVO_S
+    except Exception:
+        return False
 
 
 def anotar(texto: str) -> None:
@@ -79,6 +103,11 @@ def main() -> int:
     parser.add_argument("--intervalo", type=float, default=10.0)
     args = parser.parse_args()
 
+    if tracker_gravando():
+        print("Ha uma sessao do tracker gravando agora; nada foi tocado.")
+        anotar("abortado: tracker gravando, parar seria interromper a sessao")
+        return 0
+
     print(f"Parando o mount em {mount_address()} ...")
     limite = time.monotonic() + max(0.0, args.aguardar)
     tentativas = 0
@@ -91,6 +120,10 @@ def main() -> int:
             return 0
         if time.monotonic() >= limite:
             break
+        if tracker_gravando():
+            print("Tracker comecou a gravar durante a espera; desistindo.")
+            anotar("abortado na espera: tracker comecou a gravar")
+            return 0
         # Enquanto o servidor ASCOM nao responde, o eixo pode estar andando: um
         # MoveAxis em curso NAO para quando o servidor cai, medido neste mount
         # em 2026-09-14. Insistir e a unica forma de alcanca-lo.
