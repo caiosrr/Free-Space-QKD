@@ -51,9 +51,9 @@ PARADAS = (b":Q#", b":Qe#", b":Qw#", b":Qn#", b":Qs#")
 # Leituras de posicao em AltAz, para conferir se ainda esta andando.
 POSICAO = (b":GZ#", b":GA#")
 
+from modulos.controle.mount_em_uso import motivo_de_uso
+
 DIARIO = CODIGOS_DIR / "resultados" / "parar_mount.txt"
-SESSOES = CODIGOS_DIR / "Link UFF" / "resultados" / "tracker" / "sessoes"
-TRACKER_VIVO_S = 30.0
 
 
 def anotar(texto: str) -> None:
@@ -65,20 +65,6 @@ def anotar(texto: str) -> None:
     except Exception:
         # Parar o mount importa mais do que anotar que parou.
         pass
-
-
-def tracker_gravando() -> bool:
-    """Ha uma sessao escrevendo telemetria neste instante?"""
-    try:
-        if not SESSOES.is_dir():
-            return False
-        arquivos = list(SESSOES.glob("*/telemetria.csv"))
-        if not arquivos:
-            return False
-        recente = max(arquivos, key=lambda caminho: caminho.stat().st_mtime)
-        return (time.time() - recente.stat().st_mtime) < TRACKER_VIVO_S
-    except Exception:
-        return False
 
 
 def ler_posicao(porta_serial) -> str:
@@ -127,9 +113,10 @@ def main() -> int:
     parser.add_argument("--intervalo", type=float, default=10.0)
     args = parser.parse_args()
 
-    if tracker_gravando():
-        print("Ha uma sessao do tracker gravando agora; nada foi tocado.")
-        anotar("abortado: tracker gravando")
+    uso = motivo_de_uso()
+    if uso:
+        print(f"Mount em uso ({uso}); nada foi tocado.")
+        anotar(f"abortado: {uso}")
         return 0
 
     print(f"Parando o mount por {args.porta} a {args.baud} baud ...")
@@ -144,9 +131,10 @@ def main() -> int:
             return 0
         if time.monotonic() >= limite:
             break
-        if tracker_gravando():
-            print("Tracker comecou a gravar durante a espera; desistindo.")
-            anotar("abortado na espera: tracker comecou a gravar")
+        uso = motivo_de_uso()
+        if uso:
+            print(f"Mount passou a ser usado durante a espera ({uso}); desistindo.")
+            anotar(f"abortado na espera: {uso}")
             return 0
         time.sleep(max(1.0, args.intervalo))
 
