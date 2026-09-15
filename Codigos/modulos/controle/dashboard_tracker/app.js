@@ -74,6 +74,53 @@
     ctx.stroke();
   }
 
+  // Alvo e centro de massa disputavam o mesmo espaco com a mesma linguagem:
+  // dois circulos alaranjados de tamanho parecido, separados por fracoes de
+  // pixel na maior parte do tempo. Sobrepostos assim nao da para dizer qual e
+  // qual, nem para onde o feixe escorregou.
+  //
+  // Agora os papeis sao visualmente distintos:
+  //   alvo          referencia fixa, so linha, cor fria, com vao no centro
+  //   centro de massa   medida viva, unico elemento PREENCHIDO, cor do estado
+  //   haste         liga um ao outro quando ja da para ver a separacao
+  // A haste e o que o operador quer ler de relance: para que lado e quanto.
+  function desenharAlvo(ctx, x, y, ratio, vao, braco) {
+    contornado(ctx, () => {
+      ctx.beginPath();
+      ctx.moveTo(x - vao - braco, y); ctx.lineTo(x - vao, y);
+      ctx.moveTo(x + vao, y); ctx.lineTo(x + vao + braco, y);
+      ctx.moveTo(x, y - vao - braco); ctx.lineTo(x, y - vao);
+      ctx.moveTo(x, y + vao); ctx.lineTo(x, y + vao + braco);
+    }, tone("--reticula"), 1.4 * ratio, ratio);
+  }
+
+  function desenharCentroDeMassa(ctx, ax, ay, cx, cy, cor, ratio, raio) {
+    const dx = cx - ax;
+    const dy = cy - ay;
+    const dist = Math.hypot(dx, dy);
+    // So desenha a haste quando ela tem comprimento util. Abaixo disso ela
+    // vira um borrao sob o proprio ponto e suja justamente o miolo que o vao
+    // da reticula existe para manter limpo.
+    if (dist > raio * 2.4) {
+      const k = (dist - raio * 1.5) / dist;
+      contornado(ctx, () => {
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(ax + dx * k, ay + dy * k);
+      }, cor, 1.2 * ratio, ratio);
+    }
+    // Halo escuro em vez de anel colorido: separa o ponto do nucleo saturado
+    // sem acrescentar mais uma circunferencia a cena.
+    ctx.beginPath();
+    ctx.arc(cx, cy, raio + 1.7 * ratio, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(0,0,0,.82)";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx, cy, raio, 0, Math.PI * 2);
+    ctx.fillStyle = cor;
+    ctx.fill();
+  }
+
   function resizeCanvas(canvas) {
     const rect = canvas.getBoundingClientRect();
     const ratio = Math.min(window.devicePixelRatio || 1, 2);
@@ -235,33 +282,13 @@
     const tx = ox + s.target_x_px * escala;
     const ty = oy + s.target_y_px * escala;
 
-    // aneis de repouso e retomada: o que da significado imediato ao numero
-    overlayCtx.setLineDash([4 * ratio, 5 * ratio]);
-    [[s.hold_enter_radius_px, tone("--rest")], [s.hold_exit_radius_px, tone("--sodium")]]
-      .forEach(([raio, cor]) => {
-        if (!raio) return;
-        const r = Math.max(raio * escala, 3 * ratio);
-        contornado(overlayCtx, () => {
-          overlayCtx.beginPath();
-          overlayCtx.arc(tx, ty, r, 0, Math.PI * 2);
-        }, cor, 1.3 * ratio, ratio);
-      });
-    overlayCtx.setLineDash([]);
-
-    // Eixos X e Y do alvo, com VAO no centro. A cruz continua anterior passava
-    // exatamente por cima do ponto que interessa: o centro de massa fica a
-    // fracoes de pixel do alvo na maior parte do tempo, entao o traco cobria a
-    // propria medida. Com o vao, o miolo fica limpo e os bracos servem so de
-    // referencia de direcao, que e o que eles precisam fazer.
-    const vao = 13 * ratio;
-    const braco = 16 * ratio;
-    contornado(overlayCtx, () => {
-      overlayCtx.beginPath();
-      overlayCtx.moveTo(tx - vao - braco, ty); overlayCtx.lineTo(tx - vao, ty);
-      overlayCtx.moveTo(tx + vao, ty); overlayCtx.lineTo(tx + vao + braco, ty);
-      overlayCtx.moveTo(tx, ty - vao - braco); overlayCtx.lineTo(tx, ty - vao);
-      overlayCtx.moveTo(tx, ty + vao); overlayCtx.lineTo(tx, ty + vao + braco);
-    }, tone("--reticula"), 1.4 * ratio, ratio);
+    // Os aneis de repouso e retomada NAO entram aqui. Com a ROI de 256 px
+    // esticada em ~500 px de tela, o raio de repouso (0,25 px) daria menos de
+    // um pixel de tela; a versao anterior o forcava a um minimo de 3 px, o que
+    // desenhava uma tolerancia dez vezes maior do que a real bem em cima do
+    // ponto de medida. Melhor nao desenhar do que desenhar errado: os aneis
+    // ficam so na lupa, onde a escala os torna honestos.
+    desenharAlvo(overlayCtx, tx, ty, ratio, 13 * ratio, 16 * ratio);
 
     // rastro recente
     if (trail.length > 1) {
@@ -281,17 +308,7 @@
       const cx = ox + s.x_cm_px * escala;
       const cy = oy + s.y_cm_px * escala;
       const cor = s.hold_active ? tone("--rest") : tone("--sodium");
-      contornado(overlayCtx, () => {
-        overlayCtx.beginPath();
-        overlayCtx.arc(cx, cy, 7 * ratio, 0, Math.PI * 2);
-      }, cor, 1.6 * ratio, ratio);
-      overlayCtx.strokeStyle = "rgba(0,0,0,.85)";
-      overlayCtx.lineWidth = 2.5 * ratio;
-      overlayCtx.beginPath();
-      overlayCtx.arc(cx, cy, 1.8 * ratio, 0, Math.PI * 2);
-      overlayCtx.stroke();
-      overlayCtx.fillStyle = cor;
-      overlayCtx.fill();
+      desenharCentroDeMassa(overlayCtx, tx, ty, cx, cy, cor, ratio, 3.6 * ratio);
     }
 
     desenharLupa(s, width, height, ratio, escala);
@@ -367,15 +384,7 @@
     overlayCtx.setLineDash([]);
 
     // eixos com vao, como no visor grande
-    const vao = 9 * ratio;
-    const bra = 13 * ratio;
-    contornado(overlayCtx, () => {
-      overlayCtx.beginPath();
-      overlayCtx.moveTo(ax - vao - bra, ay); overlayCtx.lineTo(ax - vao, ay);
-      overlayCtx.moveTo(ax + vao, ay); overlayCtx.lineTo(ax + vao + bra, ay);
-      overlayCtx.moveTo(ax, ay - vao - bra); overlayCtx.lineTo(ax, ay - vao);
-      overlayCtx.moveTo(ax, ay + vao); overlayCtx.lineTo(ax, ay + vao + bra);
-    }, tone("--reticula"), 1.4 * ratio, ratio);
+    desenharAlvo(overlayCtx, ax, ay, ratio, 9 * ratio, 13 * ratio);
 
     if (s.has_signal && s.x_cm_px != null && s.y_cm_px != null) {
       // Fora do recorte o marcador encosta na borda, em vez de sumir: assim a
@@ -385,17 +394,7 @@
       const dentro = bx === px(s.x_cm_px) && by === py(s.y_cm_px);
       const cor = s.hold_active ? tone("--rest") : tone("--sodium");
       overlayCtx.globalAlpha = dentro ? 1 : 0.5;
-      contornado(overlayCtx, () => {
-        overlayCtx.beginPath();
-        overlayCtx.arc(bx, by, 9 * ratio, 0, Math.PI * 2);
-      }, cor, 1.8 * ratio, ratio);
-      overlayCtx.strokeStyle = "rgba(0,0,0,.85)";
-      overlayCtx.lineWidth = 2.5 * ratio;
-      overlayCtx.beginPath();
-      overlayCtx.arc(bx, by, 2.6 * ratio, 0, Math.PI * 2);
-      overlayCtx.stroke();
-      overlayCtx.fillStyle = cor;
-      overlayCtx.fill();
+      desenharCentroDeMassa(overlayCtx, ax, ay, bx, by, cor, ratio, 4.2 * ratio);
       overlayCtx.globalAlpha = 1;
     }
     overlayCtx.restore();
