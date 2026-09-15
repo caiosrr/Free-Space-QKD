@@ -25,7 +25,9 @@ Sai com codigo 0 se confirmou a parada dos dois eixos, 1 caso contrario, para
 que a tarefa agendada registre a falha.
 """
 
+import argparse
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -55,23 +57,52 @@ def anotar(texto: str) -> None:
         pass
 
 
-def main() -> int:
-    print(f"Parando o mount em {mount_address()} ...")
+def tentar_parar() -> tuple[bool, str]:
+    """Uma tentativa. Devolve (parou, descricao do que aconteceu)."""
     try:
-        ok = stop_axes_safely(attempts=3, timeout=3.0)
+        if stop_axes_safely(attempts=3, timeout=3.0):
+            return True, "eixos confirmados em velocidade zero"
+        return False, "ALERTA: nao confirmou a parada dos eixos"
     except Exception as exc:
-        # Mount desligado ou driver fora do ar tambem e um desfecho seguro:
-        # sem servidor ASCOM nao ha quem mantenha um MoveAxis em curso.
-        print(f"Nao foi possivel falar com o mount: {exc}")
-        print("Se o driver estiver fora do ar, nao ha comando de movimento ativo.")
-        anotar(f"sem contato com o mount: {type(exc).__name__}: {exc}")
-        return 1
-    if ok:
-        print("Ambos os eixos confirmados em velocidade zero.")
-        anotar("eixos confirmados em velocidade zero")
-        return 0
-    print("ALERTA: nao consegui confirmar a parada. Verifique o mount FISICAMENTE.")
-    anotar("ALERTA: nao confirmou a parada dos eixos")
+        return False, f"sem contato com o mount: {type(exc).__name__}: {exc}"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--aguardar", type=float, default=0.0, metavar="SEGUNDOS",
+        help=(
+            "insiste ate conseguir falar com o mount. No boot o servidor ASCOM"
+            " normalmente ainda nao subiu, e uma tentativa unica falha sempre."
+        ),
+    )
+    parser.add_argument("--intervalo", type=float, default=10.0)
+    args = parser.parse_args()
+
+    print(f"Parando o mount em {mount_address()} ...")
+    limite = time.monotonic() + max(0.0, args.aguardar)
+    tentativas = 0
+    while True:
+        tentativas += 1
+        parou, descricao = tentar_parar()
+        if parou:
+            print("Ambos os eixos confirmados em velocidade zero.")
+            anotar(f"{descricao} (tentativa {tentativas})")
+            return 0
+        if time.monotonic() >= limite:
+            break
+        # Enquanto o servidor ASCOM nao responde, o eixo pode estar andando: um
+        # MoveAxis em curso NAO para quando o servidor cai, medido neste mount
+        # em 2026-09-14. Insistir e a unica forma de alcanca-lo.
+        time.sleep(max(1.0, args.intervalo))
+
+    print(descricao)
+    if "sem contato" in descricao:
+        print("Se o driver estiver fora do ar, o eixo pode seguir em movimento:")
+        print("abra o servidor ASCOM e rode este programa de novo.")
+    else:
+        print("Verifique o mount FISICAMENTE.")
+    anotar(f"{descricao} (desistiu apos {tentativas} tentativas)")
     return 1
 
 
