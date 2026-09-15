@@ -31,8 +31,11 @@ def comandar(c, ex_px, ey_px):
 
 class Teste(unittest.TestCase):
     def setUp(self):
-        self.passo_px = MIN_S * TAXA * ESCALA          # 0,216 px
-        self.limiar_px = MIN_S * TAXA / 0.35 * ESCALA  # 0,617 px
+        self.passo_px = MIN_S * TAXA * ESCALA           # 0,216 px
+        self.limiar_px = MIN_S * TAXA / 0.35 * ESCALA   # 0,617 px
+        # O pulso forcado carrega ganho implicito passo/erro; a trava o limita
+        # ao dobro do ganho de projeto.
+        self.minimo_forcado_px = self.passo_px / (2 * 0.35)   # 0,309 px
 
     def test_canto_diagonal_agora_pulsa(self):
         """0,5 px em cada eixo: passa do raio 0,6 e nao alcancava nenhum eixo."""
@@ -53,6 +56,26 @@ class Teste(unittest.TestCase):
         c = ciclo()
         cmd = comandar(c, self.passo_px * 0.5, self.passo_px * 0.5)
         self.assertFalse(np.any(cmd), "nao pode pulsar abaixo do proprio passo")
+
+    def test_ganho_implicito_limitado(self):
+        """Entre o passo e a trava, o ganho passaria de 0,70: nao pode pulsar."""
+        c = ciclo()
+        meio = (self.passo_px + self.minimo_forcado_px) / 2
+        self.assertFalse(np.any(comandar(c, meio, meio)),
+                         f"erro de {meio:.3f} px daria ganho {self.passo_px/meio:.2f}")
+        c = ciclo()
+        acima = self.minimo_forcado_px * 1.05
+        self.assertTrue(np.any(comandar(c, acima, acima)),
+                        "acima da trava o pulso forcado deve sair")
+
+    def test_ganho_efetivo_no_canto_tipico(self):
+        """Raio 0,6 na diagonal: componentes 0,424 px, ganho 0,51."""
+        componente = 0.6 / np.sqrt(2)
+        c = ciclo()
+        self.assertTrue(np.any(comandar(c, componente, componente)))
+        ganho = self.passo_px / componente
+        self.assertLess(ganho, 2 * 0.35, f"ganho efetivo {ganho:.2f} passou do teto")
+        self.assertGreater(ganho, 0.35, "abaixo do ganho de projeto nao faria sentido")
 
     def test_repouso_continua_parado(self):
         """Sem proposta da porta radial, nada se move."""

@@ -66,12 +66,20 @@ class BoundedCorrectionCycle:
             # mover. Na pratica a zona morta virava um quadrado de lado 1,23 px em
             # vez do circulo de raio 0,6 px que o projeto pretende.
             #
-            # A saida e pulsar o eixo dominante pelo tempo minimo. So se o erro
-            # daquele eixo for pelo menos o proprio passo minimo: mover mais do que
-            # o erro passaria do zero e criaria oscilacao onde antes havia so
-            # inercia.
+            # A saida e pulsar o eixo dominante pelo tempo minimo. Mas o pulso
+            # minimo tem tamanho fixo, entao ele carrega um GANHO implicito: o
+            # passo dividido pelo erro. Exigir apenas que o erro alcance o passo
+            # deixaria esse ganho chegar a 1,0, isto e, corrigir o erro inteiro
+            # numa tacada. Com 97,3% do erro de controle sendo aleatorio, medido
+            # na sessao de 2026-09-15, ganho 1,0 seria perseguir turbulencia, que
+            # e exatamente o que o ganho de projeto de 0,35 existe para evitar --
+            # e foi por isso que 0,35 venceu 0,90 no A/B.
+            #
+            # O teto e o dobro do ganho de projeto. No canto tipico, com raio 0,6
+            # na diagonal e componentes de 0,424 px, o ganho efetivo fica em 0,51.
             passo_minimo = self.min_s * self.min_rate
-            alcancavel = pedido & (confiavel >= passo_minimo)
+            ganho_maximo = min(2.0 * self.fraction, 1.0)
+            alcancavel = pedido & (confiavel >= passo_minimo / ganho_maximo)
             if np.any(alcancavel):
                 dominante = int(np.argmax(np.where(alcancavel, confiavel, -np.inf)))
                 eligible = np.zeros(2, dtype=bool)
