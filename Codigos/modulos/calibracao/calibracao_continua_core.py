@@ -123,7 +123,13 @@ CALIBRATION_EXPOSURE_MAX_RISE = 4.0
 # e so fundo jogaria a exposicao no teto.
 CALIBRATION_EXPOSURE_MIN_CONTRAST = 5.0
 CALIBRATION_EXPOSURE_MIN_S = 100e-6
-CALIBRATION_EXPOSURE_MAX_S = 60e-3
+# Teto ditado pela varredura, nao escolhido a esmo. A 0,004 deg/s e 9183
+# px/deg a luz corre 36,7 px/s: a 25 ms o rastro dentro de um quadro fica
+# abaixo de 1 px, e a taxa se mantem acima de ~20 Hz, o que ainda enche os
+# bins de 0,002 deg. A 45 ms, medido em 2026-09-14, a taxa caiu para 11 Hz.
+# Chegar ao pico alvo importa MENOS que isto: o nivel muda o centro de massa
+# em 0,03 px, enquanto uma varredura mal amostrada estraga a matriz inteira.
+CALIBRATION_EXPOSURE_MAX_S = 25e-3
 
 # Limites iniciais de repetibilidade, nao uma garantia de precisao subpixel.
 MAX_DIRECTION_SCALE_RATIO = 1.35
@@ -1206,6 +1212,16 @@ def _ajustar_exposicao_sem_ceifar(exposicao_s: float) -> dict:
         print("  numero maximo de passos atingido.")
 
     final = historico[-1]
+    if (final["pico_maximo"] < CALIBRATION_PEAK_TARGET - CALIBRATION_PEAK_TOLERANCE
+            and escolhida >= CALIBRATION_EXPOSURE_MAX_S):
+        print(
+            f"  Beacon fraco: o pico parou em {final['pico_maximo']:.0f} com a"
+            f" exposicao no teto de {CALIBRATION_EXPOSURE_MAX_S * 1e6:.0f} us."
+        )
+        print(
+            "  Nao e impeditivo: o nivel quase nao move o centro de massa. Vale"
+            " seguir, e so desistir se o detector perder o alvo."
+        )
     if final["pixels_ceifados_maximo"] > 0 or final["pico_maximo"] > CALIBRATION_PEAK_CEILING:
         print(
             "  AVISO: o nucleo ainda satura. A matriz sai, mas o alvo salvo"
@@ -1271,7 +1287,21 @@ def main(profile_name: str | None = None) -> None:
         set_gain(foco.CAMERA_GAIN); foco.set_focus_mode("dual")
         camera = direct_camera()
         camera.reset_roi()
-        full_frame = foco.capture_frame(foco.EXPOSURE_SECONDS, light=True)
+        # A exposicao e resolvida ANTES da selecao manual, e por dois motivos.
+        # O detector trava a ilha por SEMELHANCA de aparencia, entao mudar a
+        # exposicao depois da selecao muda o tamanho e o brilho da mancha e o
+        # candidato deixa de casar com a assinatura travada: em 2026-09-14, com
+        # o ajuste rodando depois, a exposicao subiu de 15000 para 44776 us e a
+        # referencia seguinte rejeitou 165 candidatos seguidos. E, de quebra,
+        # assim o operador recorta sobre um quadro ja bem exposto, em vez da
+        # janela preta que o piso de RAW_SIGNAL_MIN produzia.
+        print("\nAjustando a exposicao para o nucleo nao ceifar:")
+        ajuste_exposicao = _ajustar_exposicao_sem_ceifar(foco.EXPOSURE_SECONDS)
+        exposicao_s = ajuste_exposicao["exposure_seconds"]
+        foco.EXPOSURE_SECONDS = exposicao_s
+        print(f"  exposicao da calibracao: {exposicao_s * 1e6:.0f} us\n")
+
+        full_frame = foco.capture_frame(exposicao_s, light=True)
         _avisar_se_quadro_sem_sinal(full_frame)
         # ``recapturar`` faz a tecla R pegar um quadro NOVO, nao so refazer o
         # recorte. O tracker ja fazia isso; aqui a selecao acontecia sobre um
@@ -1304,15 +1334,6 @@ def main(profile_name: str | None = None) -> None:
             )
         else:
             print("Mascara de pixels ruins: ausente.")
-        # Depois da ROI: o pico que interessa e o de dentro do recorte, e so
-        # aqui a mascara de pixels ruins ja esta ancorada.
-        print("\nAjustando a exposicao para o nucleo nao ceifar:")
-        ajuste_exposicao = _ajustar_exposicao_sem_ceifar(foco.EXPOSURE_SECONDS)
-        exposicao_s = ajuste_exposicao["exposure_seconds"]
-        # Vale para todo o resto da calibracao, varreduras inclusive.
-        foco.EXPOSURE_SECONDS = exposicao_s
-        print(f"  exposicao da calibracao: {exposicao_s * 1e6:.0f} us\n")
-
         initial_position = read_altaz()
         initial_az, initial_alt = initial_position
         summary.update(initial_az_deg=initial_az, initial_alt_deg=initial_alt,
