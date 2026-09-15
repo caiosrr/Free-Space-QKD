@@ -21,10 +21,13 @@ para eu nao precisar ficar entrando pelo AnyDesk".
 
 Em nenhum modo ele le tela, registra teclas ou identifica o que alguem faz.
 
-Uso:
+Uso, a partir da pasta Codigos:
 
-    python programas_principais/publicar_estado_pc.py --saida "C:/Users/.../Meu Drive/uff"
+    # so aviso no Telegram, sem arquivo nenhum
+    python programas_principais/publicar_estado_pc.py --telegram-token TOKEN --telegram-chat ID
 
+    # tambem grava os arquivos numa pasta sincronizada
+    python programas_principais/publicar_estado_pc.py --saida "G:/Meu Drive/uff"
 Para rodar sozinho, registre como tarefa agendada repetindo a cada 1 minuto.
 As instrucoes ficam no final deste arquivo.
 """
@@ -200,8 +203,8 @@ def montar(incluir_ociosidade: bool) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
-        "--saida", type=Path, required=True,
-        help="pasta onde gravar (aponte para uma pasta sincronizada na nuvem)",
+        "--saida", type=Path, default=None,
+        help="pasta onde gravar os arquivos; sem ela, so o aviso do Telegram",
     )
     parser.add_argument(
         "--telegram-token", default=os.environ.get("QKD_TELEGRAM_TOKEN"),
@@ -220,15 +223,21 @@ def main() -> int:
     )
     args = parser.parse_args()
     estado = montar(args.incluir_ociosidade)
+    # Sem --saida so o Telegram avisa, mas ainda e preciso um lugar para o
+    # marcador de estado: sem ele o programa nao sabe o que mudou.
+    somente_aviso = args.saida is None
+    if somente_aviso:
+        args.saida = CODIGOS_DIR / "resultados" / "estado_pc"
     args.saida.mkdir(parents=True, exist_ok=True)
 
-    # Escrita atomica: um leitor na nuvem nunca pega o arquivo pela metade.
-    destino = args.saida / "estado_pc_uff.json"
-    temporario = destino.with_suffix(".json.tmp")
-    temporario.write_text(
-        json.dumps(estado, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    temporario.replace(destino)
+    if not somente_aviso:
+        # Escrita atomica: um leitor na nuvem nunca pega o arquivo pela metade.
+        destino = args.saida / "estado_pc_uff.json"
+        temporario = destino.with_suffix(".json.tmp")
+        temporario.write_text(
+            json.dumps(estado, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        temporario.replace(destino)
 
     # Versao legivel sem abrir JSON, para olhar do celular.
     linhas = [
@@ -257,7 +266,8 @@ def main() -> int:
                 linhas.append(f"{rotulo:19s}: {t[chave]}{sufixo}")
     else:
         linhas.append(f"tracker            : parado ({t.get('motivo', 'ultima sessao encerrada')})")
-    (args.saida / "estado_pc_uff.txt").write_text("\n".join(linhas) + "\n", encoding="utf-8")
+    if not somente_aviso:
+        (args.saida / "estado_pc_uff.txt").write_text("\n".join(linhas) + "\n", encoding="utf-8")
 
     print("\n".join(linhas))
 
