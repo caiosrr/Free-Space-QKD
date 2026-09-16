@@ -14,6 +14,10 @@ não é o conjunto completo de comandos que o firmware aceita, por dois motivos:
 
 Fonte: https://github.com/indilib/indi/blob/master/drivers/telescope/lx200am5.cpp
 
+**Dois mounts, firmwares diferentes.** O da UFF roda a versão de 14/07/2025 e o
+do laboratório a de 25/01/2026. Eles respondem diferente a `:GU#`, `:Gh#` e
+`:GAT#`, então um resultado medido num não vale automaticamente no outro.
+
 ---
 
 ## Comandos específicos do AM5
@@ -77,6 +81,37 @@ O driver considera a escrita aceita quando a resposta é `'1'`.
 do limite inferior atual de 0. Habilitar sem antes baixar o limite deixaria o
 mount fora da própria faixa, e não há documentação do que o firmware faz nesse
 caso. Por isso `limite_altitude_firmware.py` recusa habilitar sem folga.
+
+#### O firmware recusa limite inferior negativo: medido em 2026-09-16
+
+Testado no mount do laboratório, firmware de 25/01/2026, com o controle de
+limite desligado e restaurando 0 no fim:
+
+```
+:SLL01#   respondeu '1'   lê 1   ACEITO
+:SLL05#   respondeu '1'   lê 5   ACEITO
+:SLL-1#   respondeu '0'   lê 5   recusado
+:SLL-01#  respondeu '0'   lê 5   recusado
+:SLL-5#   respondeu '0'   lê 5   recusado
+:SLL00#   respondeu '1'   lê 0   ACEITO
+```
+
+O caminho de escrita funciona: positivos são aceitos e a leitura confirma. O
+firmware recusa valores negativos nas três variantes de formato, então não era o
+formato, era o valor.
+
+**Consequência: o limite de altitude não serve como proteção neste
+experimento.** A altitude reportada zera a cada ligamento do mount, e o enlace
+opera com ela em torno de 0. Um limite inferior de 0 dispararia na primeira
+correção para baixo, e o tracker faz muitas: na sessão de 10 h de 2026-09-15 a
+altitude terminou 10 arcsec abaixo do início.
+
+Existe uma saída teórica, registrada para não ser redescoberta: ligar o mount
+apontado cerca de 1° abaixo do beacon e subir 1° para adquirir faria a posição
+de operação ler +1°, e aí um limite em 0 protegeria contra 1° de deriva para
+baixo. Custa um procedimento de apontamento a cada ligamento, com reaquisição do
+beacon, e cria o risco de alguém ligar errado e o limite disparar no meio de uma
+sessão longa. Não compensa.
 
 ### Posição e movimento
 
