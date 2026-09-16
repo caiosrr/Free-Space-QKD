@@ -312,7 +312,20 @@ WATCHDOG_READ_FAILURES = 5
 
 # Velocidade maxima durante o tracking. O limite menor reduz a distancia que o
 # mount pode percorrer entre duas verificacoes do watchdog.
-MAX_TRACKING_RATE_DEG_S = 0.10
+#
+# Baixado de 0,10 para 0,005 em 2026-09-16, e o motivo e o caso em que o tracker
+# MORRE. Enquanto ele vive, o watchdog de posicao ja limita o percurso; quando
+# ele morre, o watchdog morre junto e o unico limite que resta e a velocidade do
+# comando que ficou em curso, porque o MoveAxis nao tem prazo.
+#
+# Nao ha custo: todo comando do laco passa pelo BoundedCorrectionCycle, que
+# forca a velocidade minima de 0,001042 deg/s. Medido nas duas sessoes de
+# 2026-09-15, em 172 comandos nao nulos, a taxa foi SEMPRE 0,001042 e nenhuma
+# outra. O teto de 0,10 nunca chegou a ser exercido.
+#
+# O que muda e o pior caso de deriva: de 360 graus/h para 18 graus/h, vinte
+# vezes menos. O autoteste e o retorno tem tetos proprios e nao sao afetados.
+MAX_TRACKING_RATE_DEG_S = 0.005
 
 # Ao atingir tempo/deslocamento, volta devagar para a posicao inicial e encerra.
 RETURN_TO_START_ON_LIMIT = True
@@ -396,6 +409,13 @@ if MAX_SESSION_HOURS <= 0:
     raise ValueError("MAX_SESSION_HOURS precisa ser positivo.")
 if MAX_OFFSET_AZ_DEG <= 0 or MAX_OFFSET_ALT_DEG <= 0:
     raise ValueError("Os limites absolutos dos eixos precisam ser positivos.")
+# O teto do tracking precisa caber a velocidade dos micropulsos, senao o proprio
+# controle fino seria ceifado pelo limite que existe para proteger dele.
+if MAX_TRACKING_RATE_DEG_S < 2.0 * 0.001042:
+    raise ValueError(
+        "MAX_TRACKING_RATE_DEG_S precisa deixar folga sobre a velocidade minima "
+        "do mount (0,001042 deg/s), senao o micropulso seria limitado."
+    )
 if (
     BORDER_CONFIRM_SECONDS <= 0
     or not 0 < BORDER_MIN_PEAK_RATIO <= 1
