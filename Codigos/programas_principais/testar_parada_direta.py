@@ -1,4 +1,4 @@
-"""Poe o eixo de azimute a andar, para o teste da parada pela serial.
+"""Poe um eixo a andar, para os testes de seguranca.
 
 Existe uma pergunta que nem o reinicio nem o simulador respondem: a parada por
 LX200 consegue deter um eixo que esta EM MOVIMENTO, com o servidor ASCOM fora do
@@ -47,7 +47,11 @@ VELOCIDADE_PADRAO = 0.001042  # deg/s, a mesma dos micropulsos
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--velocidade", type=float, default=VELOCIDADE_PADRAO,
-                        help="deg/s no azimute (padrao: a dos micropulsos)")
+                        help="deg/s (padrao: a dos micropulsos)")
+    parser.add_argument("--eixo", type=int, choices=(0, 1), default=0,
+                        help="0 = azimute, 1 = altitude")
+    parser.add_argument("--sentido", type=int, choices=(1, -1), default=1,
+                        help="-1 inverte; em altitude, -1 desce")
     args = parser.parse_args()
 
     uso = motivo_de_uso()
@@ -59,8 +63,10 @@ def main() -> int:
     ensure_unparked()
     ensure_not_tracking()
     az, alt = read_altaz()
+    nome_eixo = "azimute" if args.eixo == 0 else "ALTITUDE"
     print(f"Mount em {mount_address()}")
     print(f"  posicao inicial: az {az:.5f}  alt {alt:.5f}")
+    print(f"  eixo: {nome_eixo}   sentido: {args.sentido:+d}")
     print(f"  velocidade: {args.velocidade} deg/s = {args.velocidade * 3600:.2f} arcsec/s")
     print()
     print("ESTE PROGRAMA DEIXA O EIXO DE AZIMUTE ANDANDO.")
@@ -69,9 +75,10 @@ def main() -> int:
         print("Cancelado; nada foi movido.")
         return 1
 
-    move_axis(0, args.velocidade, True)
+    move_axis(args.eixo, args.sentido * args.velocidade, True)
     print()
-    print(f"EIXO EM MOVIMENTO a {args.velocidade * 3600:.2f} arcsec/s.")
+    print(f"{nome_eixo.upper()} EM MOVIMENTO a "
+          f"{args.sentido * args.velocidade * 3600:+.2f} arcsec/s.")
     print()
     print("Agora, na ordem:")
     print("  1. feche o servidor ASCOM (Exit)")
@@ -82,7 +89,8 @@ def main() -> int:
     print("com o eixo em movimento. Se disser 'AINDA EM MOVIMENTO', reabra o")
     print("servidor ASCOM e rode parar_mount.py.")
     print()
-    print(f"Para voltar depois:  python programas_principais/ir_para_posicao.py --az {az:.5f}")
+    eixo_rotulo = f"--az {az:.5f}" if args.eixo == 0 else f"--alt {alt:.5f}"
+    print(f"Para voltar depois:  python programas_principais/ir_para_posicao.py {eixo_rotulo}")
     return 0
 
 
