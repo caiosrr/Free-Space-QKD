@@ -1042,6 +1042,43 @@ porque calibração não escreve telemetria de tracker. O mount estava entre var
 nada se perdeu. A pergunta certa é "alguém está comandando o mount", não "o
 tracker está gravando".
 
+### LX200 direto não substitui o ASCOM: medido em 2026-09-16
+
+A hipótese era tirar o intermediário para ganhar latência e, principalmente,
+segurança, por meio de um pulso com duração cronometrada no firmware. Os dois
+motivos caíram na medida.
+
+**Latência: a serial é mais LENTA.** Ida e volta de `:GZ#` pela COM5, mediana de
+6,6 ms com 30 repetições, mínima 3,5 ms. O Alpaca é HTTP em localhost, da ordem
+de 1 a 3 ms. Tirar o intermediário pioraria, não melhoraria. E nenhum dos dois
+importa: o pulso mínimo do controle é de 22 ms.
+
+**Resolução: idêntica.** O `:GZ#` entrega 1 arcsec, a mesma quantização que o
+Alpaca já entrega, medida em 167337 leituras. É limite do firmware.
+
+**Pulso com duração: não existe neste mount.** `:Mg<direção><ms>` deu
+deslocamento **zero** em 200, 500, 1000 e 2000 ms, nos dois sentidos. Não é
+falta de sensibilidade: com a taxa de guiding que o próprio mount reporta em
+`:Ggr#` = 0,50× sideral, o pulso de 200 ms deveria mover 1,5 arcsec e o de
+2000 ms, 15 arcsec, ambos acima da resolução de 1 arcsec.
+
+Isso fecha a questão por dois caminhos independentes: o `PulseGuide` do ASCOM
+também não move, e agora o LX200 cru também não. Não é defeito do driver, é o
+firmware, provavelmente porque guiding pressupõe rastreio ligado e coordenadas
+equatoriais, e o enlace opera em AltAz com `ensure_not_tracking()`.
+
+Consequência prática: **não há pulso autolimitado no firmware**, e a proteção
+contra deriva continua dependendo inteiramente das camadas de software
+descritas acima.
+
+**O que se aprendeu de útil:** `:Ggr#` expõe a taxa de guiding, 0,50× sideral ou
+7,52 arcsec/s, contra os 3,75 arcsec/s do nosso controle fino. E `:GU#` devolve
+um estado resumido rico, `nNZtM000000440`, que vale decodificar pela documentação
+da ZWO se algum dia for preciso monitorar o mount sem ASCOM.
+
+**Decisão:** manter o arranjo atual, ASCOM para operar e LX200 para a segurança.
+A separação não é redundância, é o que permite a tarefa de boot agir sem login.
+
 #### Cobertura depois desta mudança
 
 | cenário | quem cobre |
