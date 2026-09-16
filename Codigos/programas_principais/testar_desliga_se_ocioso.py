@@ -145,6 +145,7 @@ def main() -> int:
         return 1
 
     movendo = False
+    desfecho = "nao chegou a medir"
     try:
         if args.movendo:
             move_axis(0, VELOCIDADE, True)
@@ -177,6 +178,11 @@ def main() -> int:
         else:
             desfecho = esperar_ocioso(args.minutos, args.porta)
         print(f"\n  DESFECHO: {desfecho}")
+    except KeyboardInterrupt:
+        # Encerrar no Ctrl+C e uso normal aqui: o operador viu o que precisava
+        # antes do prazo. O finally ainda reconecta e para os eixos.
+        print(f"\n  interrompido pelo operador apos ver o suficiente")
+        desfecho = "interrompido; ate ali o mount seguia vivo"
     finally:
         if args.nivel != "api":
             volta = ("REABRA o servidor ASCOM" if args.nivel == "servidor"
