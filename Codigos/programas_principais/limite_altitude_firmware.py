@@ -114,11 +114,19 @@ def ler_estado(porta_serial) -> dict:
 
 def escrever_limite(porta_serial, comando_escrita: str, comando_leitura: str,
                     valor: int, rotulo: str) -> bool:
-    """Escreve e CONFERE lendo de volta. O formato exato nao esta documentado."""
-    resposta = conversar(porta_serial, f"{comando_escrita}{valor}#")
+    """Escreve e CONFERE lendo de volta.
+
+    O formato vem do driver INDI: ``:SLL%02d#`` e ``:SLH%02d#``, ou seja inteiro
+    com dois digitos e zero a esquerda. Escrever ``:SLL0#`` em vez de
+    ``:SLL00#`` pode ser recusado por um firmware que espere largura fixa. Em
+    -1 o printf entrega "-1", que ja ocupa os dois caracteres.
+
+    O driver INDI considera a escrita aceita quando a resposta e '1'.
+    """
+    resposta = conversar(porta_serial, f"{comando_escrita}{valor:02d}#")
     lido = inteiro(conversar(porta_serial, comando_leitura))
-    print(f"  {rotulo}: pedi {valor}, o mount respondeu {resposta!r}, "
-          f"e agora le {lido}")
+    print(f"  {rotulo}: enviei {comando_escrita}{valor:02d}#, "
+          f"o mount respondeu {resposta!r}, e agora le {lido}")
     if lido == valor:
         print("    aceito.")
         return True
