@@ -864,6 +864,12 @@ deriva também. O remédio seria pior que a doença.
 
 ### Roteiro de verificação quando o mount voltar
 
+**Executado em 2026-09-14; os resultados estão nas seções acima.** O
+`consultar_mount.py` foi removido depois disso, por ter respondido o que
+tinha de responder. O equivalente atual, e mais amplo, é
+`programas_principais/sondar_mount_lx200.py`, que sonda pelo LX200 em vez do
+ASCOM. Para recuperar o antigo: `git show <commit>:Codigos/programas_principais/consultar_mount.py`.
+
 1. `python programas_principais/consultar_mount.py` — só lê, não comanda.
    Confere `SupportedActions`, `CanPulseGuide`, taxas de guiagem e faixas de
    velocidade por eixo.
