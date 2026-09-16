@@ -68,8 +68,17 @@ class SlowBiasEstimator:
         Deslocar preserva a janela inteira: cada amostra leva o mesmo desconto
         que o mount aplicou, a mediana passa a descrever o estado corrigido no
         mesmo instante, e nao ha aquecimento nenhum. O descasamento entre o
-        comandado e o executado (medido: o encoder entrega 0,95 do comandado)
-        aparece como residuo nas amostras NOVAS, que e o comportamento certo.
+        comandado e o executado aparece como residuo nas amostras NOVAS, que e o
+        comportamento certo.
+
+        Sobre esse descasamento: media em 2026-09-16, com movimento SUSTENTADO,
+        o mount entrega exatamente a taxa comandada, razao 1,00 tanto a 3,751
+        quanto a 5,400 arcsec/s, com residuo de ajuste abaixo de 1 arcsec. O
+        0,95 que este comentario afirmava nao vale para a taxa. Se ele existe, e
+        efeito da rampa de aceleracao dentro de um pulso CURTO, que dura de 22 a
+        120 ms e pode nao chegar a taxa nominal. Isso continua justificando
+        descontar o movimento pelo comando integrado e nao pelo nominal, mas por
+        um motivo diferente do que estava escrito.
         """
         deslocamento = np.asarray([ddx_px, ddy_px], dtype=float)
         if not np.all(np.isfinite(deslocamento)):
