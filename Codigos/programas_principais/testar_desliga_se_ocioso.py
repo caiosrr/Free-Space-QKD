@@ -20,17 +20,28 @@ estado na hora e desiste.
     ANDANDO, que e o cenario real. Aqui o desligamento e o resultado desejado, e
     nao um acidente: e ele que pararia uma deriva sem ninguem por perto.
 
-Como saber se desligou: o Alpaca para de responder. Para nao confundir "mount
-desligado" com "servidor ASCOM confuso", o programa tambem tenta a serial, que
-so responde se o mount estiver vivo.
+TRES NIVEIS DE DESCONEXAO, porque do ponto de vista do mount eles sao coisas
+diferentes, e "ocupado" pode significar "tem alguem falando comigo":
+
+    --nivel api        Connected = False. A porta serial CONTINUA ABERTA pelo
+                       servidor, entao o mount pode seguir se achando ocupado.
+                       E o mais fraco dos tres, e foi o unico ja testado.
+    --nivel servidor   voce fecha o servidor ASCOM e a porta serial fecha.
+    --nivel cabo       voce arranca o USB e o link some fisicamente.
+
+Como saber se desligou: nos dois primeiros niveis o programa pergunta pela
+serial, que so responde se o mount estiver vivo, e distingue isso de "servidor
+ASCOM confuso". No nivel cabo nao ha serial para perguntar: quem observa e o
+operador, pelo LED do mount, e a confirmacao vem ao religar.
 
 Religar e no botao. Nao danifica: a posicao zera no arranque de qualquer forma e
 o harmonic drive nao retrocede sozinho.
 
 Uso, a partir da pasta Codigos, com o servidor ASCOM aberto e voce ao lado:
 
-    python programas_principais/testar_desliga_se_ocioso.py
-    python programas_principais/testar_desliga_se_ocioso.py --movendo
+    python programas_principais/testar_desliga_se_ocioso.py --nivel servidor
+    python programas_principais/testar_desliga_se_ocioso.py --nivel cabo
+    python programas_principais/testar_desliga_se_ocioso.py --nivel cabo --movendo
 """
 
 from __future__ import annotations
@@ -102,6 +113,13 @@ def main() -> int:
                         help="quanto esperar desconectado")
     parser.add_argument("--movendo", action="store_true",
                         help="ETAPA 2: poe o eixo a andar antes de desconectar")
+    parser.add_argument("--nivel", choices=("api", "servidor", "cabo"), default="api",
+                        help=(
+                            "quao fundo desconectar. api: Connected=False, e a "
+                            "porta serial continua aberta. servidor: voce fecha "
+                            "o servidor ASCOM e a porta fecha. cabo: voce "
+                            "arranca o USB e o link some."
+                        ))
     args = parser.parse_args()
 
     uso = motivo_de_uso()
@@ -139,11 +157,32 @@ def main() -> int:
                         timeout=10.0)
         print(f"  ShutdownIfIdle devolveu: {resposta!r}")
 
-        call("PUT", "connected", data={"Connected": False}, timeout=5.0)
-        print(f"  desconectado; esperando {args.minutos:.0f} min\n")
-        desfecho = esperar_ocioso(args.minutos, args.porta)
+        if args.nivel == "api":
+            call("PUT", "connected", data={"Connected": False}, timeout=5.0)
+            print("  Connected = False enviado (a porta serial segue aberta)")
+        else:
+            alvo = ("FECHE o servidor ASCOM agora" if args.nivel == "servidor"
+                    else "ARRANQUE o cabo USB agora")
+            print(f"\n  >>> {alvo} <<<")
+            input("  e aperte Enter aqui: ")
+
+        print(f"  esperando {args.minutos:.0f} min\n")
+        if args.nivel == "cabo":
+            # Sem cabo nao ha serial para perguntar. Quem observa e o operador:
+            # o LED do mount diz na hora, e o proprio COM6 desaparece do Windows
+            # se ele desligar.
+            print("  OLHE O LED DO MOUNT. Ele apaga se desligar.")
+            time.sleep(args.minutos * 60.0)
+            desfecho = "veja o LED, e a resposta abaixo ao religar o cabo"
+        else:
+            desfecho = esperar_ocioso(args.minutos, args.porta)
         print(f"\n  DESFECHO: {desfecho}")
     finally:
+        if args.nivel != "api":
+            volta = ("REABRA o servidor ASCOM" if args.nivel == "servidor"
+                     else "RELIGUE o cabo USB e reabra o servidor ASCOM")
+            print(f"\n  >>> {volta} <<<")
+            input("  e aperte Enter aqui: ")
         print("\n  reconectando e parando os eixos, por seguranca")
         try:
             call("PUT", "connected", data={"Connected": True}, timeout=5.0)
@@ -163,6 +202,7 @@ def main() -> int:
 
     print()
     print("Como ler:")
+    print(f"  (nivel testado: {args.nivel})")
     print("  DESLIGOU na etapa 1  -> o recurso ARMA, e vale rodar a etapa 2")
     print("  DESLIGOU na etapa 2  -> achamos a protecao: o mount se desliga")
     print("     sozinho quando o cliente some, mesmo com um comando ativo")
