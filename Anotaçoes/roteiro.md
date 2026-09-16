@@ -1079,6 +1079,48 @@ da ZWO se algum dia for preciso monitorar o mount sem ASCOM.
 **Decisão:** manter o arranjo atual, ASCOM para operar e LX200 para a segurança.
 A separação não é redundância, é o que permite a tarefa de boot agir sem login.
 
+### Seguranca no firmware: seis testes, e um deles funciona
+
+Medido em 2026-09-16 com o mount do laboratorio na mao, firmware 1.8.8 de
+25/01/2026.
+
+| caminho | resultado |
+|---|---|
+| `PulseGuide` do ASCOM | nao move |
+| `:Mg` com duracao em ms | deslocamento zero |
+| busca por watchdog no fonte do driver INDI | nenhuma ocorrencia |
+| **cabo USB arrancado com o eixo andando** | **nao para** |
+| limite inferior `:SLL` negativo | recusado |
+| limite de elevacao classico `:Sh` / `:So` | nao grava |
+
+Nao existe dead-man de firmware neste mount.
+
+**Mas o limite de altitude funciona.** Com faixa [1, 90] habilitada e o eixo
+descendo a 0,05 deg/s, o firmware parou em +1,0158 graus e manteve o eixo imovel
+por 20 s com o `MoveAxis` ainda ativo. Nunca mandamos parar. Overshoot de 57
+arcsec, consistente com a desaceleracao.
+
+O que impede de usar nao e o mecanismo, sao as faixas aceitas:
+
+```
+:SLL   aceita 0, 1, 5      recusa negativos
+:SLH   aceita 60 a 90      recusa abaixo de 60
+```
+
+O enlace opera com a altitude lendo ~0, porque ela zera a cada ligamento do
+mount, e o limite inferior nao desce abaixo de 0.
+
+**Contorno possivel, agora com base medida:** ligar o mount cerca de 2 graus
+abaixo do beacon e subir para adquirir faria a operacao ler +2, e um limite
+inferior em 1 barraria a deriva descendente depois de um grau, pelo firmware,
+sem software nenhum. Custa um procedimento de apontamento a cada ligamento e o
+risco de alguem ligar errado.
+
+Outros achados da sondagem: `:Rv%.2f#` e `:Rg%.2f#` aceitam taxa numerica
+continua, nao classe discreta; a serial tem latencia maior que o Alpaca, 6,0 ms
+contra os 1 a 3 ms tipicos de HTTP local; e a velocidade minima de 0,001042
+deg/s e real, porque abaixo dela o mount nao anda em vez de grampear.
+
 #### Cobertura depois desta mudança
 
 | cenário | quem cobre |
