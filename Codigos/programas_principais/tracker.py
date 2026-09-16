@@ -1,8 +1,5 @@
 """Inicia o tracker principal com a camera ASI ou IDS.
 
-Sem argumentos, pergunta tudo (botao Play do VS Code). Com argumentos, roda sem
-prompt, o que permite relancar uma sessao por script:
-
     python programas_principais/tracker.py --camera ids --horas 0.5 --sem-autoteste
 """
 
