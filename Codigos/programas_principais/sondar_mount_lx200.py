@@ -74,6 +74,7 @@ CONSULTAS = [
     (":Gt#", "latitude"),
     (":GW#", "estado do alinhamento"),
     (":GT#", "taxa de rastreio"),
+    (":GAT#", "rastreio ativo"),
     (":Gm#", "lado do pilar"),
 ]
 
@@ -189,8 +190,52 @@ def sondar_taxas(porta_serial) -> None:
               f"{'(sem resposta)' if not resposta else repr(resposta)}")
 
 
+def sondar_limites(porta_serial) -> None:
+    """Le os limites de altitude do firmware. Nao escreve nada.
+
+    O driver INDI do AM5 mostra que o protocolo tem :SLL e :SLH para ESCREVER
+    os limites inferior e superior de altitude, e :SLE/:SLD para liga-los e
+    desliga-los. Isso importa porque a interface do driver ASCOM so aceitava de
+    0 a 30 graus, e o enlace opera a -0,042: descartamos o recurso por causa da
+    interface, nao do firmware.
+
+    Se o firmware aceitar um valor NEGATIVO, esse limite seria a unica protecao
+    deste mount que age sem nenhum software rodando -- o proprio controlador
+    barraria a deriva para baixo, que e a direcao perigosa, com o conjunto
+    apontado quase na horizontal.
+
+    So altitude: o protocolo nao expoe limite de azimute. E o eixo certo para
+    proteger, pelos dois motivos: apontar para baixo encontra o chao e a
+    estrutura, e foi onde a deriva se concentrou na sessao de 10 h de
+    2026-09-15, com -10 arcsec em altitude contra +4 em azimute.
+
+    Esta funcao e o primeiro passo e e inofensiva. Escrever um limite e outra
+    conversa, e so vale depois de ver que numeros o firmware devolve.
+    """
+    secao("5. LIMITES DE ALTITUDE NO FIRMWARE")
+    for comando, descricao in (
+        (":GLC#", "controle de limite ligado?"),
+        (":GLL#", "limite inferior"),
+        (":GLH#", "limite superior"),
+    ):
+        resposta = conversar(porta_serial, comando)
+        valor = arcsec(resposta)
+        extra = f"   = {valor / 3600.0:+.3f} graus" if valor is not None else ""
+        print(f"  {comando:8s} {descricao:28s} "
+              f"{'(sem resposta)' if not resposta else repr(resposta)}{extra}")
+    print()
+    print("  Como ler:")
+    print("    sem resposta nos tres -> o firmware nao expoe os limites por aqui")
+    print("    limite inferior em 0 ou positivo -> e a mesma faixa que o ASCOM")
+    print("      mostrava, e a pergunta passa a ser se aceita valor negativo")
+    print("    limite inferior ja negativo -> o recurso existe e esta util")
+    print()
+    print("  O enlace opera a -0,042 graus de altitude. Um limite em -0,5 daria")
+    print("  margem sem barrar a operacao normal.")
+
+
 def sondar_pulso(porta_serial, duracoes_ms) -> None:
-    secao("5. PULSO COM DURACAO (:Mg) -- MOVE O MOUNT")
+    secao("6. PULSO COM DURACAO (:Mg) -- MOVE O MOUNT")
     print("  Manda :Mg<direcao><ms> e mede o deslocamento pelo proprio encoder.")
     print("  Ida e volta em cada duracao, para nao acumular deriva.")
     print()
@@ -264,6 +309,7 @@ def main() -> int:
         medir_latencia(porta_serial)
         sondar_resolucao(porta_serial)
         sondar_taxas(porta_serial)
+        sondar_limites(porta_serial)
 
         if not args.mover:
             print()
