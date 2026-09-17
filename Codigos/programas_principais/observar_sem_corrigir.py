@@ -37,8 +37,10 @@ duracao compara.
 
 Uso, a partir da pasta Codigos, com o mount APONTADO e PARADO:
 
-    python programas_principais/observar_sem_corrigir.py --horas 10
-    python programas_principais/observar_sem_corrigir.py --horas 2 --intervalo-rajada 5
+    python programas_principais/observar_sem_corrigir.py --camera ids --horas 10
+    python programas_principais/observar_sem_corrigir.py --camera ids --horas 2 --intervalo-rajada 5
+
+Sem ``--camera`` ele pergunta, como os outros programas da pasta.
 """
 
 from __future__ import annotations
@@ -58,23 +60,7 @@ if str(CODIGOS_DIR) not in sys.path:
 import cv2
 import numpy as np
 
-from modulos.configuracoes.tracker import (
-    AUTO_EXPOSURE_MAX_US,
-    AUTO_EXPOSURE_MIN_US,
-)
-from modulos.controle.mount_em_uso import motivo_de_uso
-from modulos.controle.tracker_aquisicao import medir_laser
-from modulos.controle.tracker_camera import (
-    EXPOSURE_SECONDS,
-    capture_frame,
-    connect_camera,
-    disconnect_camera,
-    escolher_referencia_tracker,
-    latest_raw_frame,
-    set_camera_roi_validated,
-)
-from modulos.controle.tracker_exposicao import AutoExposureController
-from modulos.visao import detector_ilhas as foco
+from programas_principais._iniciador import aplicar_camera, perguntar_camera
 
 SAIDA_RAIZ = CODIGOS_DIR / "Link UFF" / "resultados" / "sem_correcao"
 
@@ -156,14 +142,39 @@ def salvar_empilhada(soma: np.ndarray, destino: Path, rotulo: str) -> None:
     cv2.imwrite(str(destino.with_name(f"{destino.stem}_{rotulo}_cor.png")), cor)
 
 
-def main() -> int:
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--camera", choices=["asi", "ids"], default=None)
     parser.add_argument("--horas", type=float, default=10.0)
     parser.add_argument("--intervalo-rajada", type=float, default=10.0,
                         help="minutos entre medidas de convergencia")
     parser.add_argument("--intervalo-imagem", type=float, default=60.0,
                         help="minutos entre gravacoes da imagem empilhada")
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+def main(args: argparse.Namespace) -> int:
+    # Importados aqui, e nao no topo, porque ``tracker_camera`` le a exposicao
+    # do ambiente no momento do import. Sem o perfil da camera ja aplicado o
+    # backend cai no padrao ``alpaca`` e o programa tenta conectar a ASI pelo
+    # servidor ASCOM, que foi como isto falhou em 2026-09-17.
+    from modulos.configuracoes.tracker import (  # noqa: PLC0415
+        AUTO_EXPOSURE_MAX_US,
+        AUTO_EXPOSURE_MIN_US,
+    )
+    from modulos.controle.mount_em_uso import motivo_de_uso  # noqa: PLC0415
+    from modulos.controle.tracker_aquisicao import medir_laser  # noqa: PLC0415
+    from modulos.controle.tracker_camera import (  # noqa: PLC0415
+        EXPOSURE_SECONDS,
+        capture_frame,
+        connect_camera,
+        disconnect_camera,
+        escolher_referencia_tracker,
+        latest_raw_frame,
+        set_camera_roi_validated,
+    )
+    from modulos.controle.tracker_exposicao import AutoExposureController  # noqa: PLC0415
+    from modulos.visao import detector_ilhas as foco  # noqa: PLC0415
 
     uso = motivo_de_uso()
     if uso:
@@ -325,4 +336,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    _args = parse_args()
+    _escolha = _args.camera or perguntar_camera({"1": "asi", "2": "ids"}, "2")
+    print(f"Observando com {aplicar_camera(_escolha)}.")
+    raise SystemExit(main(_args))
