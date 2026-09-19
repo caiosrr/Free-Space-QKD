@@ -167,7 +167,9 @@ def main(args: argparse.Namespace) -> int:
     from modulos.configuracoes.tracker import (  # noqa: PLC0415
         AUTO_EXPOSURE_MAX_US,
         AUTO_EXPOSURE_MIN_US,
+        roi_size_for_backend,
     )
+    from modulos.controle.cameras.backend import backend_name  # noqa: PLC0415
     from modulos.controle.mount_em_uso import motivo_de_uso  # noqa: PLC0415
     from modulos.controle.tracker_aquisicao import medir_laser  # noqa: PLC0415
     from modulos.controle.tracker_camera import (  # noqa: PLC0415
@@ -197,7 +199,16 @@ def main(args: argparse.Namespace) -> int:
     foco.set_focus_mode("dual")
     foco.reset_focus_lock()
     alvo = escolher_referencia_tracker()
-    largura, altura, alvo_x, alvo_y = set_camera_roi_validated(alvo.x_px, alvo.y_px)
+    # Mesma ROI e mesma chamada do tracker, de proposito: as duas sessoes so
+    # comparam se o recorte do sensor for o mesmo.
+    janela = roi_size_for_backend(backend_name())
+    largura, altura, alvo_x, alvo_y = set_camera_roi_validated(
+        janela,
+        janela,
+        alvo.x_px,
+        alvo.y_px,
+        alvo.focus_signature,
+    )
     print(f"ROI {largura}x{altura}, alvo em ({alvo_x:.1f}, {alvo_y:.1f})")
 
     exposicao_us = EXPOSURE_SECONDS * 1e6
