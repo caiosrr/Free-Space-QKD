@@ -39,6 +39,7 @@ Uso, a partir da pasta Codigos, com o mount APONTADO e PARADO:
 
     python programas_principais/observar_sem_corrigir.py --camera ids --horas 10
     python programas_principais/observar_sem_corrigir.py --camera ids --horas 2 --intervalo-rajada 5
+    python programas_principais/observar_sem_corrigir.py --camera ids --horas 3.25 --exposicao-us 300000 --ganho 8
 
 Sem ``--camera`` ele pergunta, como os outros programas da pasta.
 """
@@ -48,6 +49,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import sys
 import time
 from datetime import datetime
@@ -150,6 +152,10 @@ def parse_args() -> argparse.Namespace:
                         help="minutos entre medidas de convergencia")
     parser.add_argument("--intervalo-imagem", type=float, default=60.0,
                         help="minutos entre gravacoes da imagem empilhada")
+    parser.add_argument("--exposicao-us", type=float, default=None,
+                        help="exposicao inicial; sobrepoe a do perfil da camera")
+    parser.add_argument("--ganho", type=float, default=None,
+                        help="ganho analogico; sobrepoe o do perfil da camera")
     return parser.parse_args()
 
 
@@ -195,6 +201,13 @@ def main(args: argparse.Namespace) -> int:
     print(f"ROI {largura}x{altura}, alvo em ({alvo_x:.1f}, {alvo_y:.1f})")
 
     exposicao_us = EXPOSURE_SECONDS * 1e6
+    # O teto da config e trava de seguranca pensada para a operacao normal. Se
+    # a noite exigir uma exposicao inicial acima dele, prender o controlador
+    # abaixo do ponto de partida so faria a imagem escurecer.
+    teto_us = max(AUTO_EXPOSURE_MAX_US, exposicao_us)
+    if teto_us > AUTO_EXPOSURE_MAX_US:
+        print(f"Teto de exposicao elevado para {teto_us:.0f} us "
+              f"(config: {AUTO_EXPOSURE_MAX_US:.0f} us).")
     controlador = AutoExposureController(exposicao_us, started_at=time.perf_counter())
 
     soma_total = np.zeros((altura, largura), dtype=np.float64)
@@ -248,7 +261,7 @@ def main(args: argparse.Namespace) -> int:
             )
             if decisao.changed:
                 exposicao_us = float(
-                    np.clip(decisao.exposure_us, AUTO_EXPOSURE_MIN_US, AUTO_EXPOSURE_MAX_US)
+                    np.clip(decisao.exposure_us, AUTO_EXPOSURE_MIN_US, teto_us)
                 )
 
             if centro is None:
@@ -335,8 +348,29 @@ def main(args: argparse.Namespace) -> int:
     return 0
 
 
+def aplicar_sobreposicoes(args: argparse.Namespace) -> None:
+    """Exposicao e ganho pela linha de comando, sem editar o perfil da camera.
+
+    Precisa rodar DEPOIS de ``aplicar_camera`` e ANTES de qualquer import de
+    ``modulos``: a exposicao e lida do ambiente na hora do import.
+    """
+    if args.exposicao_us is not None:
+        os.environ["QKD_IDS_EXPOSURE_US"] = str(args.exposicao_us)
+        # O limite de aquisicao do perfil (50 fps) e impossivel com exposicao
+        # longa, e a camera recusa a combinacao. Deixo 10% de folga.
+        fps = 0.9 / (args.exposicao_us * 1e-6)
+        fps = min(fps, float(os.environ.get("QKD_IDS_FPS", fps)))
+        os.environ["QKD_IDS_FPS"] = str(round(fps, 3))
+        print(f"Exposicao inicial {args.exposicao_us:.0f} us, "
+              f"taxa limitada a {fps:.2f} fps.")
+    if args.ganho is not None:
+        os.environ["QKD_IDS_ANALOG_GAIN"] = str(args.ganho)
+        print(f"Ganho analogico {args.ganho:g}.")
+
+
 if __name__ == "__main__":
     _args = parse_args()
     _escolha = _args.camera or perguntar_camera({"1": "asi", "2": "ids"}, "2")
     print(f"Observando com {aplicar_camera(_escolha)}.")
+    aplicar_sobreposicoes(_args)
     raise SystemExit(main(_args))
