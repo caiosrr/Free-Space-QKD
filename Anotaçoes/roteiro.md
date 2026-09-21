@@ -1130,3 +1130,54 @@ deg/s e real, porque abaixo dela o mount nao anda em vez de grampear.
 | PC reinicia sozinho, ninguém logado | **parada direta por LX200, como SYSTEM** |
 | queda de energia | o mount perde alimentação junto |
 | PC não volta | nada em software; só nobreak ou tomada remota |
+
+### A escada de parada — 2026-09-21
+
+A tabela acima tinha um furo que só apareceu ao reler o `vigia_mount.py`: ele
+parava **pelo Alpaca**, ou seja pelo servidor ASCOM. Se o servidor caísse junto
+com o tracker, o vigia não alcançava o mount por caminho nenhum, embora a porta
+serial estivesse livre **justamente por isso**. Os dois caminhos tinham furos
+complementares e ninguém os havia encadeado.
+
+`modulos/controle/parada_emergencia.py` passa a concentrar a escada:
+
+| degrau | o que faz | por que existe |
+|---|---|---|
+| 1 | `stop_axes_safely` pelo Alpaca | caminho normal, respeita o driver |
+| 2 | cinco comandos LX200 pela serial | cobre o servidor já morto |
+| 3 | encerra quem escuta na porta do Alpaca | **libera a serial**, não para o eixo |
+| 4 | repete a serial | agora com a porta livre |
+
+O degrau 3 merece cuidado na leitura: encerrar o servidor **não detém nada
+sozinho**, isso está medido (266″ com o servidor fechado). Ele entra pelo efeito
+colateral de soltar a porta, não por esperança de encerramento ordenado.
+
+Cada degrau confirma pela **posição lida duas vezes**, não pelo comando ter sido
+aceito. E cada degrau tentado vai para o diário: de manhã, saber onde a escada
+resolveu diz qual proteção está de fato carregando o peso.
+
+Dois detalhes que saíram de brinde:
+
+- a porta serial deixou de ser constante. Era `COM5` fixo num caminho de
+  segurança, e o mount responde em `COM6` na outra máquina. Agora a escada
+  descobre sozinha, perguntando `:GVP#` em cada porta do sistema.
+- o servidor é localizado por **quem escuta na porta** do Alpaca, via `netstat`,
+  e não pelo nome do executável, que muda conforme seja ASCOM Remote, driver
+  nativo ou simulador.
+
+Cobertura depois disso: sobra o PC travado com o kernel morto, em que nada no
+próprio PC consegue agir, e o PC que não volta. Os dois exigem hardware.
+
+#### Por que o Wi-Fi do mount não entra aqui
+
+O AM5 tem modo estação e aceitaria LX200 por TCP, o que seria um canal
+independente da serial e do PC. Foi avaliado e **não vira proteção sozinho**:
+para mandar o `:Q#` alguém precisa estar vivo na rede local do mount, e a única
+máquina nossa nessa rede é exatamente a que travou. Redirecionar a porta para
+fora foi descartado por três motivos independentes: a rede da UFF é
+institucional e privada, expor um canal de movimento sem autenticação à internet
+é inaceitável, e queda de energia derruba PC, roteador e mount juntos.
+
+O `sondar_mount_wifi.py` existe para responder, na bancada, se o modo estação
+**derruba a serial**. Essa é a informação que interessa ter antes de alguém
+ligar o modo estação por engano na UFF.

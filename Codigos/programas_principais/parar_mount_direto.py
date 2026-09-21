@@ -44,14 +44,8 @@ if str(CODIGOS_DIR) not in sys.path:
 PORTA_PADRAO = "COM5"
 BAUD_PADRAO = 9600
 
-# Todos os comandos de parada do LX200. O driver do ASCOM pode estar usando
-# movimento por eixo ou por direcao; mandar os cinco cobre as duas formas sem
-# precisar adivinhar qual foi.
-PARADAS = (b":Q#", b":Qe#", b":Qw#", b":Qn#", b":Qs#")
-# Leituras de posicao em AltAz, para conferir se ainda esta andando.
-POSICAO = (b":GZ#", b":GA#")
-
 from modulos.controle.mount_em_uso import motivo_de_uso
+from modulos.controle.parada_emergencia import parar_pela_serial
 
 DIARIO = CODIGOS_DIR / "resultados" / "parar_mount.txt"
 
@@ -67,44 +61,10 @@ def anotar(texto: str) -> None:
         pass
 
 
-def ler_posicao(porta_serial) -> str:
-    """Azimute e altitude como o mount os devolve, sem interpretar."""
-    leituras = []
-    for comando in POSICAO:
-        porta_serial.reset_input_buffer()
-        porta_serial.write(comando)
-        leituras.append(porta_serial.read(32).decode("ascii", "replace").strip())
-    return " ".join(leituras)
-
-
-def parar(porta: str, baud: int, timeout: float = 2.0) -> tuple[bool, str]:
-    """Manda parar e confere pela posicao. Devolve (parado, descricao)."""
-    try:
-        import serial  # noqa: PLC0415
-    except ImportError:
-        return False, "pyserial ausente: python -m pip install pyserial"
-    try:
-        with serial.Serial(porta, baud, timeout=timeout) as s:
-            for comando in PARADAS:
-                s.write(comando)
-                time.sleep(0.05)
-            # Confere movendo o relogio, nao a fe: duas leituras separadas. Se a
-            # posicao mudar entre elas, algo ainda esta girando.
-            antes = ler_posicao(s)
-            time.sleep(1.5)
-            depois = ler_posicao(s)
-        if not antes or not depois:
-            return False, f"{porta} respondeu vazio; parada NAO confirmada"
-        if antes == depois:
-            return True, f"parado e confirmado em {porta} (posicao {depois})"
-        return False, f"AINDA EM MOVIMENTO em {porta}: {antes} -> {depois}"
-    except Exception as exc:
-        return False, f"{porta}: {type(exc).__name__}: {exc}"
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--porta", default=PORTA_PADRAO)
+    parser.add_argument("--porta", default=None,
+                        help="sem isto, descobre qual porta responde")
     parser.add_argument("--baud", type=int, default=BAUD_PADRAO)
     parser.add_argument(
         "--aguardar", type=float, default=0.0, metavar="SEGUNDOS",
@@ -119,12 +79,13 @@ def main() -> int:
         anotar(f"abortado: {uso}")
         return 0
 
-    print(f"Parando o mount por {args.porta} a {args.baud} baud ...")
+    alvo = args.porta or "a porta que responder"
+    print(f"Parando o mount por {alvo} a {args.baud} baud ...")
     limite = time.monotonic() + max(0.0, args.aguardar)
     tentativas = 0
     while True:
         tentativas += 1
-        ok, descricao = parar(args.porta, args.baud)
+        ok, descricao = parar_pela_serial(args.porta, args.baud)
         print(f"  {descricao}")
         if ok:
             anotar(f"{descricao} (tentativa {tentativas})")

@@ -16,6 +16,13 @@ O QUE ELE COBRE: o tracker morrer sozinho com o Windows de pe. E o caso mais
 provavel, e reduz a janela de reacao de ~90 s (o tempo de um boot) para poucos
 segundos.
 
+COMO ELE PARA: pela escada de ``parada_emergencia``, nao por uma tentativa so.
+Ate 2026-09-21 ele chamava apenas o Alpaca, e isso deixava um furo grande: se o
+SERVIDOR ASCOM tivesse caido junto com o tracker, o vigia nao alcancava o mount
+por nada, embora a porta serial estivesse livre justamente por isso. A escada
+tenta o Alpaca, depois a serial, e se preciso encerra o servidor para soltar a
+porta e repete a serial.
+
 O QUE ELE NAO COBRE: o PC inteiro morrer, porque ele morre junto. Para isso
 existe a tarefa de boot com ``parar_mount.py``. E se o PC nao voltar, nada em
 software resolve -- so um nobreak.
@@ -40,7 +47,8 @@ CODIGOS_DIR = Path(__file__).resolve().parent.parent
 if str(CODIGOS_DIR) not in sys.path:
     sys.path.insert(0, str(CODIGOS_DIR))
 
-from modulos.controle.mount_ascom import mount_address, stop_axes_safely
+from modulos.controle.mount_ascom import mount_address
+from modulos.controle.parada_emergencia import escalar_parada
 
 SESSOES = CODIGOS_DIR / "Link UFF" / "resultados" / "tracker" / "sessoes"
 # Mesmo diario das paradas de emergencia: um disparo deste vigia e do mesmo
@@ -91,6 +99,12 @@ def main() -> int:
         help="para o mount se a telemetria ficar parada por mais que isto (s)",
     )
     parser.add_argument("--intervalo", type=float, default=2.0)
+    parser.add_argument("--porta-serial", default=None,
+                        help="porta do degrau serial; sem isto ele descobre")
+    parser.add_argument("--sem-encerrar-servidor", dest="encerrar",
+                        action="store_false",
+                        help="nao derruba o servidor ASCOM no ultimo degrau")
+    parser.set_defaults(encerrar=True)
     args = parser.parse_args()
     if args.disparar_em <= args.armar_em:
         print("ERRO: --disparar-em precisa ser maior que --armar-em.")
@@ -116,13 +130,23 @@ def main() -> int:
                 estado = f"gravando (telemetria de {idade:.0f} s atras)"
             elif armado and idade > args.disparar_em:
                 print(f"\n[{agora()}] TRACKER PAROU de gravar ha {idade:.0f} s.")
-                print("[{}] parando os eixos...".format(agora()))
-                ok = stop_axes_safely(attempts=3, timeout=3.0)
-                print(f"[{agora()}] {'eixos zerados.' if ok else 'FALHA ao zerar, verifique o mount.'}")
+                print(f"[{agora()}] subindo a escada de parada:")
+                ok, degraus = escalar_parada(
+                    porta_serial=args.porta_serial,
+                    permitir_encerrar_servidor=args.encerrar,
+                )
+                print(
+                    f"[{agora()}] "
+                    + ("MOUNT PARADO." if ok else "FALHA: verifique o mount.")
+                )
                 anotar(
                     f"DISPAROU apos {idade:.0f} s sem telemetria: "
-                    + ("eixos zerados" if ok else "FALHA ao zerar, verifique o mount")
+                    + ("parado" if ok else "FALHA ao parar, verifique o mount")
                 )
+                # Cada degrau no diario: de manha, saber ONDE a escada
+                # resolveu diz qual protecao esta carregando o peso.
+                for degrau in degraus:
+                    anotar(f"  {degrau}")
                 # Desarma para nao ficar repetindo; rearma sozinho se o
                 # tracker voltar, o que cobre o operador reiniciando a sessao.
                 armado = False
