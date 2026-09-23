@@ -8,6 +8,15 @@ pyusb
 ids_peak
 ids_peak_ipl
 
+# Serial direta com o AM5. Nao e opcional: e o degrau serial da escada de
+# parada do vigia (parada_emergencia.py). Sem ele, num PC recem-instalado, o
+# vigia so tem o Alpaca e volta a ter o furo que a escada fechou.
+pyserial
+
+# Figuras de diversos/ferramentas.
+matplotlib
+pandas
+
 # Verificacao de nomes indefinidos e erros de sintaxe (regras em pyproject.toml).
 # A suite de testes roda o Ruff; sem ele, essa checagem e apenas pulada.
 ruff
