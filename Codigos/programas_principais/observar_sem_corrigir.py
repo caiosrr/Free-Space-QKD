@@ -64,7 +64,9 @@ import numpy as np
 
 from programas_principais._iniciador import aplicar_camera, perguntar_camera
 
-SAIDA_RAIZ = CODIGOS_DIR / "Link UFF" / "resultados" / "sem_correcao"
+from modulos.configuracoes import saidas  # noqa: E402
+
+SAIDA_RAIZ = saidas.SEM_CORRECAO_OUTPUT_DIR
 
 # Potencias de 2 ate uns 2 minutos de quadros, que e onde a previsao diz que a
 # curva volta a cair. Passar muito disso so gastaria tempo de rajada.
@@ -146,7 +148,7 @@ def salvar_empilhada(soma: np.ndarray, destino: Path, rotulo: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--camera", choices=["asi", "ids"], default=None)
+    parser.add_argument("--camera", choices=["asi", "ids", "zwo"], default=None)
     parser.add_argument("--horas", type=float, default=10.0)
     parser.add_argument("--intervalo-rajada", type=float, default=10.0,
                         help="minutos entre medidas de convergencia")
@@ -363,25 +365,31 @@ def aplicar_sobreposicoes(args: argparse.Namespace) -> None:
     """Exposicao e ganho pela linha de comando, sem editar o perfil da camera.
 
     Precisa rodar DEPOIS de ``aplicar_camera`` e ANTES de qualquer import de
-    ``modulos``: a exposicao e lida do ambiente na hora do import.
+    ``modulos``: a exposicao e lida do ambiente na hora do import. Cada camera
+    le variaveis com prefixo proprio, entao a sobreposicao segue o backend.
     """
+    zwo = os.environ.get("QKD_CAMERA_BACKEND") == "zwo_sdk"
     if args.exposicao_us is not None:
-        os.environ["QKD_IDS_EXPOSURE_US"] = str(args.exposicao_us)
-        # O limite de aquisicao do perfil (50 fps) e impossivel com exposicao
-        # longa, e a camera recusa a combinacao. Deixo 10% de folga.
-        fps = 0.9 / (args.exposicao_us * 1e-6)
-        fps = min(fps, float(os.environ.get("QKD_IDS_FPS", fps)))
-        os.environ["QKD_IDS_FPS"] = str(round(fps, 3))
-        print(f"Exposicao inicial {args.exposicao_us:.0f} us, "
-              f"taxa limitada a {fps:.2f} fps.")
+        if zwo:
+            # No modo de video da ZWO a taxa segue a exposicao sozinha.
+            os.environ["QKD_ZWO_EXPOSURE_US"] = str(args.exposicao_us)
+            print(f"Exposicao inicial {args.exposicao_us:.0f} us.")
+        else:
+            os.environ["QKD_IDS_EXPOSURE_US"] = str(args.exposicao_us)
+            # O limite de aquisicao do perfil (50 fps) e impossivel com
+            # exposicao longa, e a camera recusa a combinacao. 10% de folga.
+            fps = 0.9 / (args.exposicao_us * 1e-6)
+            fps = min(fps, float(os.environ.get("QKD_IDS_FPS", fps)))
+            os.environ["QKD_IDS_FPS"] = str(round(fps, 3))
+            print(f"Exposicao inicial {args.exposicao_us:.0f} us, "
+                  f"taxa limitada a {fps:.2f} fps.")
     if args.ganho is not None:
-        os.environ["QKD_IDS_ANALOG_GAIN"] = str(args.ganho)
-        print(f"Ganho analogico {args.ganho:g}.")
-
+        os.environ["QKD_ZWO_GAIN" if zwo else "QKD_IDS_ANALOG_GAIN"] = str(args.ganho)
+        print(f"Ganho {args.ganho:g}.")
 
 if __name__ == "__main__":
     _args = parse_args()
-    _escolha = _args.camera or perguntar_camera({"1": "asi", "2": "ids"}, "2")
+    _escolha = _args.camera or perguntar_camera({"1": "asi", "2": "ids", "3": "zwo"}, "2")
     print(f"Observando com {aplicar_camera(_escolha)}.")
     aplicar_sobreposicoes(_args)
     raise SystemExit(main(_args))

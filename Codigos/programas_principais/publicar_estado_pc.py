@@ -41,6 +41,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import urllib.parse
 import urllib.request
 from ctypes import wintypes
@@ -48,6 +49,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 CODIGOS_DIR = Path(__file__).resolve().parent.parent
+# Roda como tarefa agendada, direto pelo caminho do arquivo: sem isto a pasta
+# Codigos nao entra no caminho de importacao e ``modulos`` nao e encontrado.
+if str(CODIGOS_DIR) not in sys.path:
+    sys.path.insert(0, str(CODIGOS_DIR))
 
 
 class _LASTINPUTINFO(ctypes.Structure):
@@ -99,7 +104,9 @@ def processos() -> list[str]:
 
 def sessao_do_tracker() -> dict:
     """Ha uma sessao gravando agora? Olha a telemetria mais recente."""
-    raiz = CODIGOS_DIR / "Link UFF" / "resultados" / "tracker" / "sessoes"
+    from modulos.configuracoes import saidas  # noqa: PLC0415
+
+    raiz = saidas.TRACKER_SESSOES_DIR
     if not raiz.is_dir():
         return {"gravando": False, "motivo": "pasta de sessoes ausente"}
     telemetrias = list(raiz.glob("*/telemetria.csv"))

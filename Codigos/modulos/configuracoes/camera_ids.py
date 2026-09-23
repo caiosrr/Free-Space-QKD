@@ -1,7 +1,8 @@
 """Configuracao unica da IDS usada por teste, centro de massa, calibracao e tracker."""
 
 import os
-from pathlib import Path
+
+from modulos.configuracoes import saidas
 
 
 # ===== AJUSTE ESTES VALORES PARA A IMAGEM DO EXPERIMENTO =====
@@ -29,16 +30,8 @@ CAPTURE_TIMEOUT_MS = 5000
 BUFFER_COUNT = 8
 TEST_FRAMES = 50
 
-# Cada etapa do experimento grava e le somente dentro de Link UFF/resultados.
-CODIGOS_DIR = Path(__file__).resolve().parents[2]
-RESULTS_DIR = CODIGOS_DIR / "Link UFF" / "resultados"
-ACQUISITION_OUTPUT_DIR = RESULTS_DIR / "aquisicao"
-CENTER_OF_MASS_OUTPUT_DIR = RESULTS_DIR / "centro_de_massa"
-CALIBRATION_OUTPUT_DIR = RESULTS_DIR / "calibracao"
-CALIBRATION_METADATA_DIR = CALIBRATION_OUTPUT_DIR / "metadados"
-MATRICES_OUTPUT_DIR = RESULTS_DIR / "matrizes"
-TRACKER_OUTPUT_DIR = RESULTS_DIR / "tracker"
-BEACON_CHARACTERIZATION_OUTPUT_DIR = RESULTS_DIR / "caracterizacao_beacon"
+# As pastas de saida sao as mesmas para todas as cameras; ver saidas.py.
+RESULTS_DIR = saidas.RESULTS_DIR
 
 
 def apply_environment() -> None:
@@ -52,12 +45,4 @@ def apply_environment() -> None:
     os.environ["QKD_IDS_DEVICE"] = str(DEVICE_INDEX)
     os.environ["QKD_IDS_TIMEOUT_MS"] = str(CAPTURE_TIMEOUT_MS)
     os.environ["QKD_IDS_BUFFER_COUNT"] = str(BUFFER_COUNT)
-    os.environ["QKD_CAMERA_OUTPUT_DIR"] = str(RESULTS_DIR)
-    os.environ["QKD_CENTER_OF_MASS_OUTPUT_DIR"] = str(CENTER_OF_MASS_OUTPUT_DIR)
-    os.environ["QKD_CALIBRATION_OUTPUT_DIR"] = str(CALIBRATION_OUTPUT_DIR)
-    os.environ["QKD_CALIBRATION_METADATA_DIR"] = str(CALIBRATION_METADATA_DIR)
-    os.environ["QKD_CALIBRATION_MATRIX_DIR"] = str(MATRICES_OUTPUT_DIR)
-    os.environ["QKD_TRACKER_OUTPUT_DIR"] = str(TRACKER_OUTPUT_DIR)
-    os.environ["QKD_BEACON_CHARACTERIZATION_OUTPUT_DIR"] = str(
-        BEACON_CHARACTERIZATION_OUTPUT_DIR
-    )
+    saidas.aplicar_saidas()

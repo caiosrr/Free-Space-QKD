@@ -14,13 +14,13 @@ from programas_principais._iniciador import aplicar_camera, perguntar_camera
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--camera", choices=["asi", "ids"], default=None)
+    parser.add_argument("--camera", choices=["asi", "ids", "zwo"], default=None)
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    camera = aplicar_camera(args.camera or perguntar_camera({"1": "asi", "2": "ids"}, "1"))
+    camera = aplicar_camera(args.camera or perguntar_camera({"1": "asi", "2": "ids", "3": "zwo"}, "1"))
     print(f"Iniciando centro de massa com {camera}.")
     from modulos.visao.detector_ilhas import main
 

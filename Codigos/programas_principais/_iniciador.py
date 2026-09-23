@@ -34,14 +34,20 @@ def aplicar_camera(escolha: str) -> str:
         camera_ids.apply_environment()
         return "IDS"
     if normalizada in {"asi", "alpaca", "ascom"}:
+        from modulos.configuracoes import saidas
+
         os.environ["QKD_CAMERA_BACKEND"] = "alpaca"
+        saidas.aplicar_saidas()
         return "ASI/ASCOM"
     if normalizada in {"zwo", "zwo_sdk"}:
         from modulos.configuracoes.camera_asi import EXPOSURE_US, GAIN
 
+        from modulos.configuracoes import saidas
+
         os.environ["QKD_CAMERA_BACKEND"] = "zwo_sdk"
         os.environ["QKD_ZWO_EXPOSURE_US"] = str(EXPOSURE_US)
         os.environ["QKD_ZWO_GAIN"] = str(GAIN)
+        saidas.aplicar_saidas()
         return "ZWO SDK"
     raise ValueError(f"Camera desconhecida: {escolha!r}.")
 

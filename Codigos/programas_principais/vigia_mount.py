@@ -47,10 +47,11 @@ CODIGOS_DIR = Path(__file__).resolve().parent.parent
 if str(CODIGOS_DIR) not in sys.path:
     sys.path.insert(0, str(CODIGOS_DIR))
 
+from modulos.configuracoes import saidas
 from modulos.controle.mount_ascom import mount_address
 from modulos.controle.parada_emergencia import escalar_parada
 
-SESSOES = CODIGOS_DIR / "Link UFF" / "resultados" / "tracker" / "sessoes"
+SESSOES = saidas.TRACKER_SESSOES_DIR
 # Mesmo diario das paradas de emergencia: um disparo deste vigia e do mesmo
 # tipo de evento, e concentrar os dois num arquivo so evita ter de lembrar de
 # dois lugares quando algo der errado de madrugada.

@@ -1,6 +1,9 @@
 """Inicia o tracker principal com a camera ASI ou IDS.
 
     python programas_principais/tracker.py --camera ids --horas 0.5 --sem-autoteste
+    python programas_principais/tracker.py --camera zwo --horas 0.5 --sem-autoteste
+
+``asi`` e a ASI pelo ASCOM; ``zwo`` e a ASI pelo SDK nativo da ZWO.
 """
 
 import sys
@@ -26,7 +29,7 @@ VIGIA_DISPARO_S = 60.0
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--camera", choices=["asi", "ids"], default=None)
+    parser.add_argument("--camera", choices=["asi", "ids", "zwo"], default=None)
     parser.add_argument(
         "--horas",
         type=float,
@@ -73,7 +76,7 @@ def iniciar_vigia() -> subprocess.Popen | None:
 
 if __name__ == "__main__":
     args = parse_args()
-    escolha = args.camera or perguntar_camera({"1": "asi", "2": "ids"}, "1")
+    escolha = args.camera or perguntar_camera({"1": "asi", "2": "ids", "3": "zwo"}, "1")
     camera = aplicar_camera(escolha)
     print(f"Iniciando tracker com {camera}.")
 

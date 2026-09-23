@@ -21,17 +21,18 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-CODIGOS_DIR = Path(__file__).resolve().parents[2]
-RESULTADOS = CODIGOS_DIR / "Link UFF" / "resultados"
+from modulos.configuracoes import saidas
 
 # O tracker escreve telemetria a cada segundo; 30 s cobrem qualquer engasgo.
-TRACKER_SESSOES = RESULTADOS / "tracker" / "sessoes"
+# Lidos de saidas.py: os mesmos caminhos em que o tracker e a calibracao gravam,
+# com qualquer camera. Ver ali o furo que isto fechou.
+TRACKER_SESSOES = saidas.TRACKER_SESSOES_DIR
 TRACKER_VIVO_S = 30.0
 
 # A calibracao nao tem escrita continua: ela grava por varredura, e cada
 # varredura com seu retorno leva dezenas de segundos. A janela precisa cobrir o
 # intervalo entre gravacoes, nao o intervalo entre quadros.
-CALIBRACAO_RUNS = RESULTADOS / "calibracao" / "continua"
+CALIBRACAO_RUNS = saidas.CALIBRACAO_RUNS_DIR
 CALIBRACAO_VIVA_S = 180.0
 
 

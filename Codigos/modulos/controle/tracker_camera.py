@@ -3,7 +3,7 @@
 Objetivo: aplicar a ROI ao redor da ilha travada e entregar frames ja
 normalizados ao laco de aquisicao.
 Entradas/saidas: pixels da ROI; nao move o mount.
-Hardware: IDS peak ou ASI/ASCOM, conforme o backend selecionado.
+Hardware: IDS peak, ZWO pelo SDK ou ASI pelo ASCOM, conforme o backend.
 
 A captura, a normalizacao e o cliente ASCOM sao os mesmos usados pela
 calibracao: este modulo nao mantem uma segunda copia deles.
@@ -21,7 +21,7 @@ from modulos.configuracoes.camera_asi import GAIN as ASI_GAIN
 from modulos.configuracoes.tracker import TRACKER_MAX_SPOT_JUMP_PX
 from modulos.controle.alvo_alinhamento import AlvoAlinhamento, roi_incluindo_alvo
 from modulos.controle.cameras.alpaca import call
-from modulos.controle.cameras.backend import backend_name
+from modulos.controle.cameras.backend import backend_name, direct_camera
 from modulos.visao import detector_ilhas as foco_temp
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -42,15 +42,21 @@ def _measure_locked_island(frame):
     return float(cm[0]), float(cm[1])
 
 
-def _ids_camera():
-    from modulos.controle.cameras.ids_peak import camera
+def _camera_nativa() -> bool:
+    """IDS e ZWO pelo SDK falam direto com o sensor; o ASCOM nao.
 
-    return camera
+    As duas nativas entregam o quadro na orientacao do sensor e aplicam a ROI no
+    proprio hardware, pela mesma interface (``connect``, ``set_roi``,
+    ``current_roi``...). O ASCOM transpoe o ``ImageArray`` e fala por HTTP. Ate
+    2026-09-23 este modulo so conhecia a IDS como nativa, e com a ZWO pelo SDK
+    ele caia no ramo do ASCOM e morria na primeira chamada.
+    """
+    return backend_name() in {"ids", "zwo_sdk"}
 
 
 def get_camera_size() -> tuple[int, int]:
-    if backend_name() == "ids":
-        return _ids_camera().get_sensor_size()
+    if _camera_nativa():
+        return direct_camera().get_sensor_size()
     max_x = int(call("GET", "cameraxsize"))
     max_y = int(call("GET", "cameraysize"))
     return max_x, max_y
@@ -135,12 +141,12 @@ def _apply_camera_roi(
     start_x: int,
     start_y: int,
 ) -> tuple[int, int, int, int]:
-    if backend_name() == "ids":
-        actual = _ids_camera().set_roi(w, h, start_x, start_y)
+    if _camera_nativa():
+        actual = direct_camera().set_roi(w, h, start_x, start_y)
         expected = (w, h, start_x, start_y)
         if actual != expected:
             print(
-                f"Aviso: a IDS alinhou a ROI de {expected} para {actual}; "
+                f"Aviso: a camera alinhou a ROI de {expected} para {actual}; "
                 "o alvo local sera recalculado automaticamente."
             )
         return actual
@@ -198,15 +204,15 @@ def set_camera_roi_validated(
 ) -> tuple[int, int, float, float]:
     """Aplica a ROI e confirma que a ilha selecionada continua dentro dela."""
     max_x, max_y = get_camera_size()
-    display_w, display_h = ((max_x, max_y) if backend_name() == "ids" else (max_y, max_x))
+    display_w, display_h = ((max_x, max_y) if _camera_nativa() else (max_y, max_x))
     target_x = float(np.clip(target_x, 0, display_w - 1))
     target_y = float(np.clip(target_y, 0, display_h - 1))
 
-    if backend_name() == "ids":
+    if _camera_nativa():
         candidates = [
-            ("rot180", "IDS rotacionada 180 graus")
+            ("rot180", "sensor rotacionado 180 graus")
             if ROTATE_IMAGE_180
-            else ("direct", "IDS sem rotacao")
+            else ("direct", "sensor sem rotacao")
         ]
     else:
         candidates = [
@@ -276,8 +282,8 @@ def set_camera_roi_validated(
 
 def reset_camera_roi() -> None:
     try:
-        if backend_name() == "ids":
-            _ids_camera().reset_roi()
+        if _camera_nativa():
+            direct_camera().reset_roi()
             return
         max_x = call("GET", "cameraxsize")
         max_y = call("GET", "cameraysize")
@@ -315,8 +321,8 @@ def escolher_referencia_tracker() -> AlvoAlinhamento:
 
 
 def connect_camera() -> None:
-    if backend_name() == "ids":
-        _ids_camera().connect()
+    if _camera_nativa():
+        direct_camera().connect()
         return
     print("Conectando a camera...")
     call("PUT", "connected", data={"Connected": True})
@@ -328,8 +334,8 @@ def connect_camera() -> None:
 
 
 def disconnect_camera() -> None:
-    if backend_name() == "ids":
-        _ids_camera().disconnect()
+    if _camera_nativa():
+        direct_camera().disconnect()
         return
     print("Desconectando da camera...")
     call("PUT", "connected", data={"Connected": False})
@@ -354,7 +360,7 @@ def latest_raw_frame() -> np.ndarray | None:
 
 
 def current_roi_size(default_size: int) -> tuple[int, int]:
-    """Retorna o tamanho realmente aplicado, inclusive alinhamento da IDS."""
-    if backend_name() == "ids" and _ids_camera().current_roi is not None:
-        return tuple(_ids_camera().current_roi[:2])
+    """Retorna o tamanho realmente aplicado, inclusive alinhamento do sensor."""
+    if _camera_nativa() and direct_camera().current_roi is not None:
+        return tuple(direct_camera().current_roi[:2])
     return int(default_size), int(default_size)
