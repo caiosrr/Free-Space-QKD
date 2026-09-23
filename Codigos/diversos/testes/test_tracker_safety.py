@@ -981,7 +981,13 @@ class ParadaNoDesligamentoTests(unittest.TestCase):
         from modulos.controle import tracker_sessao
 
         fonte = inspect.getsource(tracker_sessao.main)
-        self.assertIn("desligamento_windows.registrar(stop_axes_safely)", fonte)
+        # O handler recebe o nome do evento e stop_axes_safely espera
+        # attempts/timeout, entao o registro passa por um lambda que descarta o
+        # argumento. O que importa e que stop_axes_safely seja o registrado.
+        self.assertRegex(
+            fonte,
+            r"desligamento_windows\.registrar\((lambda[^:]*:\s*)?stop_axes_safely",
+        )
 
 
 class VigiaDoMountTests(unittest.TestCase):
