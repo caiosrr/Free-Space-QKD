@@ -7,8 +7,10 @@ zero. Se o `MoveAxis(0)` nunca sair, o mount segue andando sozinho.
 
 Quanto isso custa, com os limites deste projeto:
 
-    pulso fino (0,001042 deg/s):   3,75 deg/h    ->  45 deg em 12 h
-    velocidade maxima (0,1 deg/s):  360 deg/h    -> tudo, em qualquer prazo
+    pulso fino (0,001042 deg/s):    3,75 deg/h   ->  45 deg em 12 h
+    teto do tracker (0,005 deg/s):  18 deg/h     -> 216 deg em 12 h
+
+O teto era 0,10 deg/s (360 deg/h) ate 2026-09-16.
 
 O watchdog de MAX_OFFSET_AZ_DEG/ALT existe, mas roda DENTRO do tracker: morre
 junto com ele e nao protege exatamente do caso que mais assusta.

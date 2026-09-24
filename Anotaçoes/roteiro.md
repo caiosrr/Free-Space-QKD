@@ -1131,7 +1131,7 @@ deg/s e real, porque abaixo dela o mount nao anda em vez de grampear.
 | queda de energia | o mount perde alimentação junto |
 | PC não volta | nada em software; só nobreak ou tomada remota |
 
-### A escada de parada — 2026-09-21
+### A escada de parada, 2026-09-21
 
 A tabela acima tinha um furo que só apareceu ao reler o `vigia_mount.py`: ele
 parava **pelo Alpaca**, ou seja pelo servidor ASCOM. Se o servidor caísse junto

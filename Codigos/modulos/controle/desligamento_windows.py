@@ -15,9 +15,12 @@ A solucao: registrar um handler pelo ``SetConsoleCtrlHandler`` da API do
 Windows. Ele ganha alguns segundos antes de o processo ser morto -- o bastante
 para mandar velocidade zero, que e o que importa.
 
-Nao substitui a tarefa de parada no boot nem o vigia: cobre o desligamento
-ORDENADO (Windows Update, logoff, shutdown pedido). Queda de energia continua
-sem aviso, mas ali o mount perde energia junto e para.
+Cobre MENOS do que parecia, e isso foi medido em 2026-09-14 (roteiro, secao
+"O handler de desligamento nao dispara no reinicio"): o handler disparou ao
+fechar a janela do console no X, e NAO disparou no reinicio do Windows Update.
+Contra reinicio, a defesa real e a tarefa de boot. Nao substitui nem ela nem o
+vigia. Queda de energia continua sem aviso, mas ali o mount perde energia junto
+e para.
 """
 
 from __future__ import annotations

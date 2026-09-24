@@ -6,8 +6,8 @@ ASCOM FECHADO no meio de um pulso, o eixo andou 266 arcsec quando 246 eram
 previstos. Nem o firmware nem a perda da conexao param nada.
 
 Entao, se o tracker morrer no meio de um pulso, o eixo deriva a 3,75 arcsec/s
-(velocidade dos micropulsos) ou ate 360 graus/h (velocidade maxima que o
-controlador pode comandar).
+(velocidade dos micropulsos) ou, no pior caso, a 18 graus/h: o teto de
+MAX_TRACKING_RATE_DEG_S, baixado de 0,10 para 0,005 deg/s em 2026-09-16.
 
 Este programa roda em paralelo ao tracker, num processo separado, e faz uma
 coisa so: se o tracker estava gravando e parou de gravar, manda zero nos eixos.
