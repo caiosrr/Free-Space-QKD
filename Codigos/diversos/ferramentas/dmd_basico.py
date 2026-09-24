@@ -31,8 +31,11 @@ Com a janela de PREVIA selecionada (a pequena, na tela principal):
 
     b  tudo branco          p  tudo preto          m  metade acesa
     r  retangulo            l  listras verticais
-    + / -   aumenta ou diminui o lado do retangulo ou o periodo das listras
-    setas   movem o retangulo, 1 pixel por toque (Shift nao muda nada)
+    + / -   no retangulo, multiplica ou divide o lado por 1,5
+            nas listras, soma ou tira 2 pixels do periodo
+    setas   movem o retangulo 1 pixel por toque, para ajuste fino
+    w a s d movem o retangulo 50 pixels por toque, para achar o feixe
+            (o feixe de um HeNe tem ~1 mm, ou ~185 espelhos de 5,4 um)
     Esc     sai, deixando o DMD preto
 """
 
@@ -197,7 +200,9 @@ def main() -> int:
     print(f"DMD: {largura}x{altura} em x={m['x0']}. Use a janela de previa.")
 
     cx, cy = largura // 2, altura // 2
-    lado, periodo = 40, 10
+    # O quadrado nasce maior que o feixe, para ser facil de achar com o laser.
+    lado, periodo = 200, 10
+    passo_rapido = 50
     modo = "p"
 
     abrir_janela_dmd(m["x0"], m["y0"])
@@ -232,10 +237,20 @@ def main() -> int:
             letra = chr(tecla & 0xFF).lower()
             if letra in "bpmrl":
                 modo = letra
+            elif letra in "wasd":
+                cx += {"a": -passo_rapido, "d": passo_rapido}.get(letra, 0)
+                cy += {"w": -passo_rapido, "s": passo_rapido}.get(letra, 0)
+                cx, cy = int(np.clip(cx, 0, largura - 1)), int(np.clip(cy, 0, altura - 1))
             elif letra in "+=":
-                lado, periodo = lado + 2, periodo + 2
+                if modo == "l":
+                    periodo += 2
+                else:
+                    lado = min(int(round(lado * 1.5)), altura)
             elif letra == "-":
-                lado, periodo = max(2, lado - 2), max(2, periodo - 2)
+                if modo == "l":
+                    periodo = max(2, periodo - 2)
+                else:
+                    lado = max(2, int(round(lado / 1.5)))
     finally:
         # Sair deixa o DMD preto: nenhum espelho ligado mandando luz pela sala.
         cv2.imshow(JANELA_DMD, tudo(largura, altura, 0))
