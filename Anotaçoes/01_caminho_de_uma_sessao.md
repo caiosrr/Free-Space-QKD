@@ -47,7 +47,7 @@ primeira, enquanto mantém o beacon visível.
                     └─────────────────────────────────┘
 
                     ┌─────────────────────────────────┐
-                    │  VIGIA           1 Hz           │
+                    │  VIGIA           5 Hz           │
                     │  lê a posição do mount e para   │
                     │  a sessão se algo fugir         │
                     └─────────────────────────────────┘
@@ -240,7 +240,7 @@ ficava cego 77% do tempo e o erro crescia sem ninguém olhando.
 ## Parte 4: o vigia (o que protege)
 
 Arquivo: `modulos/controle/tracker_seguranca.py`, função `monitorar_posicao`.
-Roda a 1 Hz e lê a posição do mount pelo encoder.
+Roda a 5 Hz e lê a posição do mount pelo encoder.
 
 Encerra a sessão se:
 
@@ -248,7 +248,7 @@ Encerra a sessão se:
 |---|---|
 | deslocamento absoluto em azimute ou altitude | 5° |
 | tempo máximo da sessão | o que você pediu |
-| mount sem responder | após N leituras falhas |
+| mount sem responder | 5 leituras falhas seguidas, ou 1 s |
 
 Há ainda dois freios dentro do laço de controle:
 
@@ -256,9 +256,17 @@ Há ainda dois freios dentro do laço de controle:
   na imagem, o controle zera e espera
 - **freio de erro crescente** — está comandando e o erro só aumenta: para
 
+Em qualquer desses casos, **inclusive quando o tempo acaba**, o mount tenta
+voltar devagar à posição em que a sessão começou; com o mount sem responder, a
+tentativa só falha e ele fica parado. O único encerramento sem retorno é o
+beacon sumir por tempo demais, porque aí o movimento seria às cegas.
+
 E, fora do processo, `programas_principais/parar_mount.py`, feito para ser
 tarefa do Windows na inicialização. O `MoveAxis` do ASCOM não tem prazo: se o
 PC morrer no meio de um pulso, o eixo anda até alguém mandar zero.
+
+Todas as proteções, inclusive o vigia externo e a escada de parada, estão lidas
+em detalhe no `06_seguranca_do_mount.md`.
 
 ---
 
