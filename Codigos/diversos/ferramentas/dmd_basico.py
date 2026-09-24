@@ -46,6 +46,13 @@ from ctypes import wintypes
 import cv2
 import numpy as np
 
+# O DLP4710 tem 1920 x 1080 espelhos. O EDID da placa, porem, anuncia 1280 x 720
+# como resolucao PREFERIDA (medido em 2026-09-24), e e essa que o Windows marca
+# como "recomendada". Recebendo 720p, a placa amplia a imagem 1,5 vez e um pixel
+# deixa de ser um espelho. 1920 x 1080 a 60 Hz esta na lista do EDID, mas precisa
+# ser escolhida na mao.
+RESOLUCAO_NATIVA = (1920, 1080)
+
 JANELA_DMD = "DMD"
 JANELA_PREVIA = "previa do DMD (clique aqui para usar o teclado)"
 LARGURA_PREVIA = 640
@@ -157,6 +164,8 @@ def main() -> int:
     parser.add_argument("--listar-monitores", action="store_true")
     parser.add_argument("--monitor", type=int, default=None,
                         help="numero do monitor do DMD, como aparece na lista")
+    parser.add_argument("--ignorar-resolucao", action="store_true",
+                        help="roda mesmo fora de 1920x1080 (os pixels deixam de ser espelhos)")
     args = parser.parse_args()
 
     declarar_ciente_de_dpi()
@@ -179,6 +188,12 @@ def main() -> int:
         return 1
 
     largura, altura = m["largura"], m["altura"]
+    if (largura, altura) != RESOLUCAO_NATIVA and not args.ignorar_resolucao:
+        print(f"A tela do DMD esta em {largura}x{altura}, e o chip tem "
+              f"{RESOLUCAO_NATIVA[0]}x{RESOLUCAO_NATIVA[1]} espelhos.")
+        print("Em Configuracoes, Sistema, Video, escolha a tela do DMD e ponha")
+        print("1920 x 1080 NA MAO: a 'recomendada' desta placa e 1280 x 720.")
+        return 1
     print(f"DMD: {largura}x{altura} em x={m['x0']}. Use a janela de previa.")
 
     cx, cy = largura // 2, altura // 2
