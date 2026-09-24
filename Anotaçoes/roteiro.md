@@ -1181,3 +1181,41 @@ institucional e privada, expor um canal de movimento sem autenticação à inter
 O `sondar_mount_wifi.py` existe para responder, na bancada, se o modo estação
 **derruba a serial**. Essa é a informação que interessa ter antes de alguém
 ligar o modo estação por engano na UFF.
+
+## DMD do laboratório da USP: identificação, 2026-09-24
+
+É um **DLP4710 da Texas Instruments**, numa placa DLPDLCR4710EVM-G2 convertida
+em modulador espacial de luz conforme Cox e Drozdov, *Converting a Texas
+Instruments DLP4710 DLP evaluation module into a spatial light modulator*,
+Applied Optics. A peça impressa em 3D que segura o chip é o projeto deles, do
+repositório `WitsOCLab/DLP4710-SLM` no GitHub.
+
+| | valor | fonte |
+|---|---|---|
+| resolução | 1920 × 1080 | folha de dados DLP4710 |
+| pitch | 5,4 µm | folha de dados |
+| área ativa | 10,4 × 5,8 mm | artigo |
+| inclinação dos espelhos | ±17° | folha de dados |
+| iluminação | pela borda de baixo | folha de dados |
+| matriz | ortogonal, pixels quadrados | folha de dados; confirmado pela grade de difração com o chip desligado |
+| alimentação | 19 V DC, até 4,74 A, no conector PWR_IN (J28) | guia do usuário DLPU044D, seção 5 |
+
+**Ligar**, pelo guia da TI: chave deslizante PS_ON/OFF (SW28) em ON, e acendem
++3.3V (D43) e INTZ (D57, que indica DMD estacionado). Depois o botão ON/OFF
+(SW21); acendem SYS_ON-OFF (D36), M_IRQ (D33) e S_IRQ (D34).
+
+**Desligar, e a ordem importa:** primeiro o botão SW21, depois a chave SW28, e
+só então tirar a fonte. O guia avisa que desligar fora dessa sequência pode
+danificar o DMD: é o botão que estaciona os espelhos antes de faltar energia.
+
+**Firmware.** De fábrica a placa espera os LEDs da óptica original e mostra uma
+imagem de demonstração. O artigo configura duas coisas: LEDs desligados e
+entrada HDMI. Se ao ligar o Windows não enxergar uma segunda tela, é por aí;
+segundo o README do repositório, o software da TI para a versão G2 não grava a
+configuração de fato, e é preciso usar o da versão DLP4710EVM-LC.
+
+**Consequência para a montagem:** com espelhos de 17°, a luz "ligada" sai
+perpendicular ao chip quando o laser chega a cerca de 2 × 17° = 34° da normal,
+pela borda de baixo. As contas anteriores deste roteiro e das conversas usavam
+12° e pitch de 10,8 µm por suposição; os valores certos são estes.
+

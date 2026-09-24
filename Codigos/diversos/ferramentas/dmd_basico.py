@@ -1,5 +1,10 @@
 """Primeiros passos com o DMD: ele e um segundo monitor, e controlar e desenhar.
 
+O DMD do laboratorio e um DLP4710 (1920 x 1080, pixel de 5,4 um, espelhos de
++-17 graus), numa placa DLPDLCR4710EVM-G2 convertida conforme Cox e Drozdov,
+Applied Optics. Detalhes, alimentacao e a ORDEM DE DESLIGAR no roteiro, secao
+"DMD do laboratorio da USP".
+
 A placa do DMD aparece para o Windows como uma tela a mais. Cada pixel da imagem
 mostrada nela vira um micro-espelho:
 
