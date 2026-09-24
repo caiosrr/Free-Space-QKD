@@ -36,7 +36,14 @@ Com a janela de PREVIA selecionada (a pequena, na tela principal):
     setas   movem o retangulo 1 pixel por toque, para ajuste fino
     w a s d movem o retangulo 50 pixels por toque, para achar o feixe
             (o feixe de um HeNe tem ~1 mm, ou ~185 espelhos de 5,4 um)
+    i       inverte a imagem: preto vira branco e vice-versa
     Esc     sai, deixando o DMD preto
+
+Por que inverter: os espelhos refletem igualmente bem nos dois estados, e
+"ligado" e "desligado" sao so nomes herdados do projetor. Se a direcao dos
+espelhos DESLIGADOS for a mais conveniente na bancada, desenha-se o ponto em
+preto sobre fundo branco. Confira antes que o reflexo usado some com a tela
+toda branca: se ficar aceso nos dois, e o reflexo fixo da janela de vidro.
 """
 
 from __future__ import annotations
@@ -204,6 +211,7 @@ def main() -> int:
     lado, periodo = 200, 10
     passo_rapido = 50
     modo = "p"
+    invertido = False
 
     abrir_janela_dmd(m["x0"], m["y0"])
     cv2.namedWindow(JANELA_PREVIA, cv2.WINDOW_AUTOSIZE)
@@ -221,6 +229,10 @@ def main() -> int:
             else:
                 img, legenda = tudo(largura, altura, 0), "tudo preto"
 
+            if invertido:
+                img = 255 - img
+                legenda += " (INVERTIDO)"
+
             cv2.imshow(JANELA_DMD, img)
             cv2.imshow(JANELA_PREVIA, previa(img, legenda))
 
@@ -237,6 +249,8 @@ def main() -> int:
             letra = chr(tecla & 0xFF).lower()
             if letra in "bpmrl":
                 modo = letra
+            elif letra == "i":
+                invertido = not invertido
             elif letra in "wasd":
                 cx += {"a": -passo_rapido, "d": passo_rapido}.get(letra, 0)
                 cy += {"w": -passo_rapido, "s": passo_rapido}.get(letra, 0)
@@ -252,7 +266,8 @@ def main() -> int:
                 else:
                     lado = max(2, int(round(lado / 1.5)))
     finally:
-        # Sair deixa o DMD preto: nenhum espelho ligado mandando luz pela sala.
+        # Sair deixa o DMD preto, sem inverter: nenhum espelho ligado mandando
+        # luz pela sala, qualquer que seja o modo em uso.
         cv2.imshow(JANELA_DMD, tudo(largura, altura, 0))
         cv2.waitKey(1)
         cv2.destroyAllWindows()
