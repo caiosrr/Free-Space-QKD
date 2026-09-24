@@ -1214,6 +1214,18 @@ entrada HDMI. Se ao ligar o Windows não enxergar uma segunda tela, é por aí;
 segundo o README do repositório, o software da TI para a versão G2 não grava a
 configuração de fato, e é preciso usar o da versão DLP4710EVM-LC.
 
+**Resolução, confirmado em 2026-09-24 ligando a placa ao notebook:** o EDID
+anuncia **1280 × 720 como preferida**, e é essa que o Windows marca como
+"recomendada". Mas 1920 × 1080 a 60 Hz está na lista e **funciona**: o notebook
+manda o padrão CEA de 148,5 MHz e a placa exibe. Escolha 1080p **na mão** e
+escala 100%; em 720p a placa amplia a imagem 1,5 vez e um pixel deixa de ser
+um espelho. O `dmd_basico.py` recusa rodar fora de 1920 × 1080.
+
+Uma armadilha que custou tempo: sem laser, o chip só mostra a imagem com a luz
+da sala num ângulo certo. Mudar de posição fez parecer que a placa tinha parado
+de exibir ao trocar de resolução. O teste que não depende do ângulo é alternar
+tudo branco e tudo preto no `dmd_basico.py` e ver o chip mudar.
+
 **Consequência para a montagem:** com espelhos de 17°, a luz "ligada" sai
 perpendicular ao chip quando o laser chega a cerca de 2 × 17° = 34° da normal,
 pela borda de baixo. As contas anteriores deste roteiro e das conversas usavam
