@@ -49,65 +49,31 @@ toda branca: se ficar aceso nos dois, e o reflexo fixo da janela de vidro.
 from __future__ import annotations
 
 import argparse
-import ctypes
 import sys
-from ctypes import wintypes
+from pathlib import Path
 
 import cv2
 import numpy as np
 
-# O DLP4710 tem 1920 x 1080 espelhos. O EDID da placa, porem, anuncia 1280 x 720
-# como resolucao PREFERIDA (medido em 2026-09-24), e e essa que o Windows marca
-# como "recomendada". Recebendo 720p, a placa amplia a imagem 1,5 vez e um pixel
-# deixa de ser um espelho. 1920 x 1080 a 60 Hz esta na lista do EDID, mas precisa
-# ser escolhida na mao.
-RESOLUCAO_NATIVA = (1920, 1080)
+CODIGOS_DIR = Path(__file__).resolve().parents[2]
+if str(CODIGOS_DIR) not in sys.path:
+    sys.path.insert(0, str(CODIGOS_DIR))
 
-JANELA_DMD = "DMD"
+from modulos.dmd.tela import (  # noqa: E402
+    JANELA_DMD,
+    SETA_BAIXO,
+    SETA_CIMA,
+    SETA_DIR,
+    SETA_ESQ,
+    abrir_janela_dmd,
+    declarar_ciente_de_dpi,
+    escolher_monitor,
+    imprimir_monitores,
+    listar_monitores,
+)
+
 JANELA_PREVIA = "previa do DMD (clique aqui para usar o teclado)"
 LARGURA_PREVIA = 640
-
-# Codigos das setas devolvidos por cv2.waitKeyEx no Windows.
-SETA_ESQ, SETA_CIMA, SETA_DIR, SETA_BAIXO = 2424832, 2490368, 2555904, 2621440
-
-
-# ----------------------------------------------------------------- monitores
-
-def declarar_ciente_de_dpi() -> None:
-    """Pede ao Windows coordenadas em pixels reais, sem esticar a janela."""
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except Exception:
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
-
-
-def listar_monitores() -> list[dict]:
-    """Posicao e tamanho de cada tela, na ordem em que o Windows as enumera."""
-    monitores: list[dict] = []
-
-    class MONITORINFO(ctypes.Structure):
-        _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
-                    ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
-
-    def ao_encontrar(hmon, _hdc, _rect, _dado):
-        info = MONITORINFO()
-        info.cbSize = ctypes.sizeof(MONITORINFO)
-        ctypes.windll.user32.GetMonitorInfoW(hmon, ctypes.byref(info))
-        r = info.rcMonitor
-        monitores.append({
-            "x0": r.left, "y0": r.top,
-            "largura": r.right - r.left, "altura": r.bottom - r.top,
-            "principal": bool(info.dwFlags & 1),
-        })
-        return True
-
-    TIPO = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p,
-                              ctypes.POINTER(wintypes.RECT), ctypes.c_double)
-    ctypes.windll.user32.EnumDisplayMonitors(None, None, TIPO(ao_encontrar), 0)
-    return monitores
 
 
 # ------------------------------------------------------------------- padroes
@@ -150,14 +116,6 @@ def listras(largura: int, altura: int, periodo: int) -> np.ndarray:
 
 # ------------------------------------------------------------------ exibicao
 
-def abrir_janela_dmd(x0: int, y0: int) -> None:
-    cv2.namedWindow(JANELA_DMD, cv2.WINDOW_NORMAL)
-    # Mover ANTES de pedir tela cheia: a tela cheia vai para o monitor onde a
-    # janela esta.
-    cv2.moveWindow(JANELA_DMD, x0, y0)
-    cv2.setWindowProperty(JANELA_DMD, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-
-
 def previa(img: np.ndarray, legenda: str) -> np.ndarray:
     """Copia pequena para a tela principal. INTER_NEAREST: sem suavizar."""
     escala = LARGURA_PREVIA / img.shape[1]
@@ -179,31 +137,16 @@ def main() -> int:
     args = parser.parse_args()
 
     declarar_ciente_de_dpi()
-    monitores = listar_monitores()
     if args.listar_monitores or args.monitor is None:
-        for i, m in enumerate(monitores, 1):
-            marca = "  (principal)" if m["principal"] else ""
-            print(f"  monitor {i}: {m['largura']}x{m['altura']} "
-                  f"em x={m['x0']}, y={m['y0']}{marca}")
+        imprimir_monitores(listar_monitores())
         if args.monitor is None:
-            print("\nEscolha o do DMD com --monitor N.")
+            print()
+            print("Escolha o do DMD com --monitor N.")
         return 0
-
-    if not 1 <= args.monitor <= len(monitores):
-        print(f"Monitor {args.monitor} nao existe; ha {len(monitores)}.")
+    m = escolher_monitor(args.monitor, args.ignorar_resolucao)
+    if m is None:
         return 1
-    m = monitores[args.monitor - 1]
-    if m["principal"]:
-        print("Esse e o monitor PRINCIPAL. O DMD e o outro; confira com --listar-monitores.")
-        return 1
-
     largura, altura = m["largura"], m["altura"]
-    if (largura, altura) != RESOLUCAO_NATIVA and not args.ignorar_resolucao:
-        print(f"A tela do DMD esta em {largura}x{altura}, e o chip tem "
-              f"{RESOLUCAO_NATIVA[0]}x{RESOLUCAO_NATIVA[1]} espelhos.")
-        print("Em Configuracoes, Sistema, Video, escolha a tela do DMD e ponha")
-        print("1920 x 1080 NA MAO: a 'recomendada' desta placa e 1280 x 720.")
-        return 1
     print(f"DMD: {largura}x{altura} em x={m['x0']}. Use a janela de previa.")
 
     cx, cy = largura // 2, altura // 2
