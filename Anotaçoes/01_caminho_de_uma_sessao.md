@@ -15,12 +15,12 @@ sensor precisa ficar parada num ponto escolhido, por horas, sem ninguém olhando
 
 Três coisas atrapalham:
 
-- **turbulência atmosférica** — move a imagem ~1,3 px a cada frame, e ~0,85 px
+- **turbulência atmosférica**: move a imagem ~1,3 px a cada frame, e ~0,85 px
   depois da média de 2 s, em torno
   da posição verdadeira. É ruído: não adianta corrigir, ela volta sozinha.
-- **deriva** — o apontamento sai do lugar devagar, uns 0,1 a 0,4 px por minuto.
+- **deriva**: o apontamento sai do lugar devagar, uns 0,1 a 0,4 px por minuto.
   É isso que precisa ser corrigido.
-- **a luz muda** — o céu clareia ao amanhecer, o beacon pisca, embarcações na
+- **a luz muda**: o céu clareia ao amanhecer, o beacon pisca, embarcações na
   baía cortam o feixe por minutos.
 
 O sistema inteiro existe para separar deriva de turbulência e corrigir só a
@@ -252,9 +252,9 @@ Encerra a sessão se:
 
 Há ainda dois freios dentro do laço de controle:
 
-- **freio de movimento manual** — alguém encostou no telescópio: salto grande
+- **freio de movimento manual**: alguém encostou no telescópio: salto grande
   na imagem, o controle zera e espera
-- **freio de erro crescente** — está comandando e o erro só aumenta: para
+- **freio de erro crescente**: está comandando e o erro só aumenta: para
 
 Em qualquer desses casos, **inclusive quando o tempo acaba**, o mount tenta
 voltar devagar à posição em que a sessão começou; com o mount sem responder, a
@@ -277,7 +277,7 @@ do último alvo confiável**, congelado no instante da perda:
 
 | CNR antes da perda | diagnóstico | resposta |
 |---|---|---|
-| alto (saudável) | **oclusão** — embarcação na baía | congela tudo e espera 150 s |
+| alto (saudável) | **oclusão**, embarcação na baía | congela tudo e espera 150 s |
 | baixo (< 10) | **falta de exposição** | sobe a exposição em degraus após 8 s |
 
 Subir a exposição não traz de volta um feixe bloqueado; só estraga a cena. Esse

@@ -37,6 +37,10 @@ Regras:
 6. **O que nunca rodou em hardware real é marcado como tal**, explicitamente.
 7. **O porquê vem com o número medido**, citando a seção do `roteiro.md` de onde
    ele saiu, em vez de recontar a história.
+8. **Depois de mudar um documento, gere o PDF de novo** com
+   `python diversos/ferramentas/gerar_pdf_estudo.py`, a partir de `Codigos`. O
+   Caio lê e anota os documentos no tablet, pelo Zotero, e o app só abre PDF.
+   Os PDFs ficam em `Arquivos/estudo/`, fora do git.
 
 ## Segurança do mount: regras fixas
 
