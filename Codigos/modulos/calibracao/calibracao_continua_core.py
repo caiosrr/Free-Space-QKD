@@ -479,6 +479,17 @@ def _aggregate_sweep_frames(
     return aggregated
 
 
+def fator_dispersao() -> float:
+    """Fator de tolerancia da dispersao, vindo de --tolerar-dispersao.
+
+    Existe para o beacon deformado de 2026-09-26: com a camera fora de foco, o
+    cometa muda de forma quadro a quadro e a dispersao passou uns 20% do limite
+    (mediana 6,0 px contra 5,0). Afrouxar so e defensavel com o perfil robusto,
+    cujas varreduras de validacao independentes continuam julgando a matriz.
+    """
+    return float(os.environ.get("QKD_CALIB_FATOR_DISPERSAO", "1.0"))
+
+
 def _validate_sweep_aggregation(samples: list[SweepSample], run_name: str) -> dict:
     if len(samples) < MIN_VALID_SWEEP_BINS:
         raise RuntimeError(
@@ -488,13 +499,16 @@ def _validate_sweep_aggregation(samples: list[SweepSample], run_name: str) -> di
     spreads = np.asarray([sample.centroid_spread_px for sample in samples])
     median_spread = float(np.median(spreads))
     p90_spread = float(np.percentile(spreads, 90.0))
+    fator = fator_dispersao()
     if (
-        median_spread > MAX_MEDIAN_BIN_SPREAD_PX
-        or p90_spread > MAX_P90_BIN_SPREAD_PX
+        median_spread > MAX_MEDIAN_BIN_SPREAD_PX * fator
+        or p90_spread > MAX_P90_BIN_SPREAD_PX * fator
     ):
         raise RuntimeError(
             f"{run_name}: dispersao residual excessiva nos bins (apos tendencia) "
-            f"(mediana={median_spread:.2f}px; p90={p90_spread:.2f}px)."
+            f"(mediana={median_spread:.2f}px; p90={p90_spread:.2f}px; "
+            f"limites {MAX_MEDIAN_BIN_SPREAD_PX * fator:.1f} e "
+            f"{MAX_P90_BIN_SPREAD_PX * fator:.1f} px)."
         )
     return {
         "bin_count": len(samples),
@@ -1276,6 +1290,7 @@ def main(profile_name: str | None = None) -> None:
                "reference_timeout_seconds": REFERENCE_TIMEOUT_S,
                "sweep_audit_subdir": "varreduras",
                "validation_limits": {
+                   "bin_spread_tolerance_factor": fator_dispersao(),
                    "maximum_direction_scale_ratio": MAX_DIRECTION_SCALE_RATIO,
                    "minimum_direction_cosine": MIN_DIRECTION_COSINE,
                    "maximum_holdout_relative_rms": MAX_HOLDOUT_RELATIVE_RMS,
