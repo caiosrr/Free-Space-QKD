@@ -29,6 +29,8 @@ MATRICES_OUTPUT_DIR = RESULTS_DIR / "matrizes"
 TRACKER_OUTPUT_DIR = RESULTS_DIR / "tracker"
 BEACON_CHARACTERIZATION_OUTPUT_DIR = RESULTS_DIR / "caracterizacao_beacon"
 SEM_CORRECAO_OUTPUT_DIR = RESULTS_DIR / "sem_correcao"
+# Registrador do lado do CBPF: camera e power meter vendo o beacon da UFF.
+CBPF_OUTPUT_DIR = RESULTS_DIR / "cbpf"
 
 # O que os guardas de seguranca vigiam. Derivados das pastas acima, nunca
 # escritos a mao em outro arquivo.

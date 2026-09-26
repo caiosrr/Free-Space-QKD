@@ -14,7 +14,7 @@ from modulos.artefatos import json_output_path
 from modulos.controle import mount_ascom, mount_pid
 from modulos.controle.alvo_alinhamento import salvar_alvo
 from modulos.visao import detector_ilhas as foco_temp
-from diversos.otimizacao.otimizar_acoplamento_pm100 import PM100Reader
+from modulos.instrumentos.pm100 import PM100Reader
 
 
 DEFAULT_WAVELENGTH_NM = 632.8
