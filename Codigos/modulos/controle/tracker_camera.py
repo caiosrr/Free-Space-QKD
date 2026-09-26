@@ -228,6 +228,7 @@ def set_camera_roi_validated(
         )
         actual_roi = _apply_camera_roi(w, h, start_x, start_y)
         actual_w, actual_h, start_x, start_y = actual_roi
+        _reancorar_mascara(start_x, start_y)
         local_x, local_y = _target_local_in_actual_roi(
             max_x, max_y, target_x, target_y, actual_roi, mode
         )
@@ -280,7 +281,19 @@ def set_camera_roi_validated(
 
 
 
+def _reancorar_mascara(origem_x: int, origem_y: int) -> None:
+    """A mascara de pixels ruins acompanha a ROI, onde quer que ela esteja.
+
+    Ela e do sensor inteiro e precisa ser fatiada no canto da ROI em uso. Com
+    ela ligada ja na selecao da ilha, sobre o sensor inteiro, qualquer troca de
+    ROI tem de reancora-la, senao a correcao cai sobre os pixels errados.
+    """
+    if foco_temp.BAD_PIXEL_MASK is not None:
+        foco_temp.definir_mascara_pixels_ruins(foco_temp.BAD_PIXEL_MASK, (origem_x, origem_y))
+
+
 def reset_camera_roi() -> None:
+    _reancorar_mascara(0, 0)
     try:
         if _camera_nativa():
             direct_camera().reset_roi()
@@ -298,6 +311,12 @@ def reset_camera_roi() -> None:
 def escolher_referencia_tracker() -> AlvoAlinhamento:
     """Mostra o sensor inteiro e trava a ilha escolhida para esta sessao."""
     reset_camera_roi()
+    # Mascara ligada ja na selecao: com o beacon fraco, pixels quentes viravam
+    # o pico do recorte e a selecao nao achava ilha nenhuma (2026-09-26).
+    if foco_temp.BAD_PIXEL_MASK is None:
+        from modulos.visao import diagnostico  # noqa: PLC0415
+
+        diagnostico.carregar_mascara_se_existir((0, 0))
     foco_temp.set_focus_mode("dual")
     foco_temp.reset_focus_lock()
     selection = foco_temp.escolher_ilha_manualmente(

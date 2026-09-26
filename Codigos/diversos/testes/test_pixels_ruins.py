@@ -219,3 +219,31 @@ class EscalaOpticaTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MascaraAcompanhaRoiTests(unittest.TestCase):
+    def tearDown(self):
+        from modulos.visao import detector_ilhas as foco
+        foco.definir_mascara_pixels_ruins(None)
+
+    def test_pixel_quente_some_no_sensor_inteiro_e_depois_na_roi(self):
+        # A selecao da ilha acontece no sensor inteiro; a sessao, numa ROI. O
+        # mesmo pixel defeituoso tem de ser corrigido nas duas, e so ele.
+        import numpy as np
+        from modulos.controle import tracker_camera
+        from modulos.visao import detector_ilhas as foco
+
+        mascara = np.zeros((100, 120), bool)
+        mascara[40, 70] = True
+        foco.definir_mascara_pixels_ruins(mascara, (0, 0))
+
+        inteiro = np.full((100, 120), 10.0)
+        inteiro[40, 70] = 255.0
+        self.assertLess(foco.aplicar_pixels_ruins(inteiro)[40, 70], 50.0)
+
+        tracker_camera._reancorar_mascara(60, 30)   # ROI com canto em (60, 30)
+        roi = np.full((40, 40), 10.0)
+        roi[40 - 30, 70 - 60] = 255.0
+        corrigido = foco.aplicar_pixels_ruins(roi)
+        self.assertLess(corrigido[10, 10], 50.0)
+        self.assertEqual(foco.BAD_PIXEL_ORIGIN_XY, (60, 30))

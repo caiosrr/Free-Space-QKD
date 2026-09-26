@@ -1287,6 +1287,12 @@ def main(profile_name: str | None = None) -> None:
         set_gain(foco.CAMERA_GAIN); foco.set_focus_mode("dual")
         camera = direct_camera()
         camera.reset_roi()
+        # Mascara de pixels ruins JA no sensor inteiro, antes do ajuste de
+        # exposicao e da selecao. Ate 2026-09-26 ela so era ligada depois da
+        # ROI; com o beacon desfocado e fraco, os pixels quentes viravam o pico
+        # do recorte, 45% dele ficava acima do cometa, e a selecao dava zero
+        # ilhas. Ela e reancorada na ROI mais abaixo.
+        diagnostico.carregar_mascara_se_existir((0, 0))
         # A exposicao e resolvida ANTES da selecao manual, e por dois motivos.
         # O detector trava a ilha por SEMELHANCA de aparencia, entao mudar a
         # exposicao depois da selecao muda o tamanho e o brilho da mancha e o
