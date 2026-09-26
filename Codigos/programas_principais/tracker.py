@@ -4,6 +4,10 @@
     python programas_principais/tracker.py --camera zwo --horas 0.5 --sem-autoteste
 
 ``asi`` e a ASI pelo ASCOM; ``zwo`` e a ASI pelo SDK nativo da ZWO.
+
+Blocos alternados com e sem correcao, para medir o efeito do controle:
+
+    python programas_principais/tracker.py --camera ids --horas 8 --blocos-minutos 15
 """
 
 import sys
@@ -14,6 +18,7 @@ if str(CODIGOS_DIR) not in sys.path:
     sys.path.insert(0, str(CODIGOS_DIR))
 
 import argparse
+import os
 import subprocess
 
 from programas_principais._iniciador import aplicar_camera, perguntar_camera
@@ -40,6 +45,10 @@ def parse_args() -> argparse.Namespace:
     autoteste.add_argument("--autoteste", dest="autoteste", action="store_true")
     autoteste.add_argument("--sem-autoteste", dest="autoteste", action="store_false")
     parser.set_defaults(autoteste=None)
+    parser.add_argument(
+        "--blocos-minutos", type=float, default=None,
+        help="alterna blocos COM e SEM correcao dessa duracao; o primeiro corrige",
+    )
     vigia = parser.add_mutually_exclusive_group()
     vigia.add_argument("--vigia", dest="vigia", action="store_true")
     vigia.add_argument("--sem-vigia", dest="vigia", action="store_false")
@@ -79,6 +88,11 @@ if __name__ == "__main__":
     escolha = args.camera or perguntar_camera({"1": "asi", "2": "ids", "3": "zwo"}, "1")
     camera = aplicar_camera(escolha)
     print(f"Iniciando tracker com {camera}.")
+    if args.blocos_minutos:
+        # Lido pela configuracao na hora do import: precisa vir antes dele.
+        os.environ["QKD_BLOCOS_CORRECAO"] = "1"
+        os.environ["QKD_BLOCOS_CORRECAO_S"] = str(args.blocos_minutos * 60.0)
+        print(f"Blocos de {args.blocos_minutos:g} min: com correcao, sem, com, ...")
 
     from modulos.controle.tracker_sessao import main
 

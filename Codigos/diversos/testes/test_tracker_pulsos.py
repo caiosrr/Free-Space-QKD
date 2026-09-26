@@ -142,5 +142,40 @@ class BoundedPulseTests(unittest.TestCase):
         self.assertGreater(state.correction_cycles, 1)
 
 
+class BlocosDeCorrecaoTests(unittest.TestCase):
+    def test_bloco_sem_correcao_nao_manda_nada_ao_mount(self):
+        # Erro grande e persistente: com correcao ligada o laco comandaria o
+        # tempo todo. Blocos de 10 s: corrige, nao corrige, corrige.
+        state = TrackerState(has_signal=True, dx_filt_px=8., dy_filt_px=6.)
+        clock = [1.0]
+        commands = []
+        estados = []
+
+        def move(axis, rate, unused):
+            commands.append((clock[0], axis, rate))
+
+        def sleep(dt):
+            clock[0] += max(dt, 0.001)
+            with state.lock:
+                state.measurement_seq += 1
+                state.measurement_ts = clock[0]
+                estados.append((clock[0], state.correction_enabled))
+                state.stop = clock[0] > 31
+
+        with patch.object(tracker_loop.time, "perf_counter", side_effect=lambda: clock[0]),                 patch.object(tracker_loop.time, "sleep", side_effect=sleep),                 patch.object(tracker_loop, "move_axis", side_effect=move),                 patch.object(tracker_loop, "stop_axes_safely"),                 patch.object(tracker_loop, "CONTROL_HZ", 50),                 patch.object(tracker_loop, "CORRECTION_BLOCKS_ENABLED", True),                 patch.object(tracker_loop, "CORRECTION_BLOCK_SECONDS", 10.0):
+            tracker_loop.executar_loop_controle(state, np.diag([-1/6200, 1/7300]))
+
+        # Nenhum comando diferente de zero no bloco do meio (11 s a 21 s). A
+        # folga de 30 ms cobre o laco que estava no meio da iteracao na borda.
+        no_meio = [c for c in commands if 11.03 < c[0] < 21.0 and c[2] != 0.0]
+        self.assertEqual(no_meio, [])
+        # Mas houve correcao nos blocos de fora, senao o teste nao provaria nada.
+        self.assertTrue(any(c[2] != 0.0 for c in commands if c[0] < 11.0))
+        self.assertTrue(any(c[2] != 0.0 for c in commands if c[0] > 21.0))
+        # E a telemetria sabe em que bloco esta.
+        self.assertTrue(all(not e for t, e in estados if 11.1 < t < 20.9))
+        self.assertTrue(any(e for t, e in estados if t > 21.1))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -80,6 +80,14 @@ HOLD_ENTER_RADIUS_PX = 1.0
 CONTROL_REGIME_PADRAO = "lento_ganho_baixo"
 
 CONTROL_AB_TEST_ENABLED = _chave("QKD_AB_CONTROLE", False)
+
+# Blocos alternados COM e SEM correcao na mesma sessao, para medir o efeito do
+# controle sem que a atmosfera mude entre as duas condicoes. No bloco sem
+# correcao o laco continua medindo e gravando, mas nao comanda o mount em nada.
+# O primeiro bloco corrige, para a sessao comecar centrada. Ligado pelo
+# tracker.py com --blocos-minutos.
+CORRECTION_BLOCKS_ENABLED = _chave("QKD_BLOCOS_CORRECAO", False)
+CORRECTION_BLOCK_SECONDS = float(os.environ.get("QKD_BLOCOS_CORRECAO_S", "900"))
 CONTROL_AB_BLOCK_SECONDS = 600.0
 CONTROL_SLOW_WINDOW_SECONDS = 120.0
 CONTROL_SLOW_WARMUP_SECONDS = 60.0
@@ -447,6 +455,8 @@ if not (
     and 0 < CONTROL_SLOW_FRACTION_BAIXA < CONTROL_SLOW_FRACTION
     and CONTROL_REGIME_PADRAO in ("atual", "lento_ganho_alto", "lento_ganho_baixo")
     and CONTROL_AB_BLOCK_SECONDS >= 2 * CONTROL_SLOW_WINDOW_SECONDS
+    # Um bloco precisa encher a janela longa, senao nunca chega a corrigir.
+    and CORRECTION_BLOCK_SECONDS >= 2 * CONTROL_SLOW_WINDOW_SECONDS
     and 0 < AUTO_EXPOSURE_LOSS_SEARCH_BACKGROUND_LIMIT
     <= AUTO_EXPOSURE_BACKGROUND_INCREASE_LIMIT
     and AUTO_EXPOSURE_LOSS_SEARCH_RETURN_SECONDS > 0

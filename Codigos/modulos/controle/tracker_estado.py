@@ -26,6 +26,8 @@ class TrackerState:
     hold_enter_radius_px: float = 0.0
     hold_exit_radius_px: float = 0.0
     control_regime: str = "atual"
+    # False nos blocos sem correcao (CORRECTION_BLOCKS_ENABLED).
+    correction_enabled: bool = True
     control_dx_px: float = 0.0
     control_dy_px: float = 0.0
     control_radius_px: float = 0.0

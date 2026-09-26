@@ -17,6 +17,8 @@ from modulos.configuracoes.tracker import (
     FAST_ERROR_WINDOW_SECONDS,
     CONTROL_AB_BLOCK_SECONDS,
     CONTROL_AB_TEST_ENABLED,
+    CORRECTION_BLOCK_SECONDS,
+    CORRECTION_BLOCKS_ENABLED,
     CONTROL_REGIME_PADRAO,
     CONTROL_SLOW_FRACTION,
     CONTROL_SLOW_FRACTION_BAIXA,
@@ -250,6 +252,8 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
     ab_started_at = time.perf_counter()
     ab_block = -1
     ab_bloco_controle = -1
+    bloco_correcao = -1
+    corrigindo = True
 
     dt_target = 1.0 / CONTROL_HZ
     last_loop_t = time.perf_counter()
@@ -338,6 +342,14 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                         )
                         print()
                         print(f"A/B de controle: regime {nome_regime}")
+                if CORRECTION_BLOCKS_ENABLED:
+                    bloco_sc = int((loop_t0 - ab_started_at) // CORRECTION_BLOCK_SECONDS)
+                    corrigindo = bloco_sc % 2 == 0
+                    if bloco_sc != bloco_correcao:
+                        bloco_correcao = bloco_sc
+                        print()
+                        print(f"Blocos: {'COM' if corrigindo else 'SEM'} correcao "
+                              f"(bloco {bloco_sc})")
                 if HOLD_RADIUS_AB_TEST_ENABLED:
                     bloco = int(
                         (loop_t0 - ab_started_at) // HOLD_RADIUS_AB_BLOCK_SECONDS
@@ -558,6 +570,12 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
 
                 if loop_t0 < brake_until:
                     target_cmd_az = target_cmd_alt = 0.0
+                # Bloco sem correcao: os estimadores seguem medindo, a deriva
+                # acumulada entra na janela longa, e o primeiro bloco com
+                # correcao a recolhe. So o comando e zerado, pelo mesmo caminho
+                # de um freio, e um pulso em curso termina na hora.
+                if not corrigindo:
+                    target_cmd_az = target_cmd_alt = 0.0
 
                 # Supervisor final: limita inclusive o modo PD de erro grande.
                 # A contagem do pulso independe da chegada de novos frames.
@@ -565,7 +583,8 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                 target_cmd_az, target_cmd_alt = pulse_cycle.command(
                     loop_t0, measurement_ts, (target_cmd_az, target_cmd_alt),
                     (err_az, err_alt), current_angular_error,
-                    fine=estado.trim_mode_active, enabled=signal_ok and loop_t0 >= brake_until,
+                    fine=estado.trim_mode_active,
+                    enabled=signal_ok and loop_t0 >= brake_until and corrigindo,
                 )
                 if pulse_cycle.phase in {"parando", "acomodacao"}:
                     estado.source = "acomodacao_pos_movimento"
@@ -653,6 +672,7 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     state.hold_enter_radius_px = correction_gate.enter_radius_px
                     state.hold_exit_radius_px = correction_gate.exit_radius_px
                     state.control_regime = nome_regime
+                    state.correction_enabled = corrigindo
                     state.control_dx_px = estado.control_dx_px
                     state.control_dy_px = estado.control_dy_px
                     state.control_radius_px = estado.control_radius_px
