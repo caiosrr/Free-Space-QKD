@@ -37,6 +37,12 @@ AJUSTES_LOCAIS = sobrepor(globals(), "camera_ids_local", (
     "EXPOSURE_US", "FRAME_RATE_FPS", "ANALOG_GAIN", "DIGITAL_GAIN",
     "ROTATE_IMAGE_180", "DEVICE_INDEX",
 ))
+
+# A taxa de quadros limita a exposicao: com a taxa ligada, a IDS nao expoe mais
+# que 1/fps, e o driver CORTA a exposicao pedida sem avisar. Com 47,5 ms e o
+# padrao de 50 fps, a exposicao real caia para ~20 ms. Aqui a taxa desce o
+# necessario para a exposicao caber, com 10% de folga.
+FRAME_RATE_FPS = min(float(FRAME_RATE_FPS), 0.9e6 / float(EXPOSURE_US))
 CAPTURE_TIMEOUT_MS = 5000
 BUFFER_COUNT = 8
 TEST_FRAMES = 50
