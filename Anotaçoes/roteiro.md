@@ -1231,3 +1231,40 @@ perpendicular ao chip quando o laser chega a cerca de 2 × 17° = 34° da normal
 pela borda de baixo. As contas anteriores deste roteiro e das conversas usavam
 12° e pitch de 10,8 µm por suposição; os valores certos são estes.
 
+## Noite sem correção, 2026-09-26: primeira medida direta da deriva
+
+Sessão `sem_correcao_2026-09-26_00-38-02`, 8 h, mount parado, câmera da UFF
+**fora de foco** (o foco do telescópio foi ajustado para colimar o beacon que
+sai, e a câmera não foi refocada). Tudo abaixo é em pixels da câmera; a escala
+de 0,386″/px é da calibração antiga e vale só como aproximação, porque não
+houve calibração nova (três tentativas falharam com o ponto deformado).
+
+**Só as primeiras 5 h valem.** A exposição subiu até o teto de 60 ms e o CNR
+ficou em 1,5 a 2 a noite toda, contra 8 a 16 na operação normal. A partir das
+05:40 o fundo sobe com o amanhecer (55 para 213 contagens) e depois das 06:10
+satura em 243, sem quadros válidos.
+
+| grandeza | valor |
+|---|---|
+| deriva em 5 h | 7,2 px (máximo 8,1), ~2,8″ |
+| deriva a partir das 01:18 | 4,5 px (máximo 5,3) |
+| ruído quadro a quadro | x 1,8 px, y 4,0 px |
+
+Os primeiros 40 min têm um transiente de ~4,5 px em y. Hipótese não verificada:
+o mount acabava de voltar das varreduras das calibrações que falharam.
+
+**Função de estrutura da deriva** (medianas de 10 min): 1,20 px em 10 min,
+2,08 em 30, 2,49 em 60, 4,02 em 120, 4,64 em 240. Expoente ~0,43 entre 10 e
+240 min, entre o 0,30 da reconstrução de 2026-09-15 e o 0,5 de um passeio
+aleatório.
+
+**Convergência com o número de quadros somados** (20 rajadas, distância rms ao
+centro da soma de 4096 quadros da mesma rajada): 4,9 px com 1 quadro, 1,85 com
+16 (1,3 s), 1,15 com 64 (5 s), 0,82 com 512 (42 s). Cai rápido até ~16 quadros
+e depois devagar, como previsto. Os pontos acima de 512 dividem quadros com a
+referência e ficam artificialmente baixos.
+
+**A imagem empilhada não serve para comparar com o tracker nesta noite**: ela é
+dominada pela forma de leque do beacon desfocado, com ~100 px de largura, muito
+maior que a deriva.
+
