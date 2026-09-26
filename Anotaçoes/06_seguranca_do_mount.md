@@ -1,6 +1,6 @@
 # 06. Segurança do mount
 
-Conferido contra o commit `332b9e1`, em 2026-09-23.
+Conferido contra o commit `72671df`, em 2026-09-25.
 
 Camada 2 da documentação: lê o código de verdade. Para o mapa geral de uma
 sessão, leia antes o `01_caminho_de_uma_sessao.md`. Este documento cobre tudo
@@ -113,13 +113,13 @@ As seções seguem essa ordem.
 A primeira proteção é o próprio laço não mandar nada quando não sabe onde o
 beacon está.
 
-`Codigos/modulos/controle/tracker_loop.py`, linha 67
+`Codigos/modulos/controle/tracker_loop.py`, linha 69
 
 ```python
 SIGNAL_TIMEOUT_S = 0.45
 ```
 
-`Codigos/modulos/controle/tracker_loop.py`, linhas 378 a 388
+`Codigos/modulos/controle/tracker_loop.py`, linhas 390 a 400
 
 ```python
                 measurement_age = (loop_t0 - measurement_ts) if measurement_ts else 1e9
@@ -141,12 +141,19 @@ e uma medida velha é tratada como ausência de medida.
 
 E, aconteça o que acontecer dentro do laço, a saída dele manda zero:
 
-`Codigos/modulos/controle/tracker_loop.py`, linhas 685 a 686
+`Codigos/modulos/controle/tracker_loop.py`, linhas 705 a 706
 
 ```python
         finally:
             stop_axes_safely()
 ```
+
+Há um terceiro caminho que zera o comando, e ele é de propósito: com
+`--blocos-minutos`, o tracker alterna blocos **com** e **sem** correção, para
+medir o efeito do controle na mesma noite. No bloco sem correção o comando vai
+a zero pelo mesmo caminho de um freio, e um pulso em curso termina na hora; os
+estimadores continuam medindo. Testado com o laço real e o mount simulado:
+nenhum comando sai nesse bloco. **Nunca rodou com o mount de verdade.**
 
 O `finally` do Python roda na saída normal, numa exceção e no Ctrl+C. **Não
 roda** se o processo for morto de fora. Esse é o limite de tudo que mora dentro
@@ -168,7 +175,7 @@ do tracker, e o motivo de existirem as seções 5 a 9.
 Uma thread separada, a 5 Hz, lê a posição do mount e encerra a sessão em três
 situações.
 
-`Codigos/modulos/configuracoes/tracker.py`, linhas 306 a 311
+`Codigos/modulos/configuracoes/tracker.py`, linhas 314 a 319
 
 ```python
 # Limites da sessao longa.
@@ -297,7 +304,7 @@ margem (`tracker_seguranca.py`, linhas 133 a 139).
 Não é uma proteção que age; é a que limita o estrago quando todas as outras
 falham.
 
-`Codigos/modulos/configuracoes/tracker.py`, linhas 313 a 328
+`Codigos/modulos/configuracoes/tracker.py`, linhas 321 a 336
 
 ```python
 # Velocidade maxima durante o tracking. O limite menor reduz a distancia que o
@@ -406,7 +413,7 @@ continua sendo escrita.
 
 O tracker o sobe sozinho, como processo filho:
 
-`Codigos/programas_principais/tracker.py`, linhas 23 a 27
+`Codigos/programas_principais/tracker.py`, linhas 28 a 32
 
 ```python
 # Folga entre a ultima linha de telemetria e o disparo. Os 25 s padrao do vigia
@@ -416,7 +423,7 @@ O tracker o sobe sozinho, como processo filho:
 VIGIA_DISPARO_S = 60.0
 ```
 
-`Codigos/programas_principais/tracker.py`, linhas 85 a 93
+`Codigos/programas_principais/tracker.py`, linhas 99 a 107
 
 ```python
     vigia = iniciar_vigia() if args.vigia else None
@@ -434,7 +441,7 @@ O arranjo é deliberado nos dois desfechos. Se o tracker termina direito, o
 `finally` encerra o vigia. Se o tracker é morto sem rodar o `finally`, que é o
 caso que o vigia existe para cobrir, o filho **sobrevive** e age sozinho. O
 vigia roda em grupo de processos próprio, para o Ctrl+C do console não chegar
-nele direto (`tracker.py`, linhas 59 a 69).
+nele direto (`tracker.py`, linhas 68 a 78).
 
 O coração do vigia:
 
