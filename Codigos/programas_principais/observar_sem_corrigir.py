@@ -146,6 +146,11 @@ def salvar_empilhada(soma: np.ndarray, destino: Path, rotulo: str) -> None:
     cv2.imwrite(str(destino.with_name(f"{destino.stem}_{rotulo}_cor.png")), cor)
 
 
+def _num(valor, formato: str) -> str:
+    """Numero formatado, ou vazio quando o controlador ainda nao mediu."""
+    return "" if valor is None else format(valor, formato)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--camera", choices=["asi", "ids", "zwo"], default=None)
@@ -178,6 +183,7 @@ def main(args: argparse.Namespace) -> int:
         EXPOSURE_SECONDS,
         capture_frame,
         connect_camera,
+        current_roi_size,
         disconnect_camera,
         escolher_referencia_tracker,
         latest_raw_frame,
@@ -204,14 +210,19 @@ def main(args: argparse.Namespace) -> int:
     # Mesma ROI e mesma chamada do tracker, de proposito: as duas sessoes so
     # comparam se o recorte do sensor for o mesmo.
     janela = roi_size_for_backend(backend_name())
-    largura, altura, alvo_x, alvo_y = set_camera_roi_validated(
+    # A funcao devolve o CANTO da ROI no sensor e o alvo local, nao o tamanho.
+    # Ate 2026-09-26 este programa lia o canto como largura e altura, e a soma
+    # empilhada ficava com o tamanho errado e nunca era somada.
+    canto_x, canto_y, alvo_x, alvo_y = set_camera_roi_validated(
         janela,
         janela,
         alvo.x_px,
         alvo.y_px,
         alvo.focus_signature,
     )
-    print(f"ROI {largura}x{altura}, alvo em ({alvo_x:.1f}, {alvo_y:.1f})")
+    largura, altura = current_roi_size(janela)
+    print(f"ROI {largura}x{altura} com canto em ({canto_x}, {canto_y}), "
+          f"alvo local em ({alvo_x:.1f}, {alvo_y:.1f})")
 
     exposicao_us = EXPOSURE_SECONDS * 1e6
     # O teto da config e trava de seguranca pensada para a operacao normal. Se
@@ -227,6 +238,7 @@ def main(args: argparse.Namespace) -> int:
     soma_rajada = np.zeros((altura, largura), dtype=np.float64)
     quadros_rajada = 0
     rajada_ativa = True          # a primeira comeca imediatamente
+    avisou_forma = False
     proxima_rajada = 0.0
     proxima_imagem = args.intervalo_imagem * 60.0
 
@@ -281,15 +293,20 @@ def main(args: argparse.Namespace) -> int:
                 perdidos += 1
             else:
                 n_quadros += 1
-                m = decisao.metrics
                 escritor.writerow([
                     f"{t_amostra:.3f}", datetime.now().isoformat(timespec="milliseconds"),
                     f"{centro[0]:.4f}", f"{centro[1]:.4f}", f"{exposicao_us:.0f}",
-                    "" if m is None else f"{m.peak:.1f}",
-                    "" if m is None else f"{m.local_background:.1f}",
-                    "" if m is None else f"{m.cnr:.2f}",
+                    _num(decisao.peak_median, ".1f"),
+                    _num(decisao.local_background_median, ".1f"),
+                    _num(decisao.cnr_median, ".2f"),
                     f"{hz:.1f}",
                 ])
+                if bruto is not None and bruto.shape != soma_total.shape and not avisou_forma:
+                    # Nunca mais em silencio: foi assim que a soma deixou de ser
+                    # feita sem ninguem perceber.
+                    print(f"ATENCAO: quadro {bruto.shape} diferente da soma "
+                          f"{soma_total.shape}; a imagem empilhada nao esta somando.")
+                    avisou_forma = True
                 if bruto is not None and bruto.shape == soma_total.shape:
                     # Normaliza pela exposicao: com a autoexposicao mexendo ao
                     # longo da noite, somar contagens cruas daria mais peso aos
