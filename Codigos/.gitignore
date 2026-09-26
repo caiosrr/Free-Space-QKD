@@ -19,3 +19,6 @@ resultados/json/*.json
 .idea/
 Thumbs.db
 .DS_Store
+
+# Ajustes de camera de cada maquina (ver modulos/configuracoes/ajustes_de_maquina.py).
+modulos/configuracoes/*_local.py

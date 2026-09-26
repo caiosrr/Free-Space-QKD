@@ -3,9 +3,14 @@
 import os
 
 from modulos.configuracoes import saidas
+from modulos.configuracoes.ajustes_de_maquina import sobrepor
 
 
-# ===== AJUSTE ESTES VALORES PARA A IMAGEM DO EXPERIMENTO =====
+# ===== VALORES PADRAO =====
+#
+# NAO EDITE AQUI para ajustar a camera de uma maquina: crie ao lado um
+# camera_ids_local.py (copie camera_ids_local.exemplo.py) e ponha nele so o
+# que muda. Ele fica fora do git, e o git pull nunca mais recusa.
 
 # A API da IDS usa microssegundos. 7276 us = 7.276 ms.
 EXPOSURE_US = 6076.0
@@ -26,6 +31,12 @@ ROTATE_IMAGE_180 = False
 # ===== NORMALMENTE NAO E NECESSARIO ALTERAR =====
 
 DEVICE_INDEX = 0
+
+# Ajustes desta maquina, de camera_ids_local.py, se existir.
+AJUSTES_LOCAIS = sobrepor(globals(), "camera_ids_local", (
+    "EXPOSURE_US", "FRAME_RATE_FPS", "ANALOG_GAIN", "DIGITAL_GAIN",
+    "ROTATE_IMAGE_180", "DEVICE_INDEX",
+))
 CAPTURE_TIMEOUT_MS = 5000
 BUFFER_COUNT = 8
 TEST_FRAMES = 50
