@@ -672,16 +672,55 @@ def _find_focus_candidates(
     return candidates
 
 
+# Lado, em pixels do sensor, do recorte feito em volta da marca quando o
+# operador aperta Enter sem desenhar retangulo.
+LADO_RECORTE_NA_MARCA_PX = 600
+
+
+def _imagem_de_selecao(frame_gray: np.ndarray, display_w: int,
+                       display_h: int) -> tuple[np.ndarray, tuple[int, int]]:
+    """Imagem reduzida para a tela, com a luz VISIVEL, e onde ela esta.
+
+    Em 2026-09-26, na UFF, o operador nao viu a luz nenhuma nesta janela,
+    arrastou o retangulo as cegas, e a calibracao travou em ruido. A reducao
+    e em CASCATA: a janela encolhe o sensor de 2592 px para ~1100, e o AnyDesk
+    ainda encolhe a tela da UFF (2560 px) para caber no notebook (1366 px). Um
+    ponto pequeno vira 1 ou 2 pixels, e a compressao do AnyDesk os apaga. A
+    reducao da janela sozinha nao bastaria: num teste sintetico com o ponto
+    daquela noite ele continuava com brilho 197 de 255.
+
+    Tres coisas resolvem, e a terceira sozinha ja bastaria: esticar o contraste
+    a partir do fundo, com raiz quadrada para a cauda fraca aparecer; reduzir
+    pelo MAXIMO, dilatando antes, para o ponto ocupar varios pixels mesmo depois
+    das duas reducoes; e marcar a posicao da luz mais forte. A marca vem do
+    maximo da imagem suavizada, para um pixel quente isolado nao ganhar.
+    """
+    suave = cv2.GaussianBlur(frame_gray, (0, 0), 3.0)
+    py, px = np.unravel_index(int(np.argmax(suave)), suave.shape)
+    fundo = float(np.median(frame_gray))
+    topo = max(float(suave.max()), fundo + 1.0)
+    esticada = np.clip((frame_gray - fundo) / (topo - fundo), 0.0, 1.0)
+    img = (255.0 * np.sqrt(esticada)).astype(np.uint8)
+    image_h, image_w = frame_gray.shape
+    fator = max(image_w / max(display_w, 1), image_h / max(display_h, 1))
+    if fator > 1.0:
+        k = int(np.ceil(3.0 * fator))
+        img = cv2.dilate(img, np.ones((k, k), np.uint8))
+        img = cv2.resize(img, (display_w, display_h), interpolation=cv2.INTER_AREA)
+    return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR), (int(px), int(py))
+
+
 def _selecionar_regiao_de_busca(frame_gray: np.ndarray) -> tuple[int, int, int, int]:
     """Permite desenhar o retangulo usado somente para procurar candidatos."""
     image_h, image_w = frame_gray.shape
     scale = min(1.0, 1400.0 / max(image_w, 1), 820.0 / max(image_h, 1))
     display_w = max(1, int(round(image_w * scale)))
     display_h = max(1, int(round(image_h * scale)))
-    normalized = cv2.normalize(frame_gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    base = cv2.cvtColor(normalized, cv2.COLOR_GRAY2BGR)
-    if scale != 1.0:
-        base = cv2.resize(base, (display_w, display_h), interpolation=cv2.INTER_AREA)
+    base, (luz_x, luz_y) = _imagem_de_selecao(frame_gray, display_w, display_h)
+    marca = (int(round(luz_x * scale)), int(round(luz_y * scale)))
+    cv2.circle(base, marca, 22, (0, 220, 255), 2, cv2.LINE_AA)
+    cv2.putText(base, "luz mais forte", (marca[0] + 28, marca[1] + 6),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 220, 255), 2, cv2.LINE_AA)
 
     window_name = "Etapa 1 - recorte a regiao da luz"
     state = {
@@ -730,10 +769,10 @@ def _selecionar_regiao_de_busca(frame_gray: np.ndarray) -> tuple[int, int, int, 
             cv2.rectangle(canvas, (x0, y0), (x1, y1), (0, 255, 0), 2)
         cv2.putText(
             canvas,
-            "Arraste ao redor da luz | Enter confirma | A usa tudo | Esc cancela",
+            "Arraste ao redor da luz | Enter confirma (sem retangulo: em volta da marca) | A usa tudo",
             (20, 35),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.72,
+            0.6,
             (255, 255, 255),
             2,
             cv2.LINE_AA,
@@ -745,8 +784,9 @@ def _selecionar_regiao_de_busca(frame_gray: np.ndarray) -> tuple[int, int, int, 
     cv2.setMouseCallback(window_name, on_mouse)
     print(
         "Selecao da regiao: arraste um retangulo ao redor da luz e pressione Enter. "
-        "A usa o sensor inteiro."
+        "Enter sem retangulo recorta em volta da marca amarela; A usa o sensor inteiro."
     )
+    print(f"Luz mais forte em ({luz_x}, {luz_y}) px do sensor.")
     try:
         while True:
             cv2.imshow(window_name, render())
@@ -759,6 +799,11 @@ def _selecionar_regiao_de_busca(frame_gray: np.ndarray) -> tuple[int, int, int, 
                     int(np.ceil((x1 - x0 + 1) / scale)),
                     int(np.ceil((y1 - y0 + 1) / scale)),
                 )
+                return _clamp_search_roi(roi, image_w, image_h)
+            if key in (13, 10):
+                meio = LADO_RECORTE_NA_MARCA_PX // 2
+                roi = (luz_x - meio, luz_y - meio,
+                       LADO_RECORTE_NA_MARCA_PX, LADO_RECORTE_NA_MARCA_PX)
                 return _clamp_search_roi(roi, image_w, image_h)
             if key in (ord("a"), ord("A")):
                 return 0, 0, image_w, image_h
