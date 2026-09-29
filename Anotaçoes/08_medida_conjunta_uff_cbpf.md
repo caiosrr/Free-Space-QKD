@@ -1,6 +1,6 @@
 # 08. Medida conjunta UFF e CBPF
 
-Conferido contra o commit `36c13b5`, em 2026-09-25.
+Conferido contra o commit `e559bcf`, em 2026-09-29.
 
 Camada 2 da documentação. Cobre as duas peças do experimento que mede, na
 outra ponta do enlace, o que o tracker faz: os **blocos com e sem correção** no
@@ -118,9 +118,26 @@ com o relógio do Windows sincronizado, e a análise cruza pelo horário. Por is
 cada linha começa com `t_unix`, o instante em segundos UTC, que é a mesma
 escala nos dois PCs.
 
+### A câmera do CBPF
+
+Não é IDS: é uma **The Imaging Source DMK 27AUR0135**, monocromática, USB 3,
+1280 × 960 em 8 bits, usada lá pelo IC Capture. O registrador a lê pelo
+**DirectShow** do Windows, via OpenCV, sem SDK nenhum (`--camera dshow`, o
+padrão). Exposição e ganho se ajustam na janela do próprio driver, aberta com
+`--ajustes-camera`. Testado só com a webcam do notebook; **nunca rodou com a
+DMK**.
+
+**Não há lente entre o cubo divisor e a câmera** (informado pelo CBPF). Então
+ela vê a mancha do feixe da UFF direto, e o centroide mede o **deslocamento
+lateral** do feixe no plano da câmera, não o ângulo de chegada. O acoplamento na
+fibra depende do ângulo, porque a lente do acoplador converte ângulo em posição
+na ponta da fibra. As duas grandezas se relacionam, mas não são a mesma: a
+comparação com o power meter é o que vai dizer quanto a posição da mancha
+explica do acoplamento.
+
 ### O ponto na câmera
 
-`Codigos/programas_principais/registrar_cbpf.py`, linhas 62 a 95
+`Codigos/programas_principais/registrar_cbpf.py`, linhas 72 a 105
 
 ```python
 def medir_ponto(quadro: np.ndarray, sinal_minimo: float = SINAL_MINIMO) -> dict | None:
@@ -171,7 +188,7 @@ importa é o `fluxo`, que acompanha o acoplamento.
 
 ### O relógio
 
-`Codigos/programas_principais/registrar_cbpf.py`, linhas 98 a 105
+`Codigos/programas_principais/registrar_cbpf.py`, linhas 108 a 115
 
 ```python
 def estado_do_relogio() -> str:
@@ -202,9 +219,9 @@ meio segundo de erro já não atrapalha.
 ## 3. A noite, na prática
 
 1. Nos dois PCs: `w32tm /resync`.
-2. **CBPF**, fechados o IDS peak Cockpit e o app da Thorlabs:
-   `python programas_principais/registrar_cbpf.py --teste`, confere, e então
-   `--horas 10`.
+2. **CBPF**, fechados o IC Capture e o app da Thorlabs:
+   `python programas_principais/registrar_cbpf.py --ajustes-camera --teste`,
+   confere, e então `--horas 10`.
 3. **UFF**: `python programas_principais/tracker.py --camera ids --horas 10
    --blocos-minutos 15`.
 4. De manhã: `registro.csv` no CBPF e `telemetria.csv` na UFF, cruzados pelo
