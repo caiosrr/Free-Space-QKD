@@ -757,7 +757,8 @@ script registra tudo de uma vez, num PowerShell de administrador, a partir de
 `Codigos`:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File diversos\instalacaoegistrar_tarefas_seguranca.ps1
+powershell -ExecutionPolicy Bypass -File diversos\instalacao\registrar_tarefas_seguranca.ps1
+egistrar_tarefas_seguranca.ps1
 ```
 
 Ele registra as duas tarefas, e o aviso pelo Telegram quando recebe o token.
