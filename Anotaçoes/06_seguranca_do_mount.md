@@ -1,6 +1,6 @@
 # 06. Segurança do mount
 
-Conferido contra o commit `78b88a0`, em 2026-09-29.
+Conferido contra o commit `9c2223f`, em 2026-09-29.
 
 Camada 2 da documentação: lê o código de verdade. Para o mapa geral de uma
 sessão, leia antes o `01_caminho_de_uma_sessao.md`. Este documento cobre tudo
@@ -522,7 +522,7 @@ Os dois caminhos têm furos complementares:
 
 Encadeá-los fecha os dois:
 
-`Codigos/modulos/controle/parada_emergencia.py`, linhas 202 a 230
+`Codigos/modulos/controle/parada_emergencia.py`, linhas 208 a 236
 
 ```python
     # 1. Alpaca, o caminho normal e o unico que respeita o driver.
@@ -562,7 +562,7 @@ a porta serial, para o degrau 4 poder falar com o mount.
 
 ### A parada pela serial confere pela posição
 
-`Codigos/modulos/controle/parada_emergencia.py`, linhas 109 a 122
+`Codigos/modulos/controle/parada_emergencia.py`, linhas 115 a 128
 
 ```python
         with serial.Serial(porta, baud, timeout=timeout) as s:
@@ -601,9 +601,14 @@ depois de 99″, e a altitude lida pela serial bateu com a do ASCOM.
 
 ### Dois cuidados de implementação
 
-**A porta serial é descoberta**, não fixa. O mount responde em `COM5` num PC e
-`COM6` no outro. A escada pergunta `:GVP#` em cada porta do sistema e usa a
-primeira que responder (`parada_emergencia.py`, linhas 74 a 91).
+**A porta serial é configurada por máquina, ou descoberta.** O mount responde
+em `COM5` num PC, `COM6` em outro e `COM4` no novo da UFF. Com a porta
+definida em `serial_mount_local.py`, fora do git, só ela é aberta. Sem ela, a
+escada pergunta `:GVP#` em cada porta do sistema e usa a primeira que
+responder. **No PC compartilhado da UFF a porta configurada é obrigatória**:
+ele tem um laser de 405 nm de outro grupo, e a descoberta mandaria bytes ao
+controlador dele no boot, antes de o programa do laser abrir a porta. A
+descoberta, quando usada, fica (`parada_emergencia.py`, linhas 74 a 91).
 
 **O servidor é localizado por quem escuta na porta do Alpaca**, via `netstat`,
 e não pelo nome do programa, que muda conforme seja ASCOM Remote, driver
