@@ -23,8 +23,18 @@ FECHADOS, porque cada um segura o seu instrumento.
 
 Uso, a partir da pasta Codigos:
 
-    python programas_principais/registrar_cbpf.py --teste
-    python programas_principais/registrar_cbpf.py --horas 10
+    python programas_principais/registrar_cbpf.py --camera dshow --listar-cameras
+    python programas_principais/registrar_cbpf.py --camera dshow --ajustes-camera --teste
+    python programas_principais/registrar_cbpf.py --camera dshow --horas 10
+
+A camera do CBPF e uma The Imaging Source DMK 27AUR0135, lida pelo DirectShow
+(--camera dshow). Exposicao e ganho se ajustam na janela do proprio driver,
+aberta com --ajustes-camera; os valores ficam valendo para a sessao.
+
+Com camera IDS ou ZWO:
+
+    python programas_principais/registrar_cbpf.py --camera ids --teste
+    python programas_principais/registrar_cbpf.py --camera ids --horas 10
     python programas_principais/registrar_cbpf.py --horas 10 --sem-camera
     python programas_principais/registrar_cbpf.py --horas 10 --exposicao-us 5000 --ganho 2
 """
@@ -119,7 +129,13 @@ def aplicar_sobreposicoes(args: argparse.Namespace) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--camera", choices=["ids", "zwo"], default="ids")
+    parser.add_argument("--camera", choices=["dshow", "ids", "zwo"], default="dshow")
+    parser.add_argument("--indice", type=int, default=0,
+                        help="indice da camera DirectShow (ver --listar-cameras)")
+    parser.add_argument("--listar-cameras", action="store_true",
+                        help="lista as cameras DirectShow e sai")
+    parser.add_argument("--ajustes-camera", action="store_true",
+                        help="abre a janela de exposicao e ganho do driver antes de comecar")
     parser.add_argument("--horas", type=float, default=10.0)
     parser.add_argument("--intervalo", type=float, default=0.2,
                         help="segundos entre linhas gravadas (padrao 0,2, ou 5 por segundo)")
@@ -132,8 +148,30 @@ def main() -> int:
                         help="10 s imprimindo cada leitura, sem gravar, para conferir")
     args = parser.parse_args()
 
+    if args.listar_cameras:
+        from modulos.controle.cameras.dshow import listar_cameras  # noqa: PLC0415
+        achadas = listar_cameras()
+        for i, w, h in achadas:
+            print(f"  camera {i}: {w}x{h}")
+        if not achadas:
+            print("Nenhuma camera DirectShow abriu. O IC Capture esta fechado?")
+        return 0
+
     camera = pm = None
-    if not args.sem_camera:
+    exposicao_s = None
+    if not args.sem_camera and args.camera == "dshow":
+        from modulos.controle.cameras.dshow import CameraDirectShow  # noqa: PLC0415
+        camera = CameraDirectShow(args.indice)
+        try:
+            camera.connect()
+        except Exception as exc:
+            print(f"Nao consegui abrir a camera: {exc}")
+            print("Para registrar so o power meter, use --sem-camera.")
+            return 1
+        if args.ajustes_camera:
+            camera.abrir_ajustes()
+            input("Ajuste exposicao e ganho na janela do driver e aperte Enter aqui: ")
+    elif not args.sem_camera:
         print(f"Camera: {aplicar_camera(args.camera)}")
         aplicar_sobreposicoes(args)
         from modulos.controle.cameras.backend import direct_camera  # noqa: PLC0415
