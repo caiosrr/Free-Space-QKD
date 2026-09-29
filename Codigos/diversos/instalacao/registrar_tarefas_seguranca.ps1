@@ -50,6 +50,13 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "Rode: $python -m pip install -r requirements.txt"
     exit 1
 }
+$portaLocal = Join-Path $codigos "modulos\configuracoes\serial_mount_local.py"
+if (-not (Test-Path $portaLocal)) {
+    Write-Host "ATENCAO: porta serial do mount nao configurada ($portaLocal)." -ForegroundColor Yellow
+    Write-Host "  Sem ela a parada de emergencia pergunta a identidade em TODAS as portas"
+    Write-Host "  seriais, inclusive as de equipamentos de outros grupos. Num PC compartilhado,"
+    Write-Host "  crie o arquivo a partir de serial_mount_local.exemplo.py antes de seguir.`n"
+}
 Write-Host "Codigos : $codigos"
 Write-Host "Python  : $python`n"
 

@@ -102,6 +102,12 @@ def parar_pela_serial(
     except ImportError:
         return False, "pyserial ausente: python -m pip install pyserial"
     if porta is None:
+        # Porta configurada na maquina vem antes da descoberta: com ela, nenhuma
+        # outra porta recebe bytes. Ver modulos/configuracoes/serial_mount.py.
+        from modulos.configuracoes.serial_mount import PORTA_SERIAL  # noqa: PLC0415
+
+        porta = PORTA_SERIAL
+    if porta is None:
         porta = descobrir_porta(baud)
         if porta is None:
             return False, "nenhuma porta serial respondeu ao LX200"
