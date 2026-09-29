@@ -220,7 +220,25 @@ def montar(incluir_ociosidade: bool) -> dict:
     return estado
 
 
+def _confiar_no_windows() -> None:
+    """Verifica certificados pelo proprio Windows, e nao pela lista do Python.
+
+    Na rede da UFF, em 2026-09-29, o PC novo recusou o Telegram com
+    "self-signed certificate in certificate chain": o firewall da instituicao
+    inspeciona o HTTPS e apresenta um certificado proprio, que o Windows aceita
+    e o Python, por padrao, nao. Desligar a verificacao nao e a saida. O
+    truststore faz o Python perguntar ao Windows, como o navegador faz.
+    """
+    try:
+        import truststore  # noqa: PLC0415
+
+        truststore.inject_into_ssl()
+    except ImportError:
+        pass
+
+
 def main() -> int:
+    _confiar_no_windows()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--saida", type=Path, default=None,

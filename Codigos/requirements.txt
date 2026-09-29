@@ -13,6 +13,10 @@ ids_peak_ipl
 # vigia so tem o Alpaca e volta a ter o furo que a escada fechou.
 pyserial
 
+# HTTPS verificado pelo Windows: na rede da UFF o firewall inspeciona o trafego
+# e so o Windows conhece o certificado dele (aviso do Telegram).
+truststore
+
 # Figuras de diversos/ferramentas.
 matplotlib
 pandas
