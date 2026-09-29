@@ -1,6 +1,6 @@
 # 06. Segurança do mount
 
-Conferido contra o commit `72671df`, em 2026-09-25.
+Conferido contra o commit `78b88a0`, em 2026-09-29.
 
 Camada 2 da documentação: lê o código de verdade. Para o mapa geral de uma
 sessão, leia antes o `01_caminho_de_uma_sessao.md`. Este documento cobre tudo
@@ -750,8 +750,22 @@ Todos os que param deixam rastro no mesmo diário,
 `Codigos/resultados/parar_mount.txt`: o vigia, a parada direta e a tarefa de
 boot. É o primeiro lugar para olhar depois de uma noite estranha.
 
-**Não verifiquei daqui quais tarefas estão de fato registradas no PC da UFF.**
-Para conferir lá:
+**Registrar num PC novo.** Até 2026-09-29 as tarefas tinham sido registradas à
+mão, e os comandos não estavam guardados em lugar nenhum; nesse dia a bancada
+da UFF mudou de PC e ficou sem proteção nenhuma contra reinício. Agora um
+script registra tudo de uma vez, num PowerShell de administrador, a partir de
+`Codigos`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File diversos\instalacaoegistrar_tarefas_seguranca.ps1
+```
+
+Ele registra as duas tarefas, e o aviso pelo Telegram quando recebe o token.
+E liga o **reinício automático após tela azul**, se estiver desligado: é o que
+transforma um travamento com tela azul em reinício, e portanto na tarefa de
+boot. **Nunca rodou num PC de verdade.**
+
+Para conferir o que está registrado:
 
 ```powershell
 schtasks /query /fo LIST /v | Select-String -Pattern "parar_mount" -Context 0,12
@@ -771,11 +785,23 @@ schtasks /query /fo LIST /v | Select-String -Pattern "parar_mount" -Context 0,12
 
 | cenário | por que nada age |
 |---|---|
-| PC travado de vez, sem reiniciar | todo o software de proteção roda nele |
+| PC travado de vez, sem reiniciar e sem tela azul | todo o software de proteção roda nele |
 | PC desligado que não volta | não há boot, então não há tarefa de boot |
 | queda de energia | coberto por acaso: o mount perde energia junto e para |
 
-Os dois primeiros só têm solução com hardware: uma tomada inteligente, que
+O travamento **com** tela azul está coberto: o reinício automático, que o
+script de instalação liga, leva à tarefa de boot. O travamento duro, sem tela
+azul, só um **watchdog de hardware** da placa-mãe resolveria, e isso depende do
+modelo do PC: placas de servidor e industriais costumam ter, placas comuns e
+notebooks raramente o expõem no Windows.
+
+Baixar a velocidade dos micropulsos, abaixo dos 3,75″/s atuais, foi avaliado e
+não entra agora. Pelo `MoveAxis` o mount não anda abaixo disso (medido). Pela
+serial, com o `:Rv`, talvez ande, mas não foi testado, e exigiria tirar o
+controle do ASCOM. E o ganho seria só no pior caso: o risco esperado fica igual,
+porque cada correção passaria a durar mais na mesma proporção.
+
+Os dois primeiros da tabela só têm solução com hardware: uma tomada inteligente, que
 corta a energia do mount ou do PC de longe, ou um segundo computador na mesma
 rede do mount. O Wi-Fi do AM5 foi avaliado e **não vira proteção sozinho**: para
 mandar o `:Q#` por ele, alguém precisa estar vivo na rede local do mount, e a
