@@ -1268,3 +1268,24 @@ referência e ficam artificialmente baixos.
 dominada pela forma de leque do beacon desfocado, com ~100 px de largura, muito
 maior que a deriva.
 
+
+## PC novo da UFF: o programa do laser disputa a porta do mount, 2026-09-29
+
+A bancada da UFF passou para um PC que também controla lasers OBIS de outro
+grupo, pelo Coherent Connection. Na configuração, o ASCOM parou de conectar no
+`COM4` com "Serial port is busy". O Monitor de Recursos mostrou o
+`Coherent_Connection.exe` segurando `\Device\USBSER000` a `003`, inclusive a
+porta do mount: ao abrir o Setup do ASCOM Remote, o driver soltou o `COM4` e o
+programa do laser tomou a porta.
+
+Medido na mesma noite: **com o Coherent Connection fechado o OBIS segue
+emitindo**, conferido pela câmera do CBPF. O guia rápido da Coherent confirma a
+outra metade: com o Auto Start, ligado de fábrica, o laser volta a emitir ao
+receber alimentação, na última potência configurada.
+
+Consequência para a escada de parada: o degrau 3 derruba o servidor ASCOM para
+liberar a serial, e com o Coherent aberto essa janela pode ser dele, não do
+degrau 4. Por isso a regra na UFF: **em sessão sem ninguém ao lado, o Coherent
+Connection fica fechado**; ele só abre para ajustar o laser. E a porta do mount
+fica configurada em `serial_mount_local.py`, para a escada não mandar
+`:GVP#` às portas dos lasers.
