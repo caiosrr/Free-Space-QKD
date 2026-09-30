@@ -7,7 +7,8 @@ e a chave dessa juncao.
 
 O que ele grava, por linha:
 
-    camera        centroide do ponto, pico, fundo, fluxo e pixels saturados.
+    camera        centroide do ponto, pico, fundo, fluxo e pixels saturados;
+                  e o sinal (maximo suavizado acima do fundo) mesmo sem ponto.
                   Se a camera ve o feixe ANTES da fibra, o centroide e a
                   posicao do feixe da UFF; se ve a saida da fibra, o fluxo ja
                   diz o acoplamento.
@@ -61,11 +62,11 @@ import numpy as np  # noqa: E402
 from modulos.configuracoes import saidas  # noqa: E402
 from programas_principais._iniciador import aplicar_camera  # noqa: E402
 
-COMPRIMENTO_DE_ONDA_NM = 632.8      # beacon vermelho da UFF; conferir
+COMPRIMENTO_DE_ONDA_NM = 637.0      # OBIS vermelho da UFF; o Coherent o mostra como 641
 SINAL_MINIMO = 10.0                  # contagens acima do fundo para haver ponto
 IMAGEM_A_CADA_S = 600.0
 
-COLUNAS = ["t_unix", "data_hora", "x_px", "y_px", "pico", "fundo", "fluxo",
+COLUNAS = ["t_unix", "data_hora", "x_px", "y_px", "pico", "fundo", "sinal", "fluxo",
            "saturados", "potencia_w", "erro"]
 
 
@@ -115,6 +116,31 @@ def estado_do_relogio() -> str:
         return f"w32tm indisponivel: {type(exc).__name__}: {exc}"
 
 
+def sinal_do_quadro(quadro: np.ndarray) -> tuple[float, float]:
+    """Fundo e altura do maximo suavizado acima dele, haja ponto ou nao.
+
+    Existe porque "sem ponto" nao diz se faltou pouco ou muito. Na primeira
+    leitura da DMK, em 2026-09-29, o feixe aparecia no IC Capture e o
+    registrador so respondia "sem ponto". Gravando esta altura sempre, da para
+    ver a distancia ao limiar e acompanhar pela noite um feixe fraco demais
+    para o centroide.
+    """
+    f = quadro.astype(np.float64)
+    if f.ndim == 3:
+        f = f.mean(axis=2)
+    fundo = float(np.median(f))
+    suave = cv2.GaussianBlur(f - fundo, (0, 0), 2.0)
+    return fundo, float(suave.max())
+
+
+def formatar_potencia(potencia_w: float) -> str:
+    """Na unidade em que o ruido aparece: nW nao some arredondado para 0,00 uW."""
+    for escala, unidade in ((1e-3, "mW"), (1e-6, "uW")):
+        if abs(potencia_w) >= escala:
+            return f"{potencia_w / escala:.3g} {unidade}"
+    return f"{potencia_w * 1e9:.3g} nW"
+
+
 def aplicar_sobreposicoes(args: argparse.Namespace) -> None:
     """Exposicao e ganho pela linha de comando, antes de importar a camera."""
     zwo = os.environ.get("QKD_CAMERA_BACKEND") == "zwo_sdk"
@@ -144,6 +170,10 @@ def main() -> int:
     parser.add_argument("--sem-camera", action="store_true")
     parser.add_argument("--sem-pm", action="store_true")
     parser.add_argument("--pm-recurso", default=None, help="nome VISA do PM100, se houver mais de um")
+    parser.add_argument("--comprimento-de-onda", type=float, default=COMPRIMENTO_DE_ONDA_NM,
+                        help=f"nm, para a correcao do sensor (padrao {COMPRIMENTO_DE_ONDA_NM:g})")
+    parser.add_argument("--sinal-minimo", type=float, default=SINAL_MINIMO,
+                        help=f"contagens acima do fundo para haver ponto (padrao {SINAL_MINIMO:g})")
     parser.add_argument("--teste", action="store_true",
                         help="10 s imprimindo cada leitura, sem gravar, para conferir")
     args = parser.parse_args()
@@ -187,8 +217,8 @@ def main() -> int:
         exposicao_s = foco.EXPOSURE_SECONDS
     if not args.sem_pm:
         from modulos.instrumentos.pm100 import PM100Reader  # noqa: PLC0415
-        pm = PM100Reader(COMPRIMENTO_DE_ONDA_NM, args.pm_recurso)
-        print(f"Power meter: {getattr(pm, 'idn', '?')} | {COMPRIMENTO_DE_ONDA_NM} nm")
+        pm = PM100Reader(args.comprimento_de_onda, args.pm_recurso)
+        print(f"Power meter: {getattr(pm, 'idn', '?')} | {args.comprimento_de_onda:g} nm")
     if camera is None and pm is None:
         print("Nada para registrar: tirou camera e power meter.")
         return 1
@@ -204,7 +234,8 @@ def main() -> int:
             "camera": None if camera is None else args.camera,
             "exposicao_s": None if camera is None else exposicao_s,
             "power_meter": None if pm is None else getattr(pm, "idn", "?"),
-            "comprimento_de_onda_nm": COMPRIMENTO_DE_ONDA_NM,
+            "comprimento_de_onda_nm": args.comprimento_de_onda,
+            "sinal_minimo": args.sinal_minimo,
             "relogio_no_inicio": estado_do_relogio(),
         }
         (pasta / "metadados.json").write_text(json.dumps(metadados, indent=2, ensure_ascii=False),
@@ -233,10 +264,12 @@ def main() -> int:
             t_unix = time.time()
             erros = []
             medida = None
+            fundo = sinal = None
             if camera is not None:
                 try:
                     quadro = camera.capture(exposicao_s)
-                    medida = medir_ponto(quadro)
+                    fundo, sinal = sinal_do_quadro(quadro)
+                    medida = medir_ponto(quadro, args.sinal_minimo)
                     if medida is None:
                         erros.append("sem_ponto")
                     if pasta is not None and agora >= proxima_imagem:
@@ -252,12 +285,19 @@ def main() -> int:
                     erros.append(f"pm:{type(exc).__name__}")
             m = medida or {}
             linha = [f"{t_unix:.3f}", datetime.now().isoformat(timespec="milliseconds"),
-                     m.get("x_px", ""), m.get("y_px", ""), m.get("pico", ""), m.get("fundo", ""),
+                     m.get("x_px", ""), m.get("y_px", ""), m.get("pico", ""),
+                     "" if fundo is None else f"{fundo:.2f}",
+                     "" if sinal is None else f"{sinal:.2f}",
                      m.get("fluxo", ""), m.get("saturados", ""),
                      "" if potencia is None else f"{potencia:.6e}", ";".join(erros)]
             if args.teste:
-                pos = "sem ponto" if not m else f"({m['x_px']:.1f}, {m['y_px']:.1f}) pico {m['pico']:.0f}"
-                pot = "" if potencia is None else f" | {potencia * 1e6:.2f} uW"
+                if m:
+                    pos = f"({m['x_px']:.1f}, {m['y_px']:.1f}) sinal {sinal:.1f}"
+                elif sinal is not None:
+                    pos = f"sem ponto: sinal {sinal:.1f} de {args.sinal_minimo:g}, fundo {fundo:.0f}"
+                else:
+                    pos = "sem camera"
+                pot = "" if potencia is None else f" | {formatar_potencia(potencia)}"
                 print(f"  {agora:5.1f} s  {pos}{pot}  {';'.join(erros)}")
             else:
                 escritor.writerow(linha)
