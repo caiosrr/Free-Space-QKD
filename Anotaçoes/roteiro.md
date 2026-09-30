@@ -1430,3 +1430,8 @@ A linha 120 s, 1,74″, 0,35 é o regime em uso (`lento_ganho_baixo`), com o
 limiar de 0,6 px convertido para a escala nova. O p90 cresce com a janela:
 janela longa atrasa a resposta às excursões. Ressalvas: uma noite só, mount
 ideal, e o tracker mede com a exposição dele, não a do observador.
+
+Daí saiu o braço `lento_janela_curta` (commit `c1a8fa4`): janela de 45 s,
+limiar de 1,0″ e soltura de 0,42″ convertidos pela escala da calibração, ganho
+0,9. O A/B contra o regime em uso é `tracker.py --ab-janela-curta 10`.
+Documento 08, seção 3.

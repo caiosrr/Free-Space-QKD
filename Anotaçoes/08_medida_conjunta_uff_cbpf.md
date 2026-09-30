@@ -1,6 +1,6 @@
 # 08. Medida conjunta UFF e CBPF
 
-Conferido contra o commit `a2179ed`, em 2026-09-30.
+Conferido contra o commit `c1a8fa4`, em 2026-09-30.
 
 Camada 2 da documentação. Cobre as duas peças do experimento que mede, na
 outra ponta do enlace, o que o tracker faz: os **blocos com e sem correção** no
@@ -58,7 +58,7 @@ CORRECTION_BLOCK_SECONDS = float(os.environ.get("QKD_BLOCOS_CORRECAO_S", "900"))
 No laço de controle, o bloco é calculado pelo relógio da sessão; os pares
 corrigem, os ímpares não:
 
-`Codigos/modulos/controle/tracker_loop.py`, linhas 345 a 352
+`Codigos/modulos/controle/tracker_loop.py`, linhas 370 a 377
 
 ```python
                 if CORRECTION_BLOCKS_ENABLED:
@@ -75,7 +75,7 @@ E num bloco sem correção só o comando vai a zero, pelo mesmo caminho de um
 freio. O ciclo de pulso recebe `enabled=False`, que encerra na hora um pulso em
 curso:
 
-`Codigos/modulos/controle/tracker_loop.py`, linhas 573 a 578
+`Codigos/modulos/controle/tracker_loop.py`, linhas 601 a 606
 
 ```python
                 # Bloco sem correcao: os estimadores seguem medindo, a deriva
@@ -293,17 +293,122 @@ meio segundo de erro já não atrapalha.
 
 ---
 
-## 3. A noite, na prática
+## 3. O A/B da janela curta
 
-1. Nos dois PCs: `w32tm /resync`.
+A noite sem correção de 2026-09-30 mediu a trajetória que o tracker precisa
+seguir, e a conta está no roteiro ("O que a noite de 2026-09-30 diz sobre o
+laço lento do tracker"). Dois resultados mudam o controle:
+
+- **A janela ótima é 30 a 60 s, não 120 s.** O desvio de Allan da elevação
+  tem mínimo nessa faixa na noite calma, e abaixo de 10 s na excursão. Janela
+  mais longa só atrasa a resposta à deriva.
+- **O limiar em pixels mudou de sentido com a óptica.** Os 0,6 px valiam
+  0,23″ na escala antiga e valem 1,74″ na nova (2,89″/px).
+
+O braço novo, `lento_janela_curta`, fala em segundos de arco:
+
+`Codigos/modulos/configuracoes/tracker.py`, linhas 129 a 144
+
+```python
+CONTROL_CURTA_WINDOW_SECONDS = 45.0
+CONTROL_CURTA_WARMUP_SECONDS = 22.5
+CONTROL_CURTA_TRIGGER_ARCSEC = 1.0
+CONTROL_CURTA_RELEASE_ARCSEC = 0.42
+CONTROL_CURTA_FRACTION = 0.90
+
+REGIMES_DE_CONTROLE = ("atual", "lento_ganho_alto", "lento_ganho_baixo", "lento_janela_curta")
+# Ordem dos bracos no A/B de controle (QKD_AB_CONTROLE). O padrao repete o A/B
+# de tres bracos de 2026-09-10; o tracker.py --ab-janela-curta troca por dois.
+CONTROL_AB_REGIMES = tuple(
+    nome.strip()
+    for nome in os.environ.get(
+        "QKD_AB_REGIMES", "atual,lento_ganho_alto,lento_ganho_baixo"
+    ).split(",")
+    if nome.strip()
+)
+```
+
+A conversão para pixels sai da mesma matriz que o controle usa, ao iniciar a
+sessão, e por isso sobrevive à próxima troca de óptica:
+
+`Codigos/modulos/controle/tracker_controle.py`, linhas 515 a 535
+
+```python
+def regime_de_controle(nome, *, px_arcsec, atual, lento, curta) -> RegimeDeControle:
+    """Parametros de um regime, com os limiares do braco novo em arcsec.
+
+    `atual`, `lento` e `curta` sao dicionarios com os valores da configuracao;
+    ficam de fora do modulo para ele seguir sem depender dela e ser testavel.
+    """
+    if nome == "atual":
+        return RegimeDeControle(nome, atual["entrar_px"], atual["sair_px"],
+                                atual["fracao"], "curta_8s")
+    if nome in ("lento_ganho_alto", "lento_ganho_baixo"):
+        fracao = lento["fracao_alta"] if nome == "lento_ganho_alto" else lento["fracao_baixa"]
+        return RegimeDeControle(nome, lento["entrar_px"], lento["sair_px"], fracao, "longa")
+    if nome == "lento_janela_curta":
+        return RegimeDeControle(
+            nome,
+            curta["soltar_arcsec"] * px_arcsec,
+            curta["disparar_arcsec"] * px_arcsec,
+            curta["fracao"],
+            "janela_curta",
+        )
+    raise ValueError(f"Regime de controle desconhecido: {nome}")
+```
+
+Os braços antigos seguem em pixels, como foram medidos. O A/B de hoje alterna
+o regime em uso (`lento_ganho_baixo`) e o novo, os dois corrigindo:
+
+`Codigos/programas_principais/tracker.py`, linhas 105 a 114
+
+```python
+    if args.ab_janela_curta:
+        # O bloco precisa encher a janela de 120 s do braco em uso duas vezes;
+        # a configuracao recusa menos que isso ao importar.
+        if args.ab_janela_curta < 4:
+            raise SystemExit("--ab-janela-curta precisa de pelo menos 4 minutos.")
+        os.environ["QKD_AB_CONTROLE"] = "1"
+        os.environ["QKD_AB_REGIMES"] = "lento_ganho_baixo,lento_janela_curta"
+        os.environ["QKD_AB_BLOCO_S"] = str(args.ab_janela_curta * 60.0)
+        print(f"A/B de {args.ab_janela_curta:g} min: lento_ganho_baixo, "
+              "lento_janela_curta, ...")
+```
+
+O bloco mínimo é 4 min porque a configuração recusa bloco menor que duas
+janelas de 120 s do braço em uso. **Testado com o laço de controle real e o
+mount simulado**, com a escala nova e deriva constante de 1,5″/min: mediana de
+1,2″ no braço novo contra 2,9″ no em uso. **Nunca rodou com o mount.**
+
+A telemetria já separa os braços pela coluna `regime_controle`, e o resumo da
+sessão guarda os parâmetros do A/B em `control_ab`.
+
+> Revisado por Caio: ainda não
+
+**Para conferir**
+
+1. Por que a janela ótima é mais curta na excursão do que na noite calma?
+2. Se a próxima calibração der 1,5″/px, quantos pixels vale o limiar do braço
+   novo? E o do braço em uso?
+
+---
+
+## 4. A noite, na prática
+
+1. Nos dois PCs, antes e ao acordar, a diferença do relógio para um servidor
+   HTTPS (sem mexer no relógio: o do CBPF é compartilhado com equipamentos
+   sincronizados por GPS):
+   `1..3 | % { $r = iwr https://www.google.com -Method Head -UseBasicParsing; ((Get-Date).ToUniversalTime() - [datetime]::Parse($r.Headers.Date).ToUniversalTime()).TotalSeconds }`.
 2. **CBPF**, fechados o IC Capture e o app da Thorlabs:
    `python programas_principais/registrar_cbpf.py --ajustes-camera --teste`,
    confere, e então `--horas 10`.
-3. **UFF**: `python programas_principais/tracker.py --camera ids --horas 10
-   --blocos-minutos 15`.
+3. **UFF**, com o Coherent Connection fechado: `python
+   programas_principais/tracker.py --camera ids --horas 8 --blocos-minutos 15`
+   para comparar com e sem correção, ou `--ab-janela-curta 10` para comparar os
+   dois braços do controle. Um por noite.
 4. De manhã: `registro.csv` no CBPF e `telemetria.csv` na UFF, cruzados pelo
    instante: `t_unix` no CBPF, e na UFF a coluna `data_hora`, que já vem com
    fuso horário e milissegundos. Os blocos se separam por `correcao_ativa`.
 
-A análise ainda não existe; ela vem depois da primeira noite, com os dados de
-verdade na mão.
+A análise da primeira noite, sem correção, está no roteiro ("Noite de
+2026-09-30: as duas pontas ao mesmo tempo").
