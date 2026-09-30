@@ -1331,3 +1331,15 @@ a 45,6 px desse, foram rejeitados por 6 s, e a referência estourou o tempo. A
 rodada das 22:58 teve o mesmo efeito em menor grau (53 rejeitados numa
 referência). Correção: a espera de 0,8 s antes da referência passa a ler e
 descartar quadros, em vez de dormir.
+
+A terceira rodada, das 23:37, já com a correção, não teve quadro velho nenhum
+(21 a 22 descartados por referência). Falhou por outro motivo: a fração de
+quadros sem candidato subiu ao longo da sessão, de 18 % na primeira referência
+a 48 % na que falhou, intercalados ao acaso com os bons. O ajuste de exposição
+mira o pico **máximo** em 200 sem saturar; com o brilho variando mais de 10
+vezes entre quadros, parou em 11,4 ms, e os quadros fracos caíram abaixo do
+piso de 20 contagens. Às 22:58 a exposição ficou em 25 ms e as perdas foram bem
+menores. O beacon é uma lâmpada independente no CBPF, então as duas hipóteses
+são cintilação e a oscilação de 120 Hz da rede. Os instantes gravados são os da
+leitura, não os da exposição, e não bastam para testar a fase de 120 Hz: o
+teste possível é comparar exposições múltiplas de 8,33 ms (25 ms) com outras.
