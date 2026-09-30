@@ -9,6 +9,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from programas_principais.registrar_cbpf import (  # noqa: E402
     formatar_potencia,
+    luz_total,
     medir_ponto,
     sinal_do_quadro,
 )
@@ -62,6 +63,18 @@ class SinalSemPontoTests(unittest.TestCase):
         self.assertEqual(formatar_potencia(4.6e-5), "46 uW")
         self.assertEqual(formatar_potencia(1.2e-3), "1.2 mW")
 
+
+class LuzTotalTests(unittest.TestCase):
+    def test_acha_o_disco_fraco_que_se_perde_pixel_a_pixel(self):
+        # Como na DMK do CBPF: disco desfocado de 5 contagens, fundo 45 com
+        # ruido de 6 por pixel. Pixel a pixel o disco some no ruido; em blocos
+        # a soma volta a luz dele, e o quadro sem disco da quase zero.
+        rng = np.random.default_rng(1)
+        y, x = np.mgrid[0:480, 0:640]
+        disco = 5.0 * (((x - 320) ** 2 + (y - 240) ** 2) < 150 ** 2)
+        ruido = rng.normal(0, 6, disco.shape)
+        self.assertAlmostEqual(luz_total(45 + disco + ruido) / disco.sum(), 1.0, delta=0.1)
+        self.assertLess(luz_total(45 + ruido), 0.02 * disco.sum())
 
 if __name__ == "__main__":
     unittest.main()

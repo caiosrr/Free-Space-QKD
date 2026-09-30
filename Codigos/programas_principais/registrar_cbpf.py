@@ -8,7 +8,8 @@ e a chave dessa juncao.
 O que ele grava, por linha:
 
     camera        centroide do ponto, pico, fundo, fluxo e pixels saturados;
-                  e o sinal (maximo suavizado acima do fundo) mesmo sem ponto.
+                  e, mesmo sem ponto, o sinal (maximo suavizado acima do
+                  fundo) e a luz total do quadro acima do fundo.
                   Se a camera ve o feixe ANTES da fibra, o centroide e a
                   posicao do feixe da UFF; se ve a saida da fibra, o fluxo ja
                   diz o acoplamento.
@@ -67,7 +68,7 @@ SINAL_MINIMO = 10.0                  # contagens acima do fundo para haver ponto
 IMAGEM_A_CADA_S = 600.0
 
 COLUNAS = ["t_unix", "data_hora", "x_px", "y_px", "pico", "fundo", "sinal", "fluxo",
-           "saturados", "potencia_w", "erro"]
+           "luz_total", "saturados", "potencia_w", "erro"]
 
 
 def medir_ponto(quadro: np.ndarray, sinal_minimo: float = SINAL_MINIMO) -> dict | None:
@@ -131,6 +132,29 @@ def sinal_do_quadro(quadro: np.ndarray) -> tuple[float, float]:
     fundo = float(np.median(f))
     suave = cv2.GaussianBlur(f - fundo, (0, 0), 2.0)
     return fundo, float(suave.max())
+
+
+def luz_total(quadro: np.ndarray, bloco: int = 8) -> float:
+    """Luz do quadro inteiro acima do fundo, em contagens, medida em blocos.
+
+    Existe porque a DMK do CBPF esta fora do foco (quadros de 2026-09-30): o
+    laser vira um disco de ~760 px com aneis, e o `sinal` e o `fluxo` medem so o
+    pico central. O disco fica poucas contagens acima de um fundo com ruido de
+    ~6 por pixel, entao pixel a pixel ele se perde. Em blocos de 8 x 8 o ruido
+    cai 8 vezes e o disco aparece: nos quadros daquela noite, o quadro sem
+    laser (01:07) deu 8 mil contagens contra 190 mil a 970 mil com laser.
+    Somam-se os blocos acima de 3 desvios (mediana dos desvios absolutos) da
+    mediana; a parte mais fraca do disco fica de fora, entao a grandeza
+    acompanha a luz que chega mas nao e a luz absoluta.
+    """
+    f = quadro.astype(np.float64)
+    if f.ndim == 3:
+        f = f.mean(axis=2)
+    h, w = (f.shape[0] // bloco) * bloco, (f.shape[1] // bloco) * bloco
+    blocos = f[:h, :w].reshape(h // bloco, bloco, w // bloco, bloco).mean(axis=(1, 3))
+    acima = blocos - float(np.median(blocos))
+    ruido = 1.4826 * float(np.median(np.abs(acima)))
+    return float(acima[acima > 3.0 * max(ruido, 0.1)].sum() * bloco * bloco)
 
 
 def formatar_potencia(potencia_w: float) -> str:
@@ -264,11 +288,12 @@ def main() -> int:
             t_unix = time.time()
             erros = []
             medida = None
-            fundo = sinal = None
+            fundo = sinal = total = None
             if camera is not None:
                 try:
                     quadro = camera.capture(exposicao_s)
                     fundo, sinal = sinal_do_quadro(quadro)
+                    total = luz_total(quadro)
                     medida = medir_ponto(quadro, args.sinal_minimo)
                     if medida is None:
                         erros.append("sem_ponto")
@@ -288,7 +313,8 @@ def main() -> int:
                      m.get("x_px", ""), m.get("y_px", ""), m.get("pico", ""),
                      "" if fundo is None else f"{fundo:.2f}",
                      "" if sinal is None else f"{sinal:.2f}",
-                     m.get("fluxo", ""), m.get("saturados", ""),
+                     m.get("fluxo", ""), "" if total is None else f"{total:.0f}",
+                     m.get("saturados", ""),
                      "" if potencia is None else f"{potencia:.6e}", ";".join(erros)]
             if args.teste:
                 if m:
