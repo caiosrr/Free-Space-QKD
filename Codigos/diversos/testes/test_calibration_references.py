@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import unittest
@@ -47,6 +48,7 @@ class ReferenceCalibrationTests(unittest.TestCase):
                 patch.object(core.time, "sleep"), \
                 patch.object(core.time, "perf_counter", side_effect=lambda: now[0]), \
                 patch.object(core.foco, "initialize_focus_lock", return_value=True), \
+                patch.object(core.foco, "capture_frame", side_effect=lambda *a, **k: capture()[0]), \
                 patch.object(core, "_capture_valid_cm", side_effect=capture), \
                 patch.object(core, "move_axis") as move:
             path = Path(tmp) / "ref.json"
@@ -66,6 +68,41 @@ class ReferenceCalibrationTests(unittest.TestCase):
         self.assertGreaterEqual(result["span_s"], 2)
         self.assertLess(result["frame_count"], 300)
         self.assertGreater(result["captured_count"], 2000)
+
+    def test_quadros_velhos_da_fila_nao_entram_na_referencia(self):
+        # 2026-09-29: depois do retorno, a fila da IDS ainda tinha quadros da
+        # ponta da varredura. Eles saem na hora; os novos, um a cada 33 ms.
+        now = [0.]
+        fila = [(469.8, 518.5)] * 8
+
+        def capture():
+            if fila:
+                x, y = fila.pop(0)
+            else:
+                now[0] += 1 / 30
+                x, y = 514.8, 510.9
+            return np.zeros((16, 16), dtype=np.uint8), (x, y, 50., False), {"candidate_count": 1}
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(core, "stop_axes_safely", return_value=True), \
+                patch.object(core.time, "perf_counter", side_effect=lambda: now[0]), \
+                patch.object(core.foco, "initialize_focus_lock", return_value=True), \
+                patch.object(core.foco, "set_focus_expected_position"), \
+                patch.object(core.foco, "capture_frame", side_effect=lambda *a, **k: capture()[0]), \
+                patch.object(core, "_capture_valid_cm", side_effect=capture), \
+                patch.object(core, "read_altaz", return_value=(0., 0.)), \
+                patch.object(core, "measure_integrated_beacon",
+                             side_effect=lambda frames, centers: dict(preview=np.zeros((4, 4), np.uint8))):
+            path = Path(tmp) / "ref.json"
+            try:
+                core._take_stationary_reference({}, (513., 511.), 0., 0., path)
+            except Exception:
+                pass  # O que se testa aqui e quais quadros entraram, nao a medida final.
+            audit = json.loads(path.read_text(encoding="utf-8"))
+        self.assertGreaterEqual(audit["discarded_settle_frames"], 8)
+        centros = [r["center"] for r in audit["records"] if r["center"]]
+        self.assertTrue(centros)
+        self.assertTrue(all(abs(c[0] - 514.8) < 0.01 for c in centros))
 
 
 if __name__ == "__main__":

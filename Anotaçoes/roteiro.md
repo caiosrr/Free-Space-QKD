@@ -1310,3 +1310,24 @@ Na mesma noite o power meter, que chegou a uns 46 µW durante o dia, caiu a
 ruído de nW. A causa não foi separada: parte do tempo o laser estava desligado,
 e a refração é hipótese. A gravação de uma noite inteira no CBPF, com a mancha e
 a potência juntas, é o que separa as duas coisas.
+
+## Calibração com a óptica nova da UFF, 2026-09-29
+
+Com a objetiva de 663 mm e a lente de 30 mm, e o refletor focado, a calibração
+robusta das 22:58 saiu **validada**: resíduo rms 0,71 px, validação
+independente 0,71 px (6,8 %), número de condição 1,06, espalhamento da
+referência parada 0,69 px. A escala ficou em **2,98″/px em az e 2,80″/px em
+alt**, 7,5 vezes mais grossa que os 0,386″/px antigos; a focal efetiva cai de
+1176 mm para uns 150 a 160 mm (com o pixel de 2,2 µm do `optica.py`). A câmera
+está girada uns 10° em relação aos eixos do mount. As duas escalas diferem 6 %,
+e as varreduras de az positiva e negativa já diferem 5 % entre si.
+
+A rodada seguinte, das 23:14, falhou na referência parada depois da primeira
+varredura. Causa: a câmera segue adquirindo enquanto ninguém lê, e a fila de 8
+buffers da IDS guarda os quadros mais antigos. Depois do retorno ao início, o
+primeiro quadro lido ainda era da ponta da varredura, a 43,9 px do esperado;
+passou no filtro de salto de 45 px e ancorou a trava da ilha. Os quadros reais,
+a 45,6 px desse, foram rejeitados por 6 s, e a referência estourou o tempo. A
+rodada das 22:58 teve o mesmo efeito em menor grau (53 rejeitados numa
+referência). Correção: a espera de 0,8 s antes da referência passa a ler e
+descartar quadros, em vez de dormir.

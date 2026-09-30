@@ -731,6 +731,30 @@ def _duas_reguas(amostras: list[SweepSample], axis: int) -> dict:
     }
 
 
+def _esvaziar_fila_da_camera(segundos: float) -> int:
+    """Le e descarta quadros ate `segundos` depois da parada; devolve quantos.
+
+    Existe porque a camera segue adquirindo enquanto ninguem le, e a fila de
+    buffers (8 na IDS) guarda os quadros MAIS ANTIGOS. Depois de um retorno,
+    os primeiros lidos ainda eram da ponta da varredura. Em 2026-09-29 um deles,
+    a 43,9 px do esperado, passou no filtro de salto de 45 px e ancorou a trava
+    da ilha; os quadros reais, a 45,6 px dele, foram rejeitados por 6 s e a
+    referencia falhou. Lendo durante a espera, em vez de dormir, o primeiro
+    quadro que conta foi exposto depois da parada. Sem deteccao aqui: detectar
+    num quadro velho e justamente o que ancorava a trava no lugar errado.
+    """
+    fim = time.perf_counter() + segundos
+    lidos = 0
+    while time.perf_counter() < fim:
+        try:
+            foco.capture_frame(foco.EXPOSURE_SECONDS, light=True)
+            lidos += 1
+        except Exception:
+            # A coleta seguinte relata a falha da camera com o motivo certo.
+            time.sleep(0.05)
+    return lidos
+
+
 def _take_stationary_reference(signature, expected, initial_az, initial_alt, audit_path,
                                *, expected_angle=None):
     audit = {
@@ -754,7 +778,7 @@ def _take_stationary_reference(signature, expected, initial_az, initial_alt, aud
     try:
         if not stop_axes_safely():
             raise RuntimeError("Parada dos eixos nao confirmada antes da referencia.")
-        time.sleep(REFERENCE_SETTLE_S)
+        audit["discarded_settle_frames"] = _esvaziar_fila_da_camera(REFERENCE_SETTLE_S)
         if not foco.initialize_focus_lock(signature, *expected, freeze_reference=True,
                                          max_jump_px=TRACKER_MAX_SPOT_JUMP_PX):
             raise RuntimeError("Nao consegui inicializar a ilha para referencia parada.")
