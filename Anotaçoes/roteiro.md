@@ -1293,11 +1293,10 @@ fica configurada em `serial_mount_local.py`, para a escada não mandar
 ## CBPF: a câmera mede o ângulo de chegada, e a refração o move, 2026-09-29
 
 No CBPF o feixe da UFF passa por uma lente grande antes do cubo divisor, e a
-câmera fica perto do plano focal. A mancha tem umas 40 px, cerca de 150 µm com
-os pixels de 3,75 µm da DMK 27AUR0135: um feixe de 7 km só fica desse tamanho
-focalizado. Então a posição da mancha é o **ângulo de chegada**, a mesma
-grandeza que decide o acoplamento na fibra. O apontamento da UFF muda quanta
-luz chega, não onde a mancha cai.
+câmera fica atrás dela, mas fora do foco: ver a noite de 2026-09-30, adiante. A
+posição da mancha é o **ângulo de chegada**, a mesma grandeza que decide o
+acoplamento na fibra. O apontamento da UFF muda quanta luz chega, não onde a
+mancha cai.
 
 O ângulo de chegada não é fixado só pela geometria. Com coeficiente de refração
 $k$, o raio tem raio de curvatura $R_T/k$, e numa corda $L$ o ângulo entre a
@@ -1343,3 +1342,41 @@ menores. O beacon é uma lâmpada independente no CBPF, então as duas hipótese
 são cintilação e a oscilação de 120 Hz da rede. Os instantes gravados são os da
 leitura, não os da exposição, e não bastam para testar a fase de 120 Hz: o
 teste possível é comparar exposições múltiplas de 8,33 ms (25 ms) com outras.
+
+## Noite de 2026-09-30: as duas pontas ao mesmo tempo, sem correção
+
+Mount parado. Na UFF, `observar_sem_corrigir.py` com a IDS (a lâmpada do CBPF);
+no CBPF, `registrar_cbpf.py` com a DMK (o laser de 637 nm da UFF), sem power
+meter. Relógios a menos de 0,6 s um do outro (medido pelo cabeçalho de hora de
+um servidor HTTPS, antes do início). Figura:
+`Arquivos/analises/noite_2026-09-30_uff_cbpf.png`, fora do git.
+
+**A elevação aparente da lâmpada, vista da UFF, variou 28″** (de +3″ a −25″ em
+torno da mediana, pior às 00:54), e a horizontal menos de 1,5″. Movimento só na
+vertical é a assinatura da refração. Pela relação $\delta = kL/(2R_T)$, 25″
+equivalem a $\Delta k \approx 0{,}2$.
+
+**No CBPF, a posição vertical da mancha acompanhou a da UFF**: correlação −0,87
+nas medianas de 1 min, máxima com atraso zero, e $R^2 = 0{,}83$ ajustando pelos
+dois eixos da UFF (283 minutos, fora a perda das 01:03 e o amanhecer). Cerca de
+2,7 px da DMK por segundo de arco da UFF. Deriva mecânica em dois prédios a 7 km
+não andaria junto: a causa comum é a atmosfera. A razão entre os ângulos nas
+duas pontas depende da distância lente-câmera no CBPF, ainda desconhecida.
+
+**O sinal no CBPF** foi maior com a elevação perto da mediana (105 contagens) e
+caiu para uns 60 com desvios de 15 a 25″, mas a relação é frouxa (correlação
+−0,30). Das 01:03 às 01:24 o laser **não chegou** ao CBPF (quadros escuros),
+enquanto a lâmpada seguia visível na UFF, 3 vezes mais fraca só até 01:10. Não
+explicado.
+
+**A câmera do CBPF está fora do foco**: os quadros mostram a imagem desfocada
+da abertura do receptor, um disco de ~760 px com anéis de Fresnel e um pico
+central com raias. O centroide segue o pico central.
+
+Outros fatos da noite:
+
+- a lâmpada do CBPF sumiu de uma vez às 05:39, perto do nascer do sol
+  (provavelmente fotocélula); o fundo do CBPF começa a subir às 05:12 e satura
+  a DMK às 05:30, pois o receptor olha para o leste;
+- na UFF só 36 % dos quadros tiveram alvo: o controle automático de exposição
+  do observador desceu de 25 ms para ~4,9 ms, fora dos múltiplos de 8,33 ms.

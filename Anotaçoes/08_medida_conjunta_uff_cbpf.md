@@ -133,13 +133,18 @@ não era a do IC Capture; ver o sinal, abaixo.
 **Há uma lente grande antes do cubo divisor, e nenhuma entre o cubo e a
 câmera** (a primeira parte informada pelo Caio em 2026-09-29, corrigindo a
 leitura anterior deste documento). O feixe da UFF é focalizado por essa lente e
-só então dividido entre a câmera e o acoplador da fibra. Então a câmera fica
-perto do plano focal, e o centroide mede o **ângulo de chegada**, não o
-deslocamento lateral: um raio que chega inclinado de $\theta$ cai a $f\theta$
-do eixo, com $f$ a focal da lente. É a mesma grandeza que decide o acoplamento,
-porque a ponta da fibra também está num plano focal dessa lente. A mancha
-observada confirma: umas 40 px, cerca de 150 µm com pixels de 3,75 µm, tamanho
-impossível para um feixe que viajou 7 km sem óptica que o focalize.
+só então dividido entre a câmera e o acoplador da fibra. O centroide mede o
+**ângulo de chegada**, não o deslocamento lateral: o raio que passa pelo centro
+da lente chega inclinado de $	heta$ e cai a $d	heta$ do eixo, com $d$ a
+distância da lente à câmera. É a grandeza que decide o acoplamento, porque a
+ponta da fibra está no foco dessa lente.
+
+**A câmera não está no foco.** Os quadros gravados na noite de 2026-09-30
+mostram um disco de uns 760 px (cerca de 2,9 mm) com anéis de Fresnel e um pico
+central com raias: a imagem desfocada da abertura do receptor. O "ponto" que o
+`medir_ponto` segue é esse pico central, que anda junto com o disco. Duas
+consequências: a escala em px por segundo de arco depende de $d$, não de $f$; e
+o `sinal` e o `fluxo` medem o pico central, não toda a luz que chega.
 
 Consequência: mover o mount da UFF muda **quanta** luz chega ao CBPF (onde o
 feixe cai), mas não **onde** a mancha fica na câmera. O que move a mancha é o
