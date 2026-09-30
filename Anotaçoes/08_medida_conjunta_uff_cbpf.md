@@ -1,6 +1,6 @@
 # 08. Medida conjunta UFF e CBPF
 
-Conferido contra o commit `e559bcf`, em 2026-09-29.
+Conferido contra o commit `8d24bc1`, em 2026-09-29.
 
 Camada 2 da documentação. Cobre as duas peças do experimento que mede, na
 outra ponta do enlace, o que o tracker faz: os **blocos com e sem correção** no
@@ -124,8 +124,10 @@ Não é IDS: é uma **The Imaging Source DMK 27AUR0135**, monocromática, USB 3,
 1280 × 960 em 8 bits, usada lá pelo IC Capture. O registrador a lê pelo
 **DirectShow** do Windows, via OpenCV, sem SDK nenhum (`--camera dshow`, o
 padrão). Exposição e ganho se ajustam na janela do próprio driver, aberta com
-`--ajustes-camera`. Testado só com a webcam do notebook; **nunca rodou com a
-DMK**.
+`--ajustes-camera`. Com a DMK, em 2026-09-29, a câmera
+abriu (1280 × 960) mas **o ponto ainda não foi medido**: o teste respondeu "sem
+ponto" com o feixe visível no IC Capture. Provavelmente a exposição do driver
+não era a do IC Capture; ver o sinal, abaixo.
 
 **Não há lente entre o cubo divisor e a câmera** (informado pelo CBPF). Então
 ela vê a mancha do feixe da UFF direto, e o centroide mede o **deslocamento
@@ -137,7 +139,7 @@ explica do acoplamento.
 
 ### O ponto na câmera
 
-`Codigos/programas_principais/registrar_cbpf.py`, linhas 72 a 105
+`Codigos/programas_principais/registrar_cbpf.py`, linhas 73 a 106
 
 ```python
 def medir_ponto(quadro: np.ndarray, sinal_minimo: float = SINAL_MINIMO) -> dict | None:
@@ -182,13 +184,42 @@ altura, mas ficam separados da mancha principal e não entram na conta.
 Testado: um fantasma a 60 px com 70% do pico desloca o centroide em menos de
 0,3 px.
 
+### Quando não há ponto
+
+`Codigos/programas_principais/registrar_cbpf.py`, linhas 119 a 133
+
+```python
+def sinal_do_quadro(quadro: np.ndarray) -> tuple[float, float]:
+    """Fundo e altura do maximo suavizado acima dele, haja ponto ou nao.
+
+    Existe porque "sem ponto" nao diz se faltou pouco ou muito. Na primeira
+    leitura da DMK, em 2026-09-29, o feixe aparecia no IC Capture e o
+    registrador so respondia "sem ponto". Gravando esta altura sempre, da para
+    ver a distancia ao limiar e acompanhar pela noite um feixe fraco demais
+    para o centroide.
+    """
+    f = quadro.astype(np.float64)
+    if f.ndim == 3:
+        f = f.mean(axis=2)
+    fundo = float(np.median(f))
+    suave = cv2.GaussianBlur(f - fundo, (0, 0), 2.0)
+    return fundo, float(suave.max())
+```
+
+A mesma suavização do `medir_ponto`, sem o limiar. Vai para a coluna `sinal` em
+toda linha, haja ponto ou não, e o `--teste` mostra a distância ao limiar
+(`sem ponto: sinal 4.2 de 10`). Com o feixe fraco, isso separa "faltou pouco"
+de "não chega luz", e ainda acompanha a intensidade pela noite. O limiar é
+`--sinal-minimo`. A potência do `--teste` sai na unidade do ruído, porque em
+2026-09-29 o ruído de nW do power meter aparecia como `0.00 uW`.
+
 Se a câmera vê o feixe **antes** da fibra, o centroide é a posição do feixe da
 UFF no CBPF. Se ela vê a **saída** da fibra, o centroide fica parado e o que
 importa é o `fluxo`, que acompanha o acoplamento.
 
 ### O relógio
 
-`Codigos/programas_principais/registrar_cbpf.py`, linhas 108 a 115
+`Codigos/programas_principais/registrar_cbpf.py`, linhas 109 a 116
 
 ```python
 def estado_do_relogio() -> str:
