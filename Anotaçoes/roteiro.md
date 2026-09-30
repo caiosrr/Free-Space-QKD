@@ -1435,3 +1435,38 @@ Daí saiu o braço `lento_janela_curta` (commit `c1a8fa4`): janela de 45 s,
 limiar de 1,0″ e soltura de 0,42″ convertidos pela escala da calibração, ganho
 0,9. O A/B contra o regime em uso é `tracker.py --ab-janela-curta 10`.
 Documento 08, seção 3.
+
+## DMD: por que os espelhos piscam no vídeo HDMI, 2026-09-30
+
+Medido com a ASI585MC em 32 µs e o feixe desfocado cobrindo o sensor: pelo
+obturador rolante, cada linha é um instante (~9,7 µs por linha, inferido da
+repetição da sequência), e um quadro mostra o ciclo inteiro dos espelhos.
+Controle pela interface da TI (DLPLCRD-GUI) e por arquivos de lote (`w 36 ...`,
+`r 36 n`), com o guia DLPU035.
+
+**A sequência** (leitura 26h): vermelho 33 %, verde 47 %, azul 20 % do tempo,
+quadros aceitos de 47 a 63 Hz, Look 1, sequência 0, nos dois caminhos. A câmera
+mediu 33/47/21 % e a mesma cor se repetindo a cada ~4,17 ms (~4 ciclos RGB por
+quadro).
+
+**Gerador interno contra HDMI**, branco total, mesma câmera: pelo gerador os
+espelhos ficam ligados quase o quadro inteiro, com uma interrupção curta por
+quadro; pelo HDMI pulsam, com ~1/3 da luz. Por cor, pelo HDMI: vermelho quase
+cheio, verde com ~2/3 do tempo, azul com menos da metade e em pulsos de ~10
+linhas, com pedaços vazando para os trechos das outras cores.
+
+**Descartados**, um de cada vez: placa de vídeo em RGB faixa completa (e o
+notebook dá o mesmo), perfis de cor do Windows, LABB e nitidez (já estavam
+desligados, 80h), CAIC (corrente manual), CCA desligado (86h) e trocado de
+conjunto (29h, com a fonte reselecionada), tabela Degamma/CMT 0 e 1 (27h),
+formato da entrada (RGB888, 43h), tamanho da entrada e da tela (1920 × 1080,
+sem redimensionar). O splash 2 também pisca, mas não se sabe o que a imagem
+tem no ponto do laser.
+
+**Hipótese que sobra**: a matriz de conversão de cor que o controlador carrega
+sozinho para entrada RGB ("Auto-select RGB CSC", DLPU035 2.3.3.4), gravada na
+flash e sem comando para trocá-la. Não verificada.
+
+**Consequências**: com esse controlador, espelhos parados só pelo gerador
+interno (campo sólido, linhas, grade, xadrez). A câmera deve usar exposição em
+múltiplos de 16,667 ms. As mudanças por comando valem até desligar o DMD.
