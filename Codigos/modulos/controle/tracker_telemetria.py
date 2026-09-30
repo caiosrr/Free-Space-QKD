@@ -32,6 +32,14 @@ from modulos.configuracoes.tracker import (
     BORDER_CONFIRM_SECONDS,
     BORDER_MIN_PEAK_RATIO,
     BORDER_MIN_SIGNATURE_SIMILARITY,
+    CONTROL_AB_BLOCK_SECONDS,
+    CONTROL_AB_REGIMES,
+    CONTROL_AB_TEST_ENABLED,
+    CONTROL_CURTA_FRACTION,
+    CONTROL_CURTA_RELEASE_ARCSEC,
+    CONTROL_CURTA_TRIGGER_ARCSEC,
+    CONTROL_CURTA_WARMUP_SECONDS,
+    CONTROL_CURTA_WINDOW_SECONDS,
     CONTROL_SLOW_RELEASE_PX,
     CONTROL_SLOW_TRIGGER_PX,
     CONTROL_SLOW_WARMUP_SECONDS,
@@ -524,7 +532,16 @@ class TrackerCsvLogger:
         # de 8 s e o raio de 1,0 px que nao valeram em momento nenhum.
         total = sum(self._regimes_usados.values())
         dominante = max(self._regimes_usados, key=self._regimes_usados.get, default=None)
-        if (dominante and dominante != "atual"
+        if (dominante == "lento_janela_curta"
+                and self._regimes_usados[dominante] >= 0.99 * total):
+            # Limiares em arcsec: os px de cada linha estao na telemetria.
+            self._summary.update({
+                "hold_enter_radius_arcsec": CONTROL_CURTA_RELEASE_ARCSEC,
+                "hold_exit_radius_arcsec": CONTROL_CURTA_TRIGGER_ARCSEC,
+                "slow_bias_window_seconds": CONTROL_CURTA_WINDOW_SECONDS,
+                "slow_bias_warmup_seconds": CONTROL_CURTA_WARMUP_SECONDS,
+            })
+        elif (dominante and dominante != "atual"
                 and self._regimes_usados[dominante] >= 0.99 * total):
             # Regime dominante e lento: os valores que valeram sao os do regime.
             self._summary.update({
@@ -533,6 +550,17 @@ class TrackerCsvLogger:
                 "slow_bias_window_seconds": CONTROL_SLOW_WINDOW_SECONDS,
                 "slow_bias_warmup_seconds": CONTROL_SLOW_WARMUP_SECONDS,
             })
+        if CONTROL_AB_TEST_ENABLED:
+            self._summary["control_ab"] = {
+                "regimes": list(CONTROL_AB_REGIMES),
+                "block_seconds": CONTROL_AB_BLOCK_SECONDS,
+                "janela_curta": {
+                    "window_seconds": CONTROL_CURTA_WINDOW_SECONDS,
+                    "trigger_arcsec": CONTROL_CURTA_TRIGGER_ARCSEC,
+                    "release_arcsec": CONTROL_CURTA_RELEASE_ARCSEC,
+                    "fraction": CONTROL_CURTA_FRACTION,
+                },
+            }
         self._summary.update({
             "control_regimes_used": dict(self._regimes_usados),
             "finished_at": datetime.now().astimezone().isoformat(timespec="seconds"),

@@ -8,6 +8,11 @@
 Blocos alternados com e sem correcao, para medir o efeito do controle:
 
     python programas_principais/tracker.py --camera ids --horas 8 --blocos-minutos 15
+
+A/B entre o regime lento em uso e o braco de janela curta (45 s, limiar em
+arcsec), alternando a cada N minutos; os dois bracos corrigem:
+
+    python programas_principais/tracker.py --camera ids --horas 8 --ab-janela-curta 10
 """
 
 import sys
@@ -48,6 +53,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--blocos-minutos", type=float, default=None,
         help="alterna blocos COM e SEM correcao dessa duracao; o primeiro corrige",
+    )
+    parser.add_argument(
+        "--ab-janela-curta", type=float, default=None, metavar="MIN",
+        help="alterna lento_ganho_baixo e lento_janela_curta a cada MIN minutos (>= 4)",
     )
     vigia = parser.add_mutually_exclusive_group()
     vigia.add_argument("--vigia", dest="vigia", action="store_true")
@@ -93,6 +102,19 @@ if __name__ == "__main__":
         os.environ["QKD_BLOCOS_CORRECAO"] = "1"
         os.environ["QKD_BLOCOS_CORRECAO_S"] = str(args.blocos_minutos * 60.0)
         print(f"Blocos de {args.blocos_minutos:g} min: com correcao, sem, com, ...")
+    if args.ab_janela_curta:
+        # O bloco precisa encher a janela de 120 s do braco em uso duas vezes;
+        # a configuracao recusa menos que isso ao importar.
+        if args.ab_janela_curta < 4:
+            raise SystemExit("--ab-janela-curta precisa de pelo menos 4 minutos.")
+        os.environ["QKD_AB_CONTROLE"] = "1"
+        os.environ["QKD_AB_REGIMES"] = "lento_ganho_baixo,lento_janela_curta"
+        os.environ["QKD_AB_BLOCO_S"] = str(args.ab_janela_curta * 60.0)
+        print(f"A/B de {args.ab_janela_curta:g} min: lento_ganho_baixo, "
+              "lento_janela_curta, ...")
+        if args.blocos_minutos:
+            print("AVISO: com --blocos-minutos junto, metade de cada braco fica sem "
+                  "correcao; a comparacao entre bracos perde dados.")
 
     from modulos.controle.tracker_sessao import main
 

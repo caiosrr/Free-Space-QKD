@@ -5,6 +5,7 @@ Existe para decidir com dado se vale apertar a zona de repouso: nas sessoes de
 acordam o controle, custando 23% e 16% do erro mediano.
 """
 
+import os
 import sys
 import unittest
 from dataclasses import fields
@@ -771,5 +772,11 @@ class RegimePadraoTests(unittest.TestCase):
 
         from modulos.controle import tracker_loop
 
+        # Desde 2026-09-30 os bracos vem da configuracao, que por padrao
+        # repete o A/B de tres bracos com o regime antigo.
         fonte = inspect.getsource(tracker_loop.executar_loop_controle)
-        self.assertIn('"atual", "lento_ganho_alto", "lento_ganho_baixo"', fonte)
+        self.assertIn("CONTROL_AB_REGIMES", fonte)
+        self.assertIn("atual", self.cfg().REGIMES_DE_CONTROLE)
+        if "QKD_AB_REGIMES" not in os.environ:
+            self.assertEqual(self.cfg().CONTROL_AB_REGIMES,
+                             ("atual", "lento_ganho_alto", "lento_ganho_baixo"))

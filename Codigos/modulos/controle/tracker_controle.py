@@ -485,3 +485,51 @@ def pixel_error_to_mount_error(dx_px, dy_px, A_inv):
     """Converte erro visual no movimento angular que anula esse erro."""
     err_vec = np.asarray(A_inv, dtype=float) @ np.array([-dx_px, -dy_px], dtype=float)
     return float(err_vec[0]), float(err_vec[1])
+
+
+def px_por_arcsec(A_direta) -> float:
+    """Escala da camera em pixels por segundo de arco, pela matriz da calibracao.
+
+    `A_direta` leva graus de mount a pixels; a norma de cada coluna e a escala
+    daquele eixo. Usa a media dos dois: na calibracao de 2026-09-29 eles
+    diferem 6 %, e as varreduras de um mesmo eixo ja diferem 5 % entre si.
+    """
+    colunas = np.linalg.norm(np.asarray(A_direta, dtype=float), axis=0)
+    escala = float(np.mean(colunas)) / 3600.0
+    if not np.isfinite(escala) or escala <= 0:
+        raise ValueError(f"Escala da calibracao invalida: {escala} px/arcsec.")
+    return escala
+
+
+@dataclass(frozen=True)
+class RegimeDeControle:
+    """O que muda entre os bracos do A/B: porta, ganho e qual janela decide."""
+
+    nome: str
+    entrar_px: float   # abaixo disto a porta solta
+    sair_px: float     # acima disto a porta dispara
+    fracao: float      # fracao do desvio que cada pulso remove
+    janela: str        # "curta_8s", "longa" ou "janela_curta"
+
+
+def regime_de_controle(nome, *, px_arcsec, atual, lento, curta) -> RegimeDeControle:
+    """Parametros de um regime, com os limiares do braco novo em arcsec.
+
+    `atual`, `lento` e `curta` sao dicionarios com os valores da configuracao;
+    ficam de fora do modulo para ele seguir sem depender dela e ser testavel.
+    """
+    if nome == "atual":
+        return RegimeDeControle(nome, atual["entrar_px"], atual["sair_px"],
+                                atual["fracao"], "curta_8s")
+    if nome in ("lento_ganho_alto", "lento_ganho_baixo"):
+        fracao = lento["fracao_alta"] if nome == "lento_ganho_alto" else lento["fracao_baixa"]
+        return RegimeDeControle(nome, lento["entrar_px"], lento["sair_px"], fracao, "longa")
+    if nome == "lento_janela_curta":
+        return RegimeDeControle(
+            nome,
+            curta["soltar_arcsec"] * px_arcsec,
+            curta["disparar_arcsec"] * px_arcsec,
+            curta["fracao"],
+            "janela_curta",
+        )
+    raise ValueError(f"Regime de controle desconhecido: {nome}")

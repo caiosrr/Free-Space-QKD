@@ -88,7 +88,7 @@ CONTROL_AB_TEST_ENABLED = _chave("QKD_AB_CONTROLE", False)
 # tracker.py com --blocos-minutos.
 CORRECTION_BLOCKS_ENABLED = _chave("QKD_BLOCOS_CORRECAO", False)
 CORRECTION_BLOCK_SECONDS = float(os.environ.get("QKD_BLOCOS_CORRECAO_S", "900"))
-CONTROL_AB_BLOCK_SECONDS = 600.0
+CONTROL_AB_BLOCK_SECONDS = float(os.environ.get("QKD_AB_BLOCO_S", "600"))
 CONTROL_SLOW_WINDOW_SECONDS = 120.0
 CONTROL_SLOW_WARMUP_SECONDS = 60.0
 # Limiar de disparo. Cuidado: no regime atual quem dispara e HOLD_EXIT (2,0 px),
@@ -106,6 +106,42 @@ CONTROL_SLOW_FRACTION = 0.90
 # lado, a diferenca entre eles isola o ganho, e a diferenca deles para o atual
 # mede o conjunto janela+limiar.
 CONTROL_SLOW_FRACTION_BAIXA = 0.35
+
+# Braco "lento_janela_curta", proposto pela noite sem correcao de 2026-09-30
+# (roteiro, "O que a noite de 2026-09-30 diz sobre o laco lento do tracker").
+# Com a optica nova a escala e 2,8 a 3,0 arcsec/px, e os 0,6 px do limiar acima,
+# escolhidos quando o pixel valia 0,386 arcsec, viraram 1,74 arcsec. Por isso
+# este braco fala em ARCSEC, convertido pela matriz da calibracao ao iniciar, e
+# nao quebra na proxima troca de optica.
+#
+#   janela 45 s   o desvio de Allan da elevacao tem minimo em 30 a 60 s na noite
+#                 calma e abaixo de 10 s na excursao das 00:30; 45 s e o meio
+#                 da faixa calma, sem cair no ruido
+#   limiar 1,0"   ~4,5x a incerteza da mediana de 45 a 60 s (0,22"), mesmo
+#                 criterio dos 0,6 px originais (2,5x a incerteza e 3x o menor
+#                 pulso); o menor pulso hoje anda 0,08" e nao limita
+#   soltura 0,42" a mesma razao 0,25/0,6 do regime lento original
+#   ganho 0,9     na simulacao sobre a trajetoria medida, 0,9 e 0,35 dao o mesmo
+#                 erro e 0,9 corrige cerca de metade das vezes
+#
+# Simulado (mount ideal): p90 de 1,2 a 1,4" contra 2,2" do regime em uso.
+# NUNCA RODOU COM O MOUNT: o A/B de 2026-09-30 a noite e o primeiro teste.
+CONTROL_CURTA_WINDOW_SECONDS = 45.0
+CONTROL_CURTA_WARMUP_SECONDS = 22.5
+CONTROL_CURTA_TRIGGER_ARCSEC = 1.0
+CONTROL_CURTA_RELEASE_ARCSEC = 0.42
+CONTROL_CURTA_FRACTION = 0.90
+
+REGIMES_DE_CONTROLE = ("atual", "lento_ganho_alto", "lento_ganho_baixo", "lento_janela_curta")
+# Ordem dos bracos no A/B de controle (QKD_AB_CONTROLE). O padrao repete o A/B
+# de tres bracos de 2026-09-10; o tracker.py --ab-janela-curta troca por dois.
+CONTROL_AB_REGIMES = tuple(
+    nome.strip()
+    for nome in os.environ.get(
+        "QKD_AB_REGIMES", "atual,lento_ganho_alto,lento_ganho_baixo"
+    ).split(",")
+    if nome.strip()
+)
 
 # Experimento pareado da zona de repouso. A sombra NAO consegue decidir se vale
 # apertar HOLD_ENTER_RADIUS_PX: ela mede o erro que sobra, mas o efeito de uma
@@ -453,7 +489,12 @@ if not (
     and 0 < CONTROL_SLOW_WARMUP_SECONDS <= CONTROL_SLOW_WINDOW_SECONDS
     and 0 < CONTROL_SLOW_FRACTION <= 1
     and 0 < CONTROL_SLOW_FRACTION_BAIXA < CONTROL_SLOW_FRACTION
-    and CONTROL_REGIME_PADRAO in ("atual", "lento_ganho_alto", "lento_ganho_baixo")
+    and CONTROL_REGIME_PADRAO in REGIMES_DE_CONTROLE
+    and len(CONTROL_AB_REGIMES) >= 2
+    and all(nome in REGIMES_DE_CONTROLE for nome in CONTROL_AB_REGIMES)
+    and 0 < CONTROL_CURTA_RELEASE_ARCSEC < CONTROL_CURTA_TRIGGER_ARCSEC
+    and 0 < CONTROL_CURTA_WARMUP_SECONDS <= CONTROL_CURTA_WINDOW_SECONDS
+    and 0 < CONTROL_CURTA_FRACTION <= 1
     and CONTROL_AB_BLOCK_SECONDS >= 2 * CONTROL_SLOW_WINDOW_SECONDS
     # Um bloco precisa encher a janela longa, senao nunca chega a corrigir.
     and CORRECTION_BLOCK_SECONDS >= 2 * CONTROL_SLOW_WINDOW_SECONDS

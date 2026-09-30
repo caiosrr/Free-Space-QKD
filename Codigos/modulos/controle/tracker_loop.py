@@ -16,7 +16,13 @@ from modulos.configuracoes.tracker import (
     FAST_ERROR_MIN_SAMPLES,
     FAST_ERROR_WINDOW_SECONDS,
     CONTROL_AB_BLOCK_SECONDS,
+    CONTROL_AB_REGIMES,
     CONTROL_AB_TEST_ENABLED,
+    CONTROL_CURTA_FRACTION,
+    CONTROL_CURTA_RELEASE_ARCSEC,
+    CONTROL_CURTA_TRIGGER_ARCSEC,
+    CONTROL_CURTA_WARMUP_SECONDS,
+    CONTROL_CURTA_WINDOW_SECONDS,
     CORRECTION_BLOCK_SECONDS,
     CORRECTION_BLOCKS_ENABLED,
     CONTROL_REGIME_PADRAO,
@@ -55,6 +61,8 @@ from modulos.controle.tracker_controle import (
     SlowBiasEstimator,
     SlowCorrectionGate,
     pixel_error_to_mount_error,
+    px_por_arcsec,
+    regime_de_controle,
 )
 from modulos.controle.tracker_estado import TrackerState
 from modulos.controle.tracker_pulsos import BoundedCorrectionCycle
@@ -207,7 +215,13 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
         window_s=CONTROL_SLOW_WINDOW_SECONDS,
         warmup_s=CONTROL_SLOW_WARMUP_SECONDS,
     )
-    regime_lento = False
+    # Estimador do braco "lento_janela_curta". Tambem roda sempre, pelo mesmo
+    # motivo: o A/B troca de braco sem esperar janela encher.
+    slow_bias_curto = SlowBiasEstimator(
+        window_s=CONTROL_CURTA_WINDOW_SECONDS,
+        warmup_s=CONTROL_CURTA_WARMUP_SECONDS,
+    )
+    janela_regime = "curta_8s"
     nome_regime = "atual"
     # Movimento aplicado no pulso em curso, para descontar da janela longa
     # quando ele terminar. Integrado do comando de verdade, nao do pedido.
@@ -216,6 +230,10 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
     # partida, e aqui ela so alimenta o desconto da janela longa. Com a
     # calibracao continua o condicionamento fica em 1,04 e as duas coincidem.
     A_direta = np.linalg.pinv(np.asarray(A_inv, dtype=float))
+    # Converte os limiares em arcsec do braco novo. Vem da mesma matriz que o
+    # controle usa, entao muda sozinho quando a optica e recalibrada.
+    escala_px_arcsec = px_por_arcsec(A_direta)
+    print(f"Escala da calibracao: {1.0 / escala_px_arcsec:.3f} arcsec/px")
     pulse_cycle = BoundedCorrectionCycle(
         VEL_MIN_LIMITE, min_s=1.0 / CONTROL_HZ,
         image_window_s=TEMPORAL_WINDOW_SECONDS,
@@ -289,6 +307,7 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
         # de 60 s e correcoes a cada ~80 s, o controlador quase nunca podia agir.
         if source != "acomodacao_pos_movimento":
             slow_bias_longo.reset()
+            slow_bias_curto.reset()
         directional_error.reset()
         correction_gate.reset()
 
@@ -302,20 +321,24 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
         O ganho que vale e o do pulse_cycle, que calcula a duracao do pulso; o
         FinePulseAxis so entra como proposta, para conferir o sinal.
         """
-        nonlocal regime_lento, nome_regime
-        nome_regime = nome
-        regime_lento = nome != "atual"
-        if regime_lento:
-            fracao = (
-                CONTROL_SLOW_FRACTION if nome == "lento_ganho_alto"
-                else CONTROL_SLOW_FRACTION_BAIXA
-            )
-            correction_gate.enter_radius_px = CONTROL_SLOW_RELEASE_PX
-            correction_gate.exit_radius_px = CONTROL_SLOW_TRIGGER_PX
-        else:
-            fracao = FINE_PULSE_CORRECTION_FRACTION
-            correction_gate.enter_radius_px = HOLD_ENTER_RADIUS_PX
-            correction_gate.exit_radius_px = HOLD_EXIT_RADIUS_PX
+        nonlocal janela_regime, nome_regime
+        regime = regime_de_controle(
+            nome,
+            px_arcsec=escala_px_arcsec,
+            atual={"entrar_px": HOLD_ENTER_RADIUS_PX, "sair_px": HOLD_EXIT_RADIUS_PX,
+                   "fracao": FINE_PULSE_CORRECTION_FRACTION},
+            lento={"entrar_px": CONTROL_SLOW_RELEASE_PX, "sair_px": CONTROL_SLOW_TRIGGER_PX,
+                   "fracao_alta": CONTROL_SLOW_FRACTION,
+                   "fracao_baixa": CONTROL_SLOW_FRACTION_BAIXA},
+            curta={"soltar_arcsec": CONTROL_CURTA_RELEASE_ARCSEC,
+                   "disparar_arcsec": CONTROL_CURTA_TRIGGER_ARCSEC,
+                   "fracao": CONTROL_CURTA_FRACTION},
+        )
+        nome_regime = regime.nome
+        janela_regime = regime.janela
+        fracao = regime.fracao
+        correction_gate.enter_radius_px = regime.entrar_px
+        correction_gate.exit_radius_px = regime.sair_px
         pulse_cycle.fraction = fracao
         fine_az.correction_fraction = fracao
         fine_alt.correction_fraction = fracao
@@ -336,12 +359,14 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     if bloco_c != ab_bloco_controle:
                         ab_bloco_controle = bloco_c
                         aplicar_regime(
-                            ("atual", "lento_ganho_alto", "lento_ganho_baixo")[
-                                bloco_c % 3
-                            ]
+                            CONTROL_AB_REGIMES[bloco_c % len(CONTROL_AB_REGIMES)]
                         )
                         print()
-                        print(f"A/B de controle: regime {nome_regime}")
+                        print(
+                            f"A/B de controle: regime {nome_regime} (porta "
+                            f"{correction_gate.exit_radius_px:.2f}/"
+                            f"{correction_gate.enter_radius_px:.2f} px)"
+                        )
                 if CORRECTION_BLOCKS_ENABLED:
                     bloco_sc = int((loop_t0 - ab_started_at) // CORRECTION_BLOCK_SECONDS)
                     corrigindo = bloco_sc % 2 == 0
@@ -426,9 +451,12 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                         elif shadow_estimate.radius_px <= SHADOW_BIAS_TRIGGER_PX * 0.5:
                             shadow_armed = True
                     bias_longo = slow_bias_longo.observe(measurement_ts, dx_filt, dy_filt)
+                    bias_curto = slow_bias_curto.observe(measurement_ts, dx_filt, dy_filt)
                     bias = slow_bias.observe(measurement_ts, dx_filt, dy_filt)
-                    if regime_lento:
+                    if janela_regime == "longa":
                         bias = bias_longo
+                    elif janela_regime == "janela_curta":
+                        bias = bias_curto
                     estado.slow_dx_px = bias.dx_px
                     estado.slow_dy_px = bias.dy_px
                     estado.slow_radius_px = bias.radius_px
@@ -653,6 +681,7 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                             [aplicado_az, aplicado_alt], dtype=float
                         )
                         slow_bias_longo.deslocar(float(desloc[0]), float(desloc[1]))
+                        slow_bias_curto.deslocar(float(desloc[0]), float(desloc[1]))
                     aplicado_az = aplicado_alt = 0.0
                     repousar("acomodacao_pos_movimento")
                     target_cmd_az = target_cmd_alt = 0.0
