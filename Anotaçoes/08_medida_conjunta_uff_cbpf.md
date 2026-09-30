@@ -1,6 +1,6 @@
 # 08. Medida conjunta UFF e CBPF
 
-Conferido contra o commit `8d24bc1`, em 2026-09-29.
+Conferido contra o commit `a2179ed`, em 2026-09-30.
 
 Camada 2 da documentação. Cobre as duas peças do experimento que mede, na
 outra ponta do enlace, o que o tracker faz: os **blocos com e sem correção** no
@@ -152,7 +152,7 @@ feixe cai), mas não **onde** a mancha fica na câmera. O que move a mancha é o
 
 ### O ponto na câmera
 
-`Codigos/programas_principais/registrar_cbpf.py`, linhas 73 a 106
+`Codigos/programas_principais/registrar_cbpf.py`, linhas 74 a 107
 
 ```python
 def medir_ponto(quadro: np.ndarray, sinal_minimo: float = SINAL_MINIMO) -> dict | None:
@@ -199,7 +199,7 @@ Testado: um fantasma a 60 px com 70% do pico desloca o centroide em menos de
 
 ### Quando não há ponto
 
-`Codigos/programas_principais/registrar_cbpf.py`, linhas 119 a 133
+`Codigos/programas_principais/registrar_cbpf.py`, linhas 120 a 134
 
 ```python
 def sinal_do_quadro(quadro: np.ndarray) -> tuple[float, float]:
@@ -227,13 +227,45 @@ de "não chega luz", e ainda acompanha a intensidade pela noite. O limiar é
 `--sinal-minimo`. A potência do `--teste` sai na unidade do ruído, porque em
 2026-09-29 o ruído de nW do power meter aparecia como `0.00 uW`.
 
+### A luz do quadro inteiro
+
+`Codigos/programas_principais/registrar_cbpf.py`, linhas 137 a 157
+
+```python
+def luz_total(quadro: np.ndarray, bloco: int = 8) -> float:
+    """Luz do quadro inteiro acima do fundo, em contagens, medida em blocos.
+
+    Existe porque a DMK do CBPF esta fora do foco (quadros de 2026-09-30): o
+    laser vira um disco de ~760 px com aneis, e o `sinal` e o `fluxo` medem so o
+    pico central. O disco fica poucas contagens acima de um fundo com ruido de
+    ~6 por pixel, entao pixel a pixel ele se perde. Em blocos de 8 x 8 o ruido
+    cai 8 vezes e o disco aparece: nos quadros daquela noite, o quadro sem
+    laser (01:07) deu 8 mil contagens contra 190 mil a 970 mil com laser.
+    Somam-se os blocos acima de 3 desvios (mediana dos desvios absolutos) da
+    mediana; a parte mais fraca do disco fica de fora, entao a grandeza
+    acompanha a luz que chega mas nao e a luz absoluta.
+    """
+    f = quadro.astype(np.float64)
+    if f.ndim == 3:
+        f = f.mean(axis=2)
+    h, w = (f.shape[0] // bloco) * bloco, (f.shape[1] // bloco) * bloco
+    blocos = f[:h, :w].reshape(h // bloco, bloco, w // bloco, bloco).mean(axis=(1, 3))
+    acima = blocos - float(np.median(blocos))
+    ruido = 1.4826 * float(np.median(np.abs(acima)))
+    return float(acima[acima > 3.0 * max(ruido, 0.1)].sum() * bloco * bloco)
+```
+
+Vai para a coluna `luz_total`. É a medida de quanta luz chega que não depende de
+onde o pico central cai: com a câmera fora do foco, o `sinal` e o `fluxo` medem
+só esse pico. Testada nos quadros gravados em 2026-09-30, não ao vivo.
+
 No CBPF a câmera vê o feixe antes da fibra, depois da lente do receptor. O
 centroide é então o ângulo de chegada, e o `fluxo`, com o `sinal`, acompanha
 quanta luz chega, que é o que o apontamento da UFF muda.
 
 ### O relógio
 
-`Codigos/programas_principais/registrar_cbpf.py`, linhas 109 a 116
+`Codigos/programas_principais/registrar_cbpf.py`, linhas 110 a 117
 
 ```python
 def estado_do_relogio() -> str:

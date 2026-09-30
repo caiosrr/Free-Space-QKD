@@ -1378,5 +1378,55 @@ Outros fatos da noite:
 - a lâmpada do CBPF sumiu de uma vez às 05:39, perto do nascer do sol
   (provavelmente fotocélula); o fundo do CBPF começa a subir às 05:12 e satura
   a DMK às 05:30, pois o receptor olha para o leste;
-- na UFF só 36 % dos quadros tiveram alvo: o controle automático de exposição
-  do observador desceu de 25 ms para ~4,9 ms, fora dos múltiplos de 8,33 ms.
+- o resumo da UFF diz 36 % de quadros com alvo, mas a maior parte dos
+  "sem alvo" é depois das 05:39, com a lâmpada apagada (~410 mil quadros a
+  ~48 por segundo). Com a lâmpada acesa, ~64 %. E há uma troca de regime às
+  ~01:36: a câmera passa de 28 a 48 quadros por segundo para 19,5, e as
+  lacunas sobem de 8 a 25 % para 17 a 45 %, com o sinal forte (CNR ~50) e a
+  exposição quase igual. Então não é exposição nem sinal fraco; causa em
+  aberto, e o observador não grava o motivo de cada quadro perdido.
+
+### O que a noite de 2026-09-30 diz sobre o laço lento do tracker
+
+Trajetória da UFF convertida em segundos de arco pela matriz das 22:58, em
+médias de 1 s (99,7 % dos segundos com dado entre 00:01 e 05:38).
+
+**Ruído**: 0,55″ a 0,65″ quadro a quadro, cerca de 0,2 px na escala nova.
+
+**Desvio de Allan** (quanto a média de uma janela $	au$ difere da seguinte):
+
+| $	au$ | calmo, alt | calmo, az | excursão, alt |
+|---|---|---|---|
+| 1 s | 0,38″ | 0,36″ | 0,62″ |
+| 10 s | 0,25″ | 0,17″ | 0,65″ |
+| 30 s | 0,22″ | 0,11″ | 0,79″ |
+| 60 s | 0,22″ | 0,08″ | 1,08″ |
+| 120 s | 0,26″ | 0,05″ | 1,56″ |
+| 480 s | 0,59″ | 0,04″ | 3,95″ |
+
+"Calmo" é 01:40 a 05:15; "excursão" é 00:01 a 01:02. O mínimo do desvio de
+Allan é a janela a partir da qual promediar mais piora: a deriva passa a pesar
+mais que o ruído. Na elevação ele fica em 30 a 60 s na noite calma e abaixo de
+10 s na excursão. O azimute não deriva.
+
+**Velocidade da elevação** (em janelas de 120 s): mediana 0,14″/min, p95
+1,5″/min, máximo 3,6″/min; na parte calma, p95 0,4″/min.
+
+**Simulação do laço lento sobre a trajetória medida** (mediana da janela, com
+os resíduos antigos deslocados pelas correções, avaliação a cada 5 s, mount
+perfeito; erro radial das médias de 10 s, 00:01 a 05:15):
+
+| janela | limiar | ganho | mediana | p90 | correções/h |
+|---|---|---|---|---|---|
+| sem correção | | | 3,44″ | 7,30″ | 0 |
+| 30 s | 1,0″ | 0,9 | 0,52″ | 1,17″ | 36 |
+| 60 s | 1,0″ | 0,9 | 0,55″ | 1,38″ | 22 |
+| 120 s | 1,0″ | 0,9 | 0,53″ | 1,72″ | 16 |
+| 120 s | 1,74″ | 0,35 | 0,82″ | 2,19″ | 30 |
+| 240 s | 1,0″ | 0,9 | 0,64″ | 2,50″ | 14 |
+| 480 s | 1,0″ | 0,9 | 0,69″ | 4,19″ | 12 |
+
+A linha 120 s, 1,74″, 0,35 é o regime em uso (`lento_ganho_baixo`), com o
+limiar de 0,6 px convertido para a escala nova. O p90 cresce com a janela:
+janela longa atrasa a resposta às excursões. Ressalvas: uma noite só, mount
+ideal, e o tracker mede com a exposição dele, não a do observador.
