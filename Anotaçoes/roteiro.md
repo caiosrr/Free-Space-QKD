@@ -1289,3 +1289,24 @@ degrau 4. Por isso a regra na UFF: **em sessão sem ninguém ao lado, o Coherent
 Connection fica fechado**; ele só abre para ajustar o laser. E a porta do mount
 fica configurada em `serial_mount_local.py`, para a escada não mandar
 `:GVP#` às portas dos lasers.
+
+## CBPF: a câmera mede o ângulo de chegada, e a refração o move, 2026-09-29
+
+No CBPF o feixe da UFF passa por uma lente grande antes do cubo divisor, e a
+câmera fica perto do plano focal. A mancha tem umas 40 px, cerca de 150 µm com
+os pixels de 3,75 µm da DMK 27AUR0135: um feixe de 7 km só fica desse tamanho
+focalizado. Então a posição da mancha é o **ângulo de chegada**, a mesma
+grandeza que decide o acoplamento na fibra. O apontamento da UFF muda quanta
+luz chega, não onde a mancha cai.
+
+O ângulo de chegada não é fixado só pela geometria. Com coeficiente de refração
+$k$, o raio tem raio de curvatura $R_T/k$, e numa corda $L$ o ângulo entre a
+chegada e a reta é $\delta = kL/(2R_T) = k \times 5{,}5\times10^{-4}$ rad para
+7 km. O $k$ padrão de geodésia é 0,13; perto do chão, e sobre a água da Baía de
+Guanabara, ele varia ao longo do dia. **Estimativa, não medida**: $\Delta k =
+0{,}1$ dá 55 µrad, cerca de 11″, no ângulo de chegada.
+
+Na mesma noite o power meter, que chegou a uns 46 µW durante o dia, caiu a
+ruído de nW. A causa não foi separada: parte do tempo o laser estava desligado,
+e a refração é hipótese. A gravação de uma noite inteira no CBPF, com a mancha e
+a potência juntas, é o que separa as duas coisas.

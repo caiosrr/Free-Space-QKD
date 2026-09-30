@@ -29,8 +29,9 @@ eles se medem três coisas:
 | pergunta | quem responde |
 |---|---|
 | o tracker melhora o acoplamento na fibra? | power meter, com e sem correção |
-| quanto o feixe da UFF anda no CBPF? | câmera do CBPF, se ela vê o feixe antes da fibra |
-| a reciprocidade vale? | câmera do CBPF nos blocos com correção |
+| quanto o apontamento da UFF muda a luz no CBPF? | `fluxo` da câmera e power meter |
+| quanto o ângulo de chegada varia no CBPF? | posição da mancha na câmera do CBPF |
+| a reciprocidade vale? | intensidade no CBPF nos blocos com correção |
 
 > Revisado por Caio: ainda não
 
@@ -129,13 +130,20 @@ abriu (1280 × 960) mas **o ponto ainda não foi medido**: o teste respondeu "se
 ponto" com o feixe visível no IC Capture. Provavelmente a exposição do driver
 não era a do IC Capture; ver o sinal, abaixo.
 
-**Não há lente entre o cubo divisor e a câmera** (informado pelo CBPF). Então
-ela vê a mancha do feixe da UFF direto, e o centroide mede o **deslocamento
-lateral** do feixe no plano da câmera, não o ângulo de chegada. O acoplamento na
-fibra depende do ângulo, porque a lente do acoplador converte ângulo em posição
-na ponta da fibra. As duas grandezas se relacionam, mas não são a mesma: a
-comparação com o power meter é o que vai dizer quanto a posição da mancha
-explica do acoplamento.
+**Há uma lente grande antes do cubo divisor, e nenhuma entre o cubo e a
+câmera** (a primeira parte informada pelo Caio em 2026-09-29, corrigindo a
+leitura anterior deste documento). O feixe da UFF é focalizado por essa lente e
+só então dividido entre a câmera e o acoplador da fibra. Então a câmera fica
+perto do plano focal, e o centroide mede o **ângulo de chegada**, não o
+deslocamento lateral: um raio que chega inclinado de $\theta$ cai a $f\theta$
+do eixo, com $f$ a focal da lente. É a mesma grandeza que decide o acoplamento,
+porque a ponta da fibra também está num plano focal dessa lente. A mancha
+observada confirma: umas 40 px, cerca de 150 µm com pixels de 3,75 µm, tamanho
+impossível para um feixe que viajou 7 km sem óptica que o focalize.
+
+Consequência: mover o mount da UFF muda **quanta** luz chega ao CBPF (onde o
+feixe cai), mas não **onde** a mancha fica na câmera. O que move a mancha é o
+ângulo de chegada, e ele varia com a refração atmosférica; ver o roteiro.
 
 ### O ponto na câmera
 
@@ -213,9 +221,9 @@ de "não chega luz", e ainda acompanha a intensidade pela noite. O limiar é
 `--sinal-minimo`. A potência do `--teste` sai na unidade do ruído, porque em
 2026-09-29 o ruído de nW do power meter aparecia como `0.00 uW`.
 
-Se a câmera vê o feixe **antes** da fibra, o centroide é a posição do feixe da
-UFF no CBPF. Se ela vê a **saída** da fibra, o centroide fica parado e o que
-importa é o `fluxo`, que acompanha o acoplamento.
+No CBPF a câmera vê o feixe antes da fibra, depois da lente do receptor. O
+centroide é então o ângulo de chegada, e o `fluxo`, com o `sinal`, acompanha
+quanta luz chega, que é o que o apontamento da UFF muda.
 
 ### O relógio
 
