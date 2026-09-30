@@ -292,7 +292,8 @@ def main() -> int:
                      "" if potencia is None else f"{potencia:.6e}", ";".join(erros)]
             if args.teste:
                 if m:
-                    pos = f"({m['x_px']:.1f}, {m['y_px']:.1f}) sinal {sinal:.1f}"
+                    pos = (f"({m['x_px']:.1f}, {m['y_px']:.1f}) sinal {sinal:.1f}, "
+                           f"pico {m['pico']:.0f}, saturados {m['saturados']}")
                 elif sinal is not None:
                     pos = f"sem ponto: sinal {sinal:.1f} de {args.sinal_minimo:g}, fundo {fundo:.0f}"
                 else:

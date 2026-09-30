@@ -216,7 +216,8 @@ def sinal_do_quadro(quadro: np.ndarray) -> tuple[float, float]:
 
 A mesma suavização do `medir_ponto`, sem o limiar. Vai para a coluna `sinal` em
 toda linha, haja ponto ou não, e o `--teste` mostra a distância ao limiar
-(`sem ponto: sinal 4.2 de 10`). Com o feixe fraco, isso separa "faltou pouco"
+(`sem ponto: sinal 4.2 de 10`); com ponto, mostra também o pico bruto e os
+pixels saturados, que é o que se olha ao escolher a exposição. Com o feixe fraco, isso separa "faltou pouco"
 de "não chega luz", e ainda acompanha a intensidade pela noite. O limiar é
 `--sinal-minimo`. A potência do `--teste` sai na unidade do ruído, porque em
 2026-09-29 o ruído de nW do power meter aparecia como `0.00 uW`.
