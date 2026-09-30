@@ -37,6 +37,8 @@ Com a janela de PREVIA selecionada (a pequena, na tela principal):
     w a s d movem o retangulo 50 pixels por toque, para achar o feixe
             (o feixe de um HeNe tem ~1 mm, ou ~185 espelhos de 5,4 um)
     i       inverte a imagem: preto vira branco e vice-versa
+    1 2 3   tudo VERMELHO, VERDE ou AZUL puro (255 num canal so), para ver
+            quanto tempo do quadro cada cor ocupa na sequencia do DMD
     Esc     sai, deixando o DMD preto
 
 Por que inverter: os espelhos refletem igualmente bem nos dois estados, e
@@ -85,6 +87,19 @@ def tudo(largura: int, altura: int, valor: int) -> np.ndarray:
     return np.full((altura, largura), valor, dtype=np.uint8)
 
 
+def cor_pura(largura: int, altura: int, canal_bgr: int) -> np.ndarray:
+    """255 num canal so. Os espelhos ligam apenas no segmento daquela cor.
+
+    Existe para medir a sequencia do DMD pela camera (2026-09-30): pelo
+    gerador interno o branco deixa os espelhos quase sempre ligados, e pelo
+    HDMI pulsando. Comparar cada cor pura nos dois caminhos mostra se algum
+    canal chega trocado ou abaixo de 255.
+    """
+    img = np.zeros((altura, largura, 3), dtype=np.uint8)
+    img[:, :, canal_bgr] = 255
+    return img
+
+
 def metade(largura: int, altura: int) -> np.ndarray:
     """Metade ESQUERDA acesa: mostra se a imagem chega espelhada no chip."""
     img = tudo(largura, altura, 0)
@@ -121,7 +136,7 @@ def previa(img: np.ndarray, legenda: str) -> np.ndarray:
     escala = LARGURA_PREVIA / img.shape[1]
     pequena = cv2.resize(img, None, fx=escala, fy=escala,
                          interpolation=cv2.INTER_NEAREST)
-    cor = cv2.cvtColor(pequena, cv2.COLOR_GRAY2BGR)
+    cor = pequena.copy() if pequena.ndim == 3 else cv2.cvtColor(pequena, cv2.COLOR_GRAY2BGR)
     cv2.putText(cor, legenda, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
                 (0, 200, 255), 1, cv2.LINE_AA)
     return cor
@@ -169,6 +184,11 @@ def main() -> int:
                 legenda = f"retangulo lado={lado} px em ({cx}, {cy})"
             elif modo == "l":
                 img, legenda = listras(largura, altura, periodo), f"listras periodo={periodo} px"
+            elif modo in "123":
+                # OpenCV guarda em BGR: 1 = vermelho (canal 2), 3 = azul (canal 0).
+                canal = {"1": 2, "2": 1, "3": 0}[modo]
+                img = cor_pura(largura, altura, canal)
+                legenda = {"1": "tudo VERMELHO", "2": "tudo VERDE", "3": "tudo AZUL"}[modo]
             else:
                 img, legenda = tudo(largura, altura, 0), "tudo preto"
 
@@ -190,7 +210,7 @@ def main() -> int:
             if tecla == -1:
                 continue
             letra = chr(tecla & 0xFF).lower()
-            if letra in "bpmrl":
+            if letra in "bpmrl123":
                 modo = letra
             elif letra == "i":
                 invertido = not invertido
