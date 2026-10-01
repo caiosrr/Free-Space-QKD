@@ -66,6 +66,10 @@ from programas_principais._iniciador import aplicar_camera  # noqa: E402
 COMPRIMENTO_DE_ONDA_NM = 637.0      # OBIS vermelho da UFF; o Coherent o mostra como 641
 SINAL_MINIMO = 10.0                  # contagens acima do fundo para haver ponto
 IMAGEM_A_CADA_S = 600.0
+# A DMK do CBPF nao chega a 255: em 2026-09-30 o pico parou em 239 quadro apos
+# quadro, e o fundo do amanhecer tambem travou em 239. Contar so o 255 dava
+# "saturados 0" com a imagem saturada.
+TETO_8_BITS = 235
 
 COLUNAS = ["t_unix", "data_hora", "x_px", "y_px", "pico", "fundo", "sinal", "fluxo",
            "luz_total", "saturados", "potencia_w", "erro"]
@@ -96,7 +100,7 @@ def medir_ponto(quadro: np.ndarray, sinal_minimo: float = SINAL_MINIMO) -> dict 
     pesos = np.clip(liquido[mancha], 0.0, None)
     if pesos.sum() <= 0:
         return None
-    saturacao = 255 if quadro.dtype == np.uint8 else float(np.iinfo(quadro.dtype).max)
+    saturacao = TETO_8_BITS if quadro.dtype == np.uint8 else float(np.iinfo(quadro.dtype).max)
     return {
         "x_px": float(np.sum(xs * pesos) / pesos.sum()),
         "y_px": float(np.sum(ys * pesos) / pesos.sum()),
