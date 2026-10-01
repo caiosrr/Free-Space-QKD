@@ -1,6 +1,6 @@
 # 07. Holograma de fase no DMD
 
-Conferido contra o commit `615152c`, em 2026-09-25.
+Conferido contra o commit `9121f7c`, em 2026-10-01.
 
 Camada 2 da documentação. Cobre `modulos/dmd/holograma.py`, a física, e
 `diversos/ferramentas/dmd_holograma.py`, o programa de bancada. A base teórica
@@ -387,3 +387,50 @@ Nada disto rodou com o DMD e o laser. Na ordem em que vale conferir:
 3. A ordem 0 não chega à câmera depois do espelho da segunda mesa.
 4. A prévia do campo distante bate com o que a câmera mostra.
 5. A animação com vento roda fluida na tela do DMD.
+
+---
+
+## 8. A piscada dos espelhos e como medi-la
+
+O DLPC3439 é um controlador de vídeo: cada quadro de 16,667 ms vira uma
+sequência de planos de bit, cor por cor (vermelho 33 %, verde 47 % e azul 20 %
+do tempo, lidos do controlador em 2026-09-30). Um pixel 255 deveria deixar o
+espelho ligado em todos os planos. Medido em 2026-09-30 (roteiro, "DMD: por que
+os espelhos piscam no vídeo HDMI"): pelo gerador interno, quase isso; pelo HDMI,
+o verde fica ligado ~0,68 do tempo que deveria e o azul ~0,50, e o branco pulsa.
+
+A medida usa o obturador rolante da ASI: com a luz do DMD espalhada sobre o
+sensor inteiro e exposição de 32 µs, cada linha é um instante de tempo.
+
+`Codigos/diversos/ferramentas/dmd_piscada.py`, linhas 50 a 66
+
+```python
+def medir_quadro(img: np.ndarray, bayer: bool = True) -> dict:
+    """Fracao ligada e trocas por 100 linhas, num quadro com a luz cobrindo o sensor."""
+    r = img.astype(np.float64)
+    if r.ndim == 3:
+        r = r.mean(axis=2)
+    if bayer:
+        r = r[0::2, 0::2]  # vermelho do RGGB: o HeNe so acende esse canal
+    col = r.mean(axis=0)
+    colunas = col > 0.5 * col.max()
+    perfil = _suavizar(r[:, colunas].mean(axis=1), 3)
+    env = _suavizar(_max_movel(perfil, 151), 151)
+    uteis = env > 0.25 * env.max()
+    ligado = float(perfil[uteis].sum() / env[uteis].sum())
+    on = (perfil > 0.5 * env) & uteis
+    trocas = float(np.sum(np.diff(on.astype(int)) != 0) / max(uteis.sum(), 1) * 100)
+    return {"ligado": ligado, "trocas": trocas, "linhas": int(uteis.sum()),
+            "saturados": float(np.mean(r >= 250))}
+```
+
+O número `ligado` depende da forma da mancha desfocada, então só vale comparado
+com outro grupo de quadros **na mesma montagem**, de preferência o gerador
+interno com a mesma cor.
+
+Os testes por comando ficam em `Codigos/diversos/dmd_lotes/`, arquivos de lote
+para a aba "Batch Files" da interface da TI (`w 36 <comando> <dados>` escreve,
+`r 36 <n>` lê). Todos são voláteis: desligar o DMD volta tudo ao gravado na
+flash. Nenhum mexe na flash.
+
+> Revisado por Caio: ainda não

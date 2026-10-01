@@ -1524,3 +1524,13 @@ insensível a erros de até ~8″. Ficam mais fracas a relação com o CBPF (ind
 pela refração comum às duas direções) e a correlação de 0,47 entre o brilho da
 lâmpada e o PM. A luz da noite de 2026-09-30, do observador, também precisa ser
 conferida. Próximas noites: marcar de dia o pixel do CBPF na IDS.
+
+### As cores pelo HDMI, medidas pelo `dmd_piscada.py`, 2026-10-01
+
+Reanálise dos quadros de 2026-09-30 (19:01 a 19:04 UTC), fração do tempo com os
+espelhos ligados, HDMI contra gerador interno na mesma montagem: vermelho 0,30
+contra 0,29 (igual), verde 0,27 contra 0,40 (0,68), azul 0,11 contra 0,22
+(0,50). Se o branco fosse a soma das cores, o HDMI daria ~0,75 do gerador; a
+sessão anterior (18:37, outra montagem da mancha) deu ~0,35. Ou o branco passa
+por um processamento que as cores puras não passam, ou a diferença de montagem
+pesou: a próxima sessão mede branco e cores juntos.
