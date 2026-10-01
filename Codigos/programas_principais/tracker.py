@@ -13,6 +13,10 @@ A/B entre o regime lento em uso e o braco de janela curta (45 s, limiar em
 arcsec), alternando a cada N minutos; os dois bracos corrigem:
 
     python programas_principais/tracker.py --camera ids --horas 8 --ab-janela-curta 10
+
+Blocos com e sem correcao, corrigindo com o braco de janela curta:
+
+    python programas_principais/tracker.py --camera ids --horas 7 --blocos-minutos 15 --regime lento_janela_curta
 """
 
 import sys
@@ -58,6 +62,15 @@ def parse_args() -> argparse.Namespace:
         "--ab-janela-curta", type=float, default=None, metavar="MIN",
         help="alterna lento_ganho_baixo e lento_janela_curta a cada MIN minutos (>= 4)",
     )
+    parser.add_argument(
+        "--regime", default=None,
+        choices=["atual", "lento_ganho_alto", "lento_ganho_baixo", "lento_janela_curta"],
+        help="regime de controle da sessao (padrao: lento_ganho_baixo)",
+    )
+    parser.add_argument(
+        "--ganho-curta", type=float, default=None, metavar="F",
+        help="fracao corrigida por pulso no braco lento_janela_curta (padrao 0,35)",
+    )
     vigia = parser.add_mutually_exclusive_group()
     vigia.add_argument("--vigia", dest="vigia", action="store_true")
     vigia.add_argument("--sem-vigia", dest="vigia", action="store_false")
@@ -102,6 +115,14 @@ if __name__ == "__main__":
         os.environ["QKD_BLOCOS_CORRECAO"] = "1"
         os.environ["QKD_BLOCOS_CORRECAO_S"] = str(args.blocos_minutos * 60.0)
         print(f"Blocos de {args.blocos_minutos:g} min: com correcao, sem, com, ...")
+    if args.regime:
+        os.environ["QKD_REGIME"] = args.regime
+        print(f"Regime de controle pedido: {args.regime}")
+    if args.ganho_curta is not None:
+        if not 0 < args.ganho_curta <= 1:
+            raise SystemExit("--ganho-curta precisa estar entre 0 e 1.")
+        os.environ["QKD_CURTA_GANHO"] = str(args.ganho_curta)
+        print(f"Ganho do braco de janela curta: {args.ganho_curta:g}")
     if args.ab_janela_curta:
         # O bloco precisa encher a janela de 120 s do braco em uso duas vezes;
         # a configuracao recusa menos que isso ao importar.

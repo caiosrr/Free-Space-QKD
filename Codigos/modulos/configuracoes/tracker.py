@@ -77,7 +77,8 @@ HOLD_ENTER_RADIUS_PX = 1.0
 #
 # Ressalvas do dado: 7 blocos por braco, so de madrugada, sem cobrir o
 # amanhecer. Trocar de volta e mudar esta linha.
-CONTROL_REGIME_PADRAO = "lento_ganho_baixo"
+# O tracker.py --regime troca sem editar este arquivo (QKD_REGIME).
+CONTROL_REGIME_PADRAO = os.environ.get("QKD_REGIME", "lento_ganho_baixo")
 
 CONTROL_AB_TEST_ENABLED = _chave("QKD_AB_CONTROLE", False)
 
@@ -121,8 +122,10 @@ CONTROL_SLOW_FRACTION_BAIXA = 0.35
 #                 criterio dos 0,6 px originais (2,5x a incerteza e 3x o menor
 #                 pulso); o menor pulso hoje anda 0,08" e nao limita
 #   soltura 0,42" a mesma razao 0,25/0,6 do regime lento original
-#   ganho 0,9     na simulacao sobre a trajetoria medida, 0,9 e 0,35 dao o mesmo
-#                 erro e 0,9 corrige cerca de metade das vezes
+#   ganho 0,35    o que venceu o A/B de 2026-09-10 com o mount de verdade. Na
+#                 simulacao 0,9 da o mesmo erro corrigindo metade das vezes, mas
+#                 so a simulacao diz isso; com 0,35 o braco difere do regime em
+#                 uso so na janela e no limiar. O tracker.py --ganho-curta troca.
 #
 # Simulado (mount ideal): p90 de 1,2 a 1,4" contra 2,2" do regime em uso.
 # NUNCA RODOU COM O MOUNT: o A/B de 2026-09-30 a noite e o primeiro teste.
@@ -130,7 +133,7 @@ CONTROL_CURTA_WINDOW_SECONDS = 45.0
 CONTROL_CURTA_WARMUP_SECONDS = 22.5
 CONTROL_CURTA_TRIGGER_ARCSEC = 1.0
 CONTROL_CURTA_RELEASE_ARCSEC = 0.42
-CONTROL_CURTA_FRACTION = 0.90
+CONTROL_CURTA_FRACTION = float(os.environ.get("QKD_CURTA_GANHO", "0.35"))
 
 REGIMES_DE_CONTROLE = ("atual", "lento_ganho_alto", "lento_ganho_baixo", "lento_janela_curta")
 # Ordem dos bracos no A/B de controle (QKD_AB_CONTROLE). O padrao repete o A/B

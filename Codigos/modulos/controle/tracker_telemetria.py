@@ -540,6 +540,7 @@ class TrackerCsvLogger:
                 "hold_exit_radius_arcsec": CONTROL_CURTA_TRIGGER_ARCSEC,
                 "slow_bias_window_seconds": CONTROL_CURTA_WINDOW_SECONDS,
                 "slow_bias_warmup_seconds": CONTROL_CURTA_WARMUP_SECONDS,
+                "slow_correction_fraction": CONTROL_CURTA_FRACTION,
             })
         elif (dominante and dominante != "atual"
                 and self._regimes_usados[dominante] >= 0.99 * total):

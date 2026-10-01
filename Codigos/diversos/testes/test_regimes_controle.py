@@ -88,6 +88,20 @@ class ConfiguracaoDoABTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._recarregar(QKD_AB_REGIMES="lento_ganho_baixo,lento_janela_curtaa")
 
+    def test_regime_e_ganho_como_o_tracker_py_configura(self):
+        cfg = self._recarregar(QKD_REGIME="lento_janela_curta", QKD_CURTA_GANHO="0.9")
+        self.assertEqual(cfg.CONTROL_REGIME_PADRAO, "lento_janela_curta")
+        self.assertEqual(cfg.CONTROL_CURTA_FRACTION, 0.9)
+
+    def test_sem_opcao_o_braco_curto_usa_o_ganho_que_venceu_em_setembro(self):
+        cfg = self._recarregar()
+        self.assertEqual(cfg.CONTROL_REGIME_PADRAO, "lento_ganho_baixo")
+        self.assertEqual(cfg.CONTROL_CURTA_FRACTION, 0.35)
+
+    def test_regime_com_nome_errado_nao_passa_da_importacao(self):
+        with self.assertRaises(ValueError):
+            self._recarregar(QKD_REGIME="lento_janela")
+
     def test_bloco_curto_demais_nao_passa_da_importacao(self):
         with self.assertRaises(ValueError):
             self._recarregar(QKD_AB_BLOCO_S="120")
