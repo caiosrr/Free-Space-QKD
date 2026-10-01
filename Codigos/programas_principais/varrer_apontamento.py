@@ -19,7 +19,9 @@ junto com a varredura, ela mede a posicao do feixe, e nao o angulo.
 
 Seguranca: deslocamentos de no maximo LIMITE_ARCSEC, confirmacao digitada,
 recusa se outro programa estiver comandando o mount, e volta a posicao inicial
-no fim, no Ctrl+C e em qualquer erro. NUNCA RODOU COM O MOUNT ate 2026-10-01.
+no fim, no Ctrl+C e em qualquer erro. Primeira execucao no mount em 2026-10-01,
+de dia, versao curta (+-10 e 20" em az): cada passo em 1 a 3 s, chegada a
++-1" (o passo da leitura de posicao) e retorno com erro de 0".
 
 Uso, a partir da pasta Codigos, com o servidor ASCOM aberto e o tracker parado:
 
