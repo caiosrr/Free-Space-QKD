@@ -1,6 +1,6 @@
 # 08. Medida conjunta UFF e CBPF
 
-Conferido contra o commit `58c4967`, em 2026-09-30.
+Conferido contra o commit `3599c1a`, em 2026-10-01.
 
 Camada 2 da documentação. Cobre as duas peças do experimento que mede, na
 outra ponta do enlace, o que o tracker faz: os **blocos com e sem correção** no
@@ -406,7 +406,70 @@ sessão guarda os parâmetros do A/B em `control_ab`.
 
 ---
 
-## 4. A noite, na prática
+## 4. A varredura de apontamento
+
+A noite de 2026-10-01 mostrou o tracker reduzindo o erro de apontamento sem
+mudar a potência no CBPF (roteiro, "Noite de 2026-10-01"). A pergunta que sobra
+é quanto erro custa quanta potência. Em vez de esperar a atmosfera produzir a
+deriva, `programas_principais/varrer_apontamento.py` desloca o mount de
+propósito enquanto o registrador do CBPF grava, e os dois se cruzam pelo
+`t_unix`.
+
+`Codigos/programas_principais/varrer_apontamento.py`, linhas 60 a 69
+
+```python
+def plano(pontos, eixos) -> list[tuple[str, float]]:
+    """Sequencia de (eixo, deslocamento em arcsec), cada ponto entre dois centros."""
+    seq: list[tuple[str, float]] = []
+    for eixo in eixos:
+        seq.append((eixo, 0.0))
+        for p in pontos:
+            for sinal in (+1.0, -1.0):
+                seq.append((eixo, sinal * p))
+                seq.append((eixo, 0.0))
+    return seq
+```
+
+Cada ponto fora do centro fica entre duas medidas no centro. A transmissão da
+atmosfera, que varia ±15 % em ondas de uma hora, sai dividindo cada ponto pela
+média dos dois centros vizinhos.
+
+`Codigos/programas_principais/varrer_apontamento.py`, linhas 127 a 135
+
+```python
+    finally:
+        mount["parar"]()
+        print("Voltando a posicao inicial...")
+        try:
+            mount["mover_para"](az0, alt0)
+        finally:
+            mount["parar"]()
+            gravar(-1, "-", 0.0, "retorno")
+            arquivo.close()
+```
+
+Aconteça o que acontecer (fim do plano, Ctrl+C ou erro), o mount para e volta à
+posição inicial. Os deslocamentos são limitados a 300″, dez vezes a maior
+excursão de refração medida, e o programa recusa rodar se outro estiver
+comandando o mount: ele grava a posição a cada 0,5 s numa pasta que a trava
+`mount_em_uso` vigia. **Testado com o mount simulado; nunca rodou com o mount.**
+
+A varredura responde também o que a câmera do CBPF mede. Mover o mount da UFF
+desloca o feixe no CBPF sem mudar o ângulo de chegada lá. Se a mancha da DMK
+andar junto com a varredura, ela mede a posição do feixe, e não o ângulo.
+
+> Revisado por Caio: ainda não
+
+**Para conferir**
+
+1. Por que cercar cada ponto com medidas no centro, em vez de medir todos os
+   pontos em sequência e um centro só no fim?
+2. Com a tolerância de 0,0003 grau na chegada, quanto pode errar, em segundos de
+   arco, um ponto de 10″?
+
+---
+
+## 5. A noite, na prática
 
 1. Nos dois PCs, antes e ao acordar, a diferença do relógio para um servidor
    HTTPS (sem mexer no relógio: o do CBPF é compartilhado com equipamentos
