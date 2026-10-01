@@ -1565,3 +1565,22 @@ isso o verde pelo HDMI subiu de 0,27 para 0,33. Mas a razão HDMI ÷ gerador
 interno no mesmo Look ficou igual: verde 0,60 (Look 1: 0,67), azul 0,48 (Look 1:
 0,46). O ganho por canal do HDMI não depende do Look; ele está antes da
 sequência, no caminho da entrada.
+
+### Entrada YCbCr, tabelas e CAIC: o caminho por comandos se esgota, 2026-10-01
+
+- **Entrada em YCbCr** (07h = 51h, matriz BT.601): a NVIDIA não oferece YCbCr
+  para o DMD (o EDID da placa anuncia só RGB), então o PC mandou cores RGB
+  cujos bytes, lidos como YCbCr, valem branco. O Y entra no canal verde
+  (candidato (128, 255, 128)), mas esse branco também chega reduzido: 0,45 com
+  3,4 trocas, contra 0,51 e 3,5 do branco em RGB. A redução acontece depois da
+  conversão de cor, numa etapa comum às duas entradas.
+- **Degamma/CMT**: só existem as tabelas 0 e 1 (a 2 e a 3 são recusadas), e
+  nenhuma muda o ganho.
+- **CAIC ligado** (50h = 01): verde pelo HDMI 0,27 com 2,1 trocas e branco 0,52,
+  iguais ao CAIC desligado.
+
+Resumo do que o HDMI faz, medido: ganho fixo por canal (vermelho 1,0, verde
+~0,64, azul ~0,47 do tempo ligado do gerador interno), independente de Look,
+CCA, CMT, CAIC e formato da entrada. O gerador interno não passa por ele. Uso
+possível hoje: holograma só no vermelho (espelhos parados como no gerador, 33 %
+do quadro no Look 1) ou branco (~72 % da luz, com verde e azul pulsando).
