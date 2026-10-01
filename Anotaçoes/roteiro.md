@@ -1555,3 +1555,13 @@ há processamento próprio do branco; os ~0,35 da sessão de 18:37 vinham da
 montagem da mancha. O HDMI aplica um ganho fixo por canal: vermelho cheio,
 verde ~2/3, azul ~1/2, e as cores reduzidas pulsam (3,5 trocas por 100 linhas
 no branco, contra 0,7 no gerador).
+
+### Os Looks mudam a sequência, não o ganho do HDMI, 2026-10-01
+
+Os Looks 0, 2 e 3 existem e foram aceitos (leitura 23h); cada um divide o tempo
+dos espelhos em pedaços diferentes. O Look 3 (cabeçalho 26h: vermelho 15 %,
+verde 58 %, azul 27 %, contra 33/47/20 no Look 1) dá mais tempo ao verde, e por
+isso o verde pelo HDMI subiu de 0,27 para 0,33. Mas a razão HDMI ÷ gerador
+interno no mesmo Look ficou igual: verde 0,60 (Look 1: 0,67), azul 0,48 (Look 1:
+0,46). O ganho por canal do HDMI não depende do Look; ele está antes da
+sequência, no caminho da entrada.
