@@ -1,6 +1,6 @@
 # 08. Medida conjunta UFF e CBPF
 
-Conferido contra o commit `c1a8fa4`, em 2026-09-30.
+Conferido contra o commit `e1eb152`, em 2026-09-30.
 
 Camada 2 da documentação. Cobre as duas peças do experimento que mede, na
 outra ponta do enlace, o que o tracker faz: os **blocos com e sem correção** no
@@ -152,7 +152,7 @@ feixe cai), mas não **onde** a mancha fica na câmera. O que move a mancha é o
 
 ### O ponto na câmera
 
-`Codigos/programas_principais/registrar_cbpf.py`, linhas 74 a 107
+`Codigos/programas_principais/registrar_cbpf.py`, linhas 78 a 111
 
 ```python
 def medir_ponto(quadro: np.ndarray, sinal_minimo: float = SINAL_MINIMO) -> dict | None:
@@ -180,7 +180,7 @@ def medir_ponto(quadro: np.ndarray, sinal_minimo: float = SINAL_MINIMO) -> dict 
     pesos = np.clip(liquido[mancha], 0.0, None)
     if pesos.sum() <= 0:
         return None
-    saturacao = 255 if quadro.dtype == np.uint8 else float(np.iinfo(quadro.dtype).max)
+    saturacao = TETO_8_BITS if quadro.dtype == np.uint8 else float(np.iinfo(quadro.dtype).max)
     return {
         "x_px": float(np.sum(xs * pesos) / pesos.sum()),
         "y_px": float(np.sum(ys * pesos) / pesos.sum()),
@@ -191,6 +191,9 @@ def medir_ponto(quadro: np.ndarray, sinal_minimo: float = SINAL_MINIMO) -> dict 
     }
 ```
 
+Os `saturados` contam a partir de 235, e não de 255: a DMK do CBPF para em
+239 (medido em 2026-09-30, pico em 239 em todos os quadros).
+
 A escolha que importa é a **mancha conectada ao máximo**. Reflexos fantasmas,
 como os que a estrutura da câmera faz na bancada da USP, podem passar da meia
 altura, mas ficam separados da mancha principal e não entram na conta.
@@ -199,7 +202,7 @@ Testado: um fantasma a 60 px com 70% do pico desloca o centroide em menos de
 
 ### Quando não há ponto
 
-`Codigos/programas_principais/registrar_cbpf.py`, linhas 120 a 134
+`Codigos/programas_principais/registrar_cbpf.py`, linhas 124 a 138
 
 ```python
 def sinal_do_quadro(quadro: np.ndarray) -> tuple[float, float]:
@@ -229,7 +232,7 @@ de "não chega luz", e ainda acompanha a intensidade pela noite. O limiar é
 
 ### A luz do quadro inteiro
 
-`Codigos/programas_principais/registrar_cbpf.py`, linhas 137 a 157
+`Codigos/programas_principais/registrar_cbpf.py`, linhas 141 a 161
 
 ```python
 def luz_total(quadro: np.ndarray, bloco: int = 8) -> float:
@@ -265,7 +268,7 @@ quanta luz chega, que é o que o apontamento da UFF muda.
 
 ### O relógio
 
-`Codigos/programas_principais/registrar_cbpf.py`, linhas 110 a 117
+`Codigos/programas_principais/registrar_cbpf.py`, linhas 114 a 121
 
 ```python
 def estado_do_relogio() -> str:
