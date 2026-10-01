@@ -380,11 +380,19 @@ vai para a +1: com o HeNe de 0,9 mW, uns 90 µW antes das perdas do DMD.
 
 ## 7. O que precisa ser visto na bancada
 
-Nada disto rodou com o DMD e o laser. Na ordem em que vale conferir:
+Primeiro teste com o DMD e o laser em 2026-10-01 (HDMI, branco, Look 2,
+abertura de 94 px em (856, 615), período de 7 px; ASI585 com ND 3,0). Na ordem
+em que vale conferir:
 
-1. As ordens ±1 aparecem no cartão onde a tabela da seção 1 prevê.
-2. O anel do OAM aparece na câmera, e a ordem 0 não muda com ele.
-3. A ordem 0 não chega à câmera depois do espelho da segunda mesa.
+1. As ordens ±1 aparecem no cartão onde a tabela da seção 1 prevê. **Conferido
+   em 2026-10-01**: 0 no meio, ±1 dos lados, uma delas mais forte (a inclinação
+   dos espelhos favorece um lado).
+2. O anel do OAM aparece na câmera, e a ordem 0 não muda com ele. **Conferido em
+   2026-10-01**: rosquinha com centro escuro em ℓ = 1, maior em ℓ = 2, um pouco
+   torta; listras finas de interferência atravessam a mancha (reflexo no filtro
+   ND ou na janela da câmera, a confirmar).
+3. A ordem 0 não chega à câmera depois do espelho da segunda mesa. **Conferido
+   em 2026-10-01**: ela passa ao lado do espelho de 1".
 4. A prévia do campo distante bate com o que a câmera mostra.
 5. A animação com vento roda fluida na tela do DMD.
 
