@@ -1534,3 +1534,24 @@ contra 0,29 (igual), verde 0,27 contra 0,40 (0,68), azul 0,11 contra 0,22
 sessão anterior (18:37, outra montagem da mancha) deu ~0,35. Ou o branco passa
 por um processamento que as cores puras não passam, ou a diferença de montagem
 pesou: a próxima sessão mede branco e cores juntos.
+
+### Mapa de cores numa sessão só, 2026-10-01 14:04 UTC
+
+Estado padrão (depois de religar: CCA ligado, Look 1, CMT 0). Fração do tempo
+com os espelhos ligados pelo `dmd_piscada.py`, HDMI dividido pelo gerador
+interno, mesma montagem, 2 a 3 quadros por caso:
+
+| cor | HDMI / gerador | | cor | HDMI / gerador |
+|---|---|---|---|---|
+| vermelho | 1,01 | | amarelo | 0,77 |
+| verde | 0,67 | | ciano | 0,63 |
+| azul | 0,46 | | magenta | 0,82 |
+| branco | 0,72 | | | |
+
+Reproduz o de 2026-09-30 (1,03, 0,68, 0,50) com o CCA ligado, então o CCA não é
+a causa. As cores se somam: o branco pelo HDMI (0,72) bate com a soma das três
+primárias (0,73), e amarelo, ciano e magenta ficam a 0,04 da soma das suas. Não
+há processamento próprio do branco; os ~0,35 da sessão de 18:37 vinham da
+montagem da mancha. O HDMI aplica um ganho fixo por canal: vermelho cheio,
+verde ~2/3, azul ~1/2, e as cores reduzidas pulsam (3,5 trocas por 100 linhas
+no branco, contra 0,7 no gerador).
