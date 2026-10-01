@@ -286,7 +286,7 @@ congelado" de Taylor), é só ler outra janela dela:
 O espectro cresce como $r_0^{-5/3}$, então a fase cresce como $r_0^{-5/6}$. O
 programa gera a tela uma vez, com $r_0 = 1$ px, e só multiplica:
 
-`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 138 a 151
+`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 142 a 155
 
 ```python
     fase = np.zeros_like(x)
@@ -354,7 +354,7 @@ inclinação a cada quadro.
 O holograma é desenhado só dentro de uma **abertura** circular, que você
 centra no feixe. Fora dela o DMD fica preto:
 
-`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 171 a 174
+`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 175 a 178
 
 ```python
     mascara = np.hypot(x, y) <= r
@@ -391,7 +391,7 @@ espera). Na câmera, o padrão levava mais de 1 s para se renovar (roteiro,
 "Primeira turbulência na bancada"). Agora a tela anda em px/s, medidos pelo
 relógio, e a espera caiu para 1 ms:
 
-`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 359 a 368
+`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 363 a 372
 
 ```python
             tecla = cv2.waitKeyEx(1 if estado.vento else 0)
@@ -429,7 +429,7 @@ Achar o centro, o raio, o período e o ângulo que funcionam leva tempo, e na
 primeira sessão (2026-10-01) eles se perderam ao fechar o programa. Agora, ao
 sair, o programa imprime o comando que volta a eles:
 
-`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 379 a 383
+`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 383 a 387
 
 ```python
         # O alinhamento custa caro: sai impresso o comando que volta a ele.
@@ -478,7 +478,9 @@ turbulência.
 **O espelho de 1" também tem de caber.** Ele fica perto do meio do caminho,
 ~1,5 m do DMD. Com $r_0 = 18$ px a +1 chega a ele com ~1 cm, mais o desvio da
 inclinação (seção 4). Com $r_0$ de poucos px, passa de 2,5 cm, e o espelho
-corta: em 2026-10-01 a +1 turbulenta chegou maior que ele.
+corta. Em 2026-10-01 a +1 turbulenta chegou ao espelho praticamente do
+tamanho dele; parecia maior porque estava deslocada, e com o espelho
+realinhado passou quase toda.
 
 **O halo tem de ser menor que a separação entre ordens.** Na razão das duas,
 $\lambda/(r_0 p)$ dividido por $\lambda/(\Lambda p)$, sobra $\Lambda/r_0$, com
@@ -529,7 +531,10 @@ em que vale conferir:
      é de 2,2 mrad, do tamanho do salto. Teste: em modo `g`, levar a +1 com a
      mira até onde a legenda mostra a inclinação da tela, e ver se ela vai
      para a mancha de cima; e, em modo `t` com $r_0 \approx 15$ px, tirar a
-     inclinação com `i` e ver se a mancha de baixo volta;
+     inclinação com `i` e ver se a mancha de baixo volta. **Pista de
+     2026-10-01**: sem o filtro ND 3,0, com a exposição no mínimo e as
+     mesmas configurações, a mancha de cima não apareceu. O filtro entra
+     na história (reflexo fantasma ou corte pela borda), a confirmar;
    - o centro da turbulência sobe na parede quando ela fica mais forte, o que
      a inclinação da tela explica (seção 4).
 7. Com a mira, até que ângulo a +1 ainda aparece na câmera em cada direção

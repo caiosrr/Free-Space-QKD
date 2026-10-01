@@ -1,5 +1,9 @@
 """Holograma de fase no DMD: grade, OAM e turbulencia, para alinhar a bancada.
 
+Bancada da USP, alinhamento de 2026-10-01 (pasta Codigos):
+
+    .venv\\Scripts\\python.exe diversos\\ferramentas\\dmd_holograma.py --monitor 2 --centro 856 615 --raio 94 --periodo 7 --angulo 90
+
 O holograma e desenhado so dentro de uma ABERTURA circular, que voce centra no
 feixe do laser. Fora dela o DMD fica preto. Na tela principal aparecem duas
 previas: a FASE desenhada, e o CAMPO DISTANTE simulado, que e o que a lente (ou

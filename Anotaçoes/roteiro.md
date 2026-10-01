@@ -1616,5 +1616,11 @@ calculada da tela nesse $r_0$ é de 2,2 mrad, do tamanho do salto: a hipótese �
 a +1 desviada pela inclinação, com algo da montagem escondendo o caminho
 entre as duas. Ainda não conferido (teste no documento 07, seção 7).
 
-**A +1 turbulenta chegou ao espelho de 1" maior que ele**, e só parte foi ao
-telescópio.
+**A +1 turbulenta chega ao espelho de 1" praticamente do tamanho dele.**
+Primeiro pareceu maior, com só parte indo ao telescópio; estava deslocada, e
+com o espelho realinhado passou quase toda.
+
+**Sem o filtro ND 3,0 a mancha de cima não apareceu.** Com a exposição no
+mínimo e as mesmas configurações do holograma, só a +1. O filtro participa
+da mancha de cima (reflexo fantasma ou corte pela borda); a inclinação da
+tela não explica isso sozinha. Teste seguinte: o ND 0,6 sozinho.
