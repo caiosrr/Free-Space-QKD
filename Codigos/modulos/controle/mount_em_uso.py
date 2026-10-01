@@ -35,6 +35,11 @@ TRACKER_VIVO_S = 30.0
 CALIBRACAO_RUNS = saidas.CALIBRACAO_RUNS_DIR
 CALIBRACAO_VIVA_S = 180.0
 
+# A varredura de apontamento grava a posicao a cada 0,5 s; o maior movimento
+# entre gravacoes leva poucos segundos.
+VARREDURA_RUNS = saidas.VARREDURA_APONTAMENTO_DIR
+VARREDURA_VIVA_S = 30.0
+
 
 def _mais_recente(raiz: Path, padrao: str) -> float | None:
     """Instante da escrita mais nova sob ``raiz``, ou ``None``."""
@@ -59,6 +64,10 @@ def motivo_de_uso() -> str | None:
     marca = _mais_recente(CALIBRACAO_RUNS, "*/**/*")
     if marca is not None and agora - marca < CALIBRACAO_VIVA_S:
         return f"calibracao escreveu ha {agora - marca:.0f} s"
+
+    marca = _mais_recente(VARREDURA_RUNS, "*/varredura.csv")
+    if marca is not None and agora - marca < VARREDURA_VIVA_S:
+        return f"varredura de apontamento gravando ha {agora - marca:.0f} s"
 
     return None
 
