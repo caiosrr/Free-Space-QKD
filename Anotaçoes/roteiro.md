@@ -1514,3 +1514,13 @@ da lâmpada, com 64 e 71 correções nos blocos com correção do período). A m
 no CBPF acompanhou de novo: R² = 0,74 ajustando y pela trajetória da lâmpada (na
 noite anterior, 0,83). **A mancha desceu ~80 px e o PM não caiu**: a posição na
 DMK não é um indicador do acoplamento na fibra nesta montagem.
+
+**Ressalva, 2026-10-01 de manhã**: a luz seguida pelo tracker provavelmente não
+era a lâmpada do CBPF. De dia o laboratório do CBPF aparece no meio da imagem da
+IDS (x ≈ 1296), e a luz escolhida estava em x ≈ 1894, ~0,5° ao lado; ela apagou
+às 05:39, como lâmpada de rua com fotocélula. Continuam valendo a calibração (que
+não depende da luz), o tracker reduzindo o erro em relação à luz seguida, e o PM
+insensível a erros de até ~8″. Ficam mais fracas a relação com o CBPF (indireta,
+pela refração comum às duas direções) e a correlação de 0,47 entre o brilho da
+lâmpada e o PM. A luz da noite de 2026-09-30, do observador, também precisa ser
+conferida. Próximas noites: marcar de dia o pixel do CBPF na IDS.
