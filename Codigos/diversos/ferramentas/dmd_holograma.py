@@ -257,6 +257,9 @@ def main() -> int:
     parser.add_argument("--ignorar-resolucao", action="store_true")
     parser.add_argument("--centro", type=int, nargs=2, default=None, metavar=("X", "Y"),
                         help="centro inicial da abertura, em pixels do DMD")
+    parser.add_argument("--raio", type=int, default=None, help="raio inicial da abertura, px")
+    parser.add_argument("--periodo", type=int, default=None, help="periodo inicial da grade, px")
+    parser.add_argument("--angulo", type=float, default=None, help="angulo inicial da grade, graus")
     args = parser.parse_args()
 
     declarar_ciente_de_dpi()
@@ -274,6 +277,12 @@ def main() -> int:
     estado = Estado(cx=largura // 2, cy=altura // 2)
     if args.centro:
         estado.cx, estado.cy = args.centro
+    if args.raio:
+        estado.raio = args.raio
+    if args.periodo:
+        estado.periodo = args.periodo
+    if args.angulo is not None:
+        estado.angulo = args.angulo
     print("Gerando a tela de turbulencia (uns segundos)...")
     tela = TelaKolmogorov(TAMANHO_TELA, 1.0, semente=estado.semente)
     print("Pronto. Use a janela de previa.")
@@ -298,6 +307,11 @@ def main() -> int:
         # Sair deixa o DMD preto: nenhum espelho ligado mandando luz pela sala.
         cv2.imshow(JANELA_DMD, np.zeros((altura, largura), np.uint8))
         cv2.waitKey(1)
+        # O alinhamento custa caro: sai impresso o comando que volta a ele.
+        print("\nPara voltar a esta configuracao:")
+        print("  .venv\\Scripts\\python.exe diversos\\ferramentas\\dmd_holograma.py "
+              f"--monitor {args.monitor} --centro {estado.cx} {estado.cy} "
+              f"--raio {estado.raio} --periodo {estado.periodo} --angulo {estado.angulo:g}")
         cv2.destroyAllWindows()
     return 0
 

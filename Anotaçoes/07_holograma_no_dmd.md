@@ -343,6 +343,31 @@ da ordem +1 na prévia é o que deve aparecer na câmera. A escala: com a ASI585
 4. **Modo `t` ou `c`**: a turbulência entra. `z` e `x` mudam a força; `v` liga
    o vento; `n` sorteia outra tela.
 
+### Guardar o alinhamento
+
+Achar o centro, o raio, o período e o ângulo que funcionam leva tempo, e na
+primeira sessão (2026-10-01) eles se perderam ao fechar o programa. Agora, ao
+sair, o programa imprime o comando que volta a eles:
+
+`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 310 a 314
+
+```python
+        # O alinhamento custa caro: sai impresso o comando que volta a ele.
+        print("\nPara voltar a esta configuracao:")
+        print("  .venv\\Scripts\\python.exe diversos\\ferramentas\\dmd_holograma.py "
+              f"--monitor {args.monitor} --centro {estado.cx} {estado.cy} "
+              f"--raio {estado.raio} --periodo {estado.periodo} --angulo {estado.angulo:g}")
+```
+
+A configuração que mostrou a ordem +1 e o anel do OAM em 2026-10-01:
+
+```
+.venv\Scripts\python.exe diversos\ferramentas\dmd_holograma.py --monitor 2 --centro 856 615 --raio 94 --periodo 7 --angulo 90
+```
+
+As opções `--raio`, `--periodo` e `--angulo` **ainda não rodaram na bancada**;
+foram conferidas só pelo `--help` e pelos testes.
+
 > Revisado por Caio: ainda não
 
 **Para conferir**
