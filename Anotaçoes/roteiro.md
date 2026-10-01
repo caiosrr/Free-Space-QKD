@@ -1483,3 +1483,34 @@ Mudou em relação a 2026-09-29: escala 3,14″/px em az e 3,27″/px em alt (an
 de +y, quase sem inclinação); o mount foi reapontado (az −0,25°, alt −0,12°) e
 a lâmpada está em (1894, 710) no sensor. Coerente com o realinhamento do dia
 para acoplar no CBPF.
+
+## Noite de 2026-10-01: blocos de 20 min com e sem correção
+
+`tracker.py --blocos-minutos 20 --regime lento_janela_curta` (janela 45 s,
+limiar 1″, ganho 0,35), 22:34 a 05:19, com o registrador do CBPF e o power
+meter. Relógios a menos de 0,5 s um do outro no início e no fim. Alvo presente
+em 99,8 % do tempo, retorno à posição inicial confirmado. Figura:
+`Arquivos/analises/noite_2026-10-01_blocos.png`.
+
+**O tracker reduz o erro de apontamento.** Erro radial (média temporal de 2 s,
+em arcsec, sem os 2 primeiros minutos de cada bloco): nos blocos sem correção
+ele cresce de 0,9″ no início do bloco para ~1,5″ aos 20 min; nos blocos com
+correção fica em ~0,75″. Pares de blocos (cada SEM contra a média dos COM
+vizinhos, 10 pares): SEM − COM = +0,59″ (desvio 0,77″; t ≈ 2,4; positivo em 7
+de 10). Na excursão das 23:34, o bloco sem correção teve p90 de 7,1″, contra
+2,4″ e 3,5″ nos vizinhos com correção.
+
+**O power meter não percebeu.** PM SEM/COM − 1 = −0,4 % (desvio 4,9 %, 6 de 10
+positivos). Erros de até ~8″ (~27 cm no CBPF) não reduzem a potência acoplada:
+compatível com um feixe de ~1,5 m na chegada (estimativa de 2026-09-30).
+
+**O que move o PM é a transmissão da atmosfera.** Em medianas de 1 min (406 min):
+correlação do PM com a luz total na DMK 0,78 e com a intensidade da lâmpada vista
+na UFF 0,47 (caminho oposto, mesma atmosfera). O PM variou de 174 a 237 nW (p5 a
+p95) em ondas de uma hora, sem relação com os blocos.
+
+**A excursão de refração se repetiu** (23:20 a 00:50, ~15″ na elevação aparente
+da lâmpada, com 64 e 71 correções nos blocos com correção do período). A mancha
+no CBPF acompanhou de novo: R² = 0,74 ajustando y pela trajetória da lâmpada (na
+noite anterior, 0,83). **A mancha desceu ~80 px e o PM não caiu**: a posição na
+DMK não é um indicador do acoplamento na fibra nesta montagem.
