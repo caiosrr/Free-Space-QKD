@@ -41,6 +41,10 @@ Com a janela de PREVIA selecionada (a pequena, na tela principal):
             quanto tempo do quadro cada cor ocupa na sequencia do DMD
     4 5 6   AMARELO (R+G), CIANO (G+B) e MAGENTA (R+B): dois canais em 255,
             para ver se as cores se somam ou se o processamento as altera
+    c       campo cheio com um dos CANDIDATOS A BRANCO EM YCbCr; cada toque
+            passa ao proximo. Para usar com o DMD lendo a entrada como YCbCr
+            (lote 20): um canal em 255 ou 235 faz o papel de Y, os outros dois
+            em 128 fazem Cb e Cr neutros
     Esc     sai, deixando o DMD preto
 
 Por que inverter: os espelhos refletem igualmente bem nos dois estados, e
@@ -100,6 +104,25 @@ def cor_pura(largura: int, altura: int, canal_bgr: int | tuple[int, ...]) -> np.
     img = np.zeros((altura, largura, 3), dtype=np.uint8)
     for c in np.atleast_1d(canal_bgr):
         img[:, :, int(c)] = 255
+    return img
+
+
+# Candidatos a branco quando o DMD le os 24 bits como YCbCr (2026-10-01). Pelo
+# HDMI em RGB, o verde chega com ~0,67 e o azul com ~0,46 do tempo ligado do
+# gerador interno; lida como YCbCr, a entrada passa pela matriz BT.601 padrao em
+# vez da matriz RGB automatica. Nao se sabe em que canal do barramento entra o Y,
+# entao testam-se os tres, com Y cheio (255) e Y de video (235). Em RGB.
+CANDIDATOS_YCBCR = [
+    (128, 255, 128), (128, 235, 128),
+    (255, 128, 128), (235, 128, 128),
+    (128, 128, 255), (128, 128, 235),
+]
+
+
+def campo_rgb(largura: int, altura: int, rgb: tuple[int, int, int]) -> np.ndarray:
+    """Campo cheio com uma cor RGB qualquer (OpenCV guarda em BGR)."""
+    img = np.zeros((altura, largura, 3), dtype=np.uint8)
+    img[:, :] = (rgb[2], rgb[1], rgb[0])
     return img
 
 
@@ -173,6 +196,7 @@ def main() -> int:
     passo_rapido = 50
     modo = "p"
     invertido = False
+    candidato = -1
 
     abrir_janela_dmd(m["x0"], m["y0"])
     cv2.namedWindow(JANELA_PREVIA, cv2.WINDOW_AUTOSIZE)
@@ -187,6 +211,11 @@ def main() -> int:
                 legenda = f"retangulo lado={lado} px em ({cx}, {cy})"
             elif modo == "l":
                 img, legenda = listras(largura, altura, periodo), f"listras periodo={periodo} px"
+            elif modo == "c":
+                rgb = CANDIDATOS_YCBCR[candidato % len(CANDIDATOS_YCBCR)]
+                img = campo_rgb(largura, altura, rgb)
+                legenda = (f"candidato {candidato % len(CANDIDATOS_YCBCR) + 1}/"
+                           f"{len(CANDIDATOS_YCBCR)}: RGB {rgb}")
             elif modo in "123456":
                 # OpenCV guarda em BGR: vermelho e o canal 2, azul o canal 0.
                 canais = {"1": 2, "2": 1, "3": 0, "4": (2, 1), "5": (1, 0), "6": (2, 0)}[modo]
@@ -214,7 +243,10 @@ def main() -> int:
             if tecla == -1:
                 continue
             letra = chr(tecla & 0xFF).lower()
-            if letra in "bpmrl123456":
+            if letra == "c":
+                modo = "c"
+                candidato += 1
+            elif letra in "bpmrl123456":
                 modo = letra
             elif letra == "i":
                 invertido = not invertido
