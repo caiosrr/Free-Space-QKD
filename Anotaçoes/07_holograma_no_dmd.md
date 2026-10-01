@@ -260,7 +260,7 @@ A parte da FFT é **periódica**: a tela se repete a cada 2048 pixels. Então
 fazê-la andar, como a atmosfera levada pelo vento (a hipótese do "fluxo
 congelado" de Taylor), é só ler outra janela dela:
 
-`Codigos/modulos/dmd/holograma.py`, linhas 127 a 142
+`Codigos/modulos/dmd/holograma.py`, linhas 127 a 144
 
 ```python
     def janela(self, x0: int, y0: int, largura: int, altura: int) -> np.ndarray:
@@ -271,13 +271,15 @@ congelado" de Taylor), é só ler outra janela dela:
         if self._ondas:
             x = int(x0) + np.arange(largura, dtype=np.float64)
             y = int(y0) + np.arange(altura, dtype=np.float64)
-            baixa = np.zeros((altura, largura), dtype=np.complex128)
-            for fx, fy, c in self._ondas:
-                # exp(i(a+b)) = exp(ia) exp(ib): produto externo de duas linhas,
-                # em vez de uma exponencial por pixel. Uma ordem de grandeza
-                # mais rapido, e e o que deixa a animacao fluida.
-                baixa += c * np.outer(np.exp(2j * np.pi * fy * y), np.exp(2j * np.pi * fx * x))
-            fase += np.real(baixa)
+            fx, fy, c = (np.array(v) for v in zip(*self._ondas))
+            # exp(i(a+b)) = exp(ia) exp(ib): cada onda e o produto de uma coluna
+            # (so y) por uma linha (so x), e a soma das 24 ondas vira um produto
+            # de matrizes (altura x 24) por (24 x largura). Com a parte real
+            # separada, sao dois produtos reais, que a BLAS faz de uma vez. Com
+            # raio de 500 px, 300 ms caiam para ~20 ms (medido em 2026-10-01).
+            col = c[None, :] * np.exp(2j * np.pi * y[:, None] * fy[None, :])
+            lin = np.exp(2j * np.pi * fx[:, None] * x[None, :])
+            fase += col.real @ lin.real - col.imag @ lin.imag
         return fase - fase.mean()
 ```
 
@@ -286,7 +288,7 @@ congelado" de Taylor), é só ler outra janela dela:
 O espectro cresce como $r_0^{-5/3}$, então a fase cresce como $r_0^{-5/6}$. O
 programa gera a tela uma vez, com $r_0 = 1$ px, e só multiplica:
 
-`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 142 a 155
+`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 152 a 166
 
 ```python
     fase = np.zeros_like(x)
@@ -295,13 +297,14 @@ programa gera a tela uma vez, com $r_0 = 1$ px, e só multiplica:
     if estado.modo in ("t", "c"):
         h, w = x.shape
         turb = tela.janela(x0 + int(estado.deslocamento), y0, w, h) * estado.r0 ** (-5.0 / 6.0)
-        gx, gy = inclinacao(turb, x, y, np.hypot(x, y) <= estado.raio)
+        gx, gy = inclinacao(turb, x, y, x * x + y * y <= estado.raio ** 2)
         estado.inclinacao_tela_mrad = (gx * MRAD_POR_RAD_PX, gy * MRAD_POR_RAD_PX)
         if estado.sem_inclinacao:
             turb = turb - gx * x - gy * y
         fase = fase + turb
     # Mira: uma inclinacao conhecida, para levar a +1 a um angulo escolhido.
-    fase = fase + (estado.mira_x_mrad * x + estado.mira_y_mrad * y) / MRAD_POR_RAD_PX
+    if estado.mira_x_mrad or estado.mira_y_mrad:
+        fase = fase + (estado.mira_x_mrad * x + estado.mira_y_mrad * y) / MRAD_POR_RAD_PX
     return fase
 ```
 
@@ -354,10 +357,10 @@ inclinação a cada quadro.
 O holograma é desenhado só dentro de uma **abertura** circular, que você
 centra no feixe. Fora dela o DMD fica preto:
 
-`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 175 a 178
+`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 186 a 189
 
 ```python
-    mascara = np.hypot(x, y) <= r
+    mascara = x * x + y * y <= r * r
 
     fase = fase_do_modo(estado, x, y, x0, y0, tela)
     ligados = holograma_lee(fase, portadora(x, y, estado.periodo, estado.angulo)) & mascara
@@ -391,7 +394,7 @@ espera). Na câmera, o padrão levava mais de 1 s para se renovar (roteiro,
 "Primeira turbulência na bancada"). Agora a tela anda em px/s, medidos pelo
 relógio, e a espera caiu para 1 ms:
 
-`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 363 a 372
+`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 386 a 395
 
 ```python
             tecla = cv2.waitKeyEx(1 if estado.vento else 0)
@@ -412,6 +415,30 @@ teto é o laço: para o padrão mudar inteiro a cada quadro, o vento tem de anda
 cerca de $r_0$ por quadro, por exemplo 20 px × 16 quadros/s ≈ 320 px/s. Mais
 rápido que isso o HDMI não acompanha, e na atmosfera $\tau_0$ é de poucos ms.
 
+### Quanto custa cada quadro
+
+Em 2026-10-01 o programa ficou lento ao aumentar a abertura. Medido no
+notebook, em ms por quadro, para montar o holograma (tela, inclinação, Lee) e
+para a prévia:
+
+| raio (px) | montar, antes | montar, depois | prévia |
+|---|---|---|---|
+| 94 | 17 | 6 | 18 |
+| 200 | 72 | 19 | 22 |
+| 300 | 164 | 39 | 29 |
+| 500 | 426 | 141 | 47 |
+
+O peso estava na soma das 24 ondas de baixa frequência da tela, que virou um
+produto de matrizes (o bloco de `janela` na seção 4), e no ajuste da
+inclinação, que passou às equações normais. O resultado da tela é o mesmo do
+método antigo a menos de $10^{-12}$ rad. O campo distante custa ~16 ms
+qualquer que seja o raio; com vento, a prévia inteira é redesenhada só 5 vezes
+por segundo, e a tecla `f` desliga o campo distante.
+
+Abrir a abertura além do feixe não acrescenta nada: o HeNe tem ~1 mm, uns 185
+espelhos, e fora disso o holograma é desenhado onde não chega luz. Raio maior
+só faz sentido com o feixe expandido.
+
 ### Mira: levar a +1 a um ângulo escolhido
 
 As teclas `4 6 8 2` somam ao holograma uma inclinação conhecida, de 0,25 mrad
@@ -429,7 +456,7 @@ Achar o centro, o raio, o período e o ângulo que funcionam leva tempo, e na
 primeira sessão (2026-10-01) eles se perderam ao fechar o programa. Agora, ao
 sair, o programa imprime o comando que volta a eles:
 
-`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 383 a 387
+`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 406 a 410
 
 ```python
         # O alinhamento custa caro: sai impresso o comando que volta a ele.
@@ -497,6 +524,18 @@ papel da pupila do telescópio, e tudo depois dela deveria passar inteiro. Para
 o lado do CBPF (feixe de metros sobre uma abertura pequena), o corte deveria
 ser na entrada do telescópio, com uma íris, e não no espelho do meio do
 caminho, que corta em ângulo.
+
+**O teto de quadros é 60 por segundo, e os 180 Hz de Cox e Drozdov.** O HDMI
+entrega 60 imagens por segundo. Cada uma tem três canais (vermelho, verde e
+azul), e o DMD mostra os três **um depois do outro** dentro dos 16,7 ms, porque
+foi feito para projetor de LEDs piscando uma cor de cada vez. Com o laser no
+lugar dos LEDs, a cor não importa: se cada canal levar um holograma diferente,
+o DMD mostra três hologramas por quadro, 180 por segundo. É o truque de Cox e
+Drozdov (AO 60, 465, 2021). Neste kit, pelo HDMI, os três não valem o mesmo: no
+Look 2 as fatias são 38/45/17 % do quadro, e o verde e o azul ficam ligados só
+~0,68 e ~0,50 do tempo da fatia (roteiro, "DMD: por que os espelhos piscam no
+vídeo HDMI"). O peso de cada holograma na luz fica perto de 0,38, 0,31 e 0,09:
+o azul quase some. E custa três hologramas por quadro de cálculo.
 
 **A potência é pouca, mas basta.** No máximo ~10% da luz que chega à abertura
 vai para a +1: com o HeNe de 0,9 mW, uns 90 µW antes das perdas do DMD.
