@@ -1,6 +1,6 @@
 # 07. Holograma de fase no DMD
 
-Conferido contra o commit `f08c4f9`, em 2026-10-01.
+Conferido contra o commit `b736c26`, em 2026-10-01.
 
 Camada 2 da documentação. Cobre `modulos/dmd/holograma.py`, a física, e
 `diversos/ferramentas/dmd_holograma.py`, o programa de bancada. A base teórica
