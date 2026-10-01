@@ -1,6 +1,6 @@
 # 08. Medida conjunta UFF e CBPF
 
-Conferido contra o commit `e1eb152`, em 2026-09-30.
+Conferido contra o commit `58c4967`, em 2026-09-30.
 
 Camada 2 da documentação. Cobre as duas peças do experimento que mede, na
 outra ponta do enlace, o que o tracker faz: os **blocos com e sem correção** no
@@ -43,7 +43,7 @@ Comparar uma noite com tracker e outra sem não diz nada: a atmosfera muda de
 uma noite para outra. A saída é alternar **na mesma noite**, em blocos de
 15 minutos. Blocos vizinhos compartilham praticamente a mesma atmosfera.
 
-`Codigos/modulos/configuracoes/tracker.py`, linhas 84 a 90
+`Codigos/modulos/configuracoes/tracker.py`, linhas 85 a 91
 
 ```python
 # Blocos alternados COM e SEM correcao na mesma sessao, para medir o efeito do
@@ -308,16 +308,20 @@ laço lento do tracker"). Dois resultados mudam o controle:
 - **O limiar em pixels mudou de sentido com a óptica.** Os 0,6 px valiam
   0,23″ na escala antiga e valem 1,74″ na nova (2,89″/px).
 
-O braço novo, `lento_janela_curta`, fala em segundos de arco:
+O braço novo, `lento_janela_curta`, fala em segundos de arco. O ganho ficou em
+0,35, o que venceu o A/B de 2026-09-10 com o mount de verdade: assim o braço
+difere do regime em uso só na janela e no limiar, que são as duas mudanças que a
+noite de 2026-09-30 sustenta. O 0,9 que a simulação sugeria fica disponível por
+`--ganho-curta 0.9`.
 
-`Codigos/modulos/configuracoes/tracker.py`, linhas 129 a 144
+`Codigos/modulos/configuracoes/tracker.py`, linhas 132 a 147
 
 ```python
 CONTROL_CURTA_WINDOW_SECONDS = 45.0
 CONTROL_CURTA_WARMUP_SECONDS = 22.5
 CONTROL_CURTA_TRIGGER_ARCSEC = 1.0
 CONTROL_CURTA_RELEASE_ARCSEC = 0.42
-CONTROL_CURTA_FRACTION = 0.90
+CONTROL_CURTA_FRACTION = float(os.environ.get("QKD_CURTA_GANHO", "0.35"))
 
 REGIMES_DE_CONTROLE = ("atual", "lento_ganho_alto", "lento_ganho_baixo", "lento_janela_curta")
 # Ordem dos bracos no A/B de controle (QKD_AB_CONTROLE). O padrao repete o A/B
@@ -363,7 +367,7 @@ def regime_de_controle(nome, *, px_arcsec, atual, lento, curta) -> RegimeDeContr
 Os braços antigos seguem em pixels, como foram medidos. O A/B de hoje alterna
 o regime em uso (`lento_ganho_baixo`) e o novo, os dois corrigindo:
 
-`Codigos/programas_principais/tracker.py`, linhas 105 a 114
+`Codigos/programas_principais/tracker.py`, linhas 126 a 135
 
 ```python
     if args.ab_janela_curta:
@@ -378,10 +382,16 @@ o regime em uso (`lento_ganho_baixo`) e o novo, os dois corrigindo:
               "lento_janela_curta, ...")
 ```
 
-O bloco mínimo é 4 min porque a configuração recusa bloco menor que duas
+Para a comparação com e sem correção, o braço novo corrige nos blocos de
+`--blocos-minutos` escolhido por `--regime lento_janela_curta`. Os blocos sem
+correção partem sempre do alvo, porque o bloco anterior corrigiu, e medem a
+deriva a partir de um apontamento conhecido.
+
+O bloco mínimo do A/B entre braços é 4 min porque a configuração recusa bloco menor que duas
 janelas de 120 s do braço em uso. **Testado com o laço de controle real e o
-mount simulado**, com a escala nova e deriva constante de 1,5″/min: mediana de
-1,2″ no braço novo contra 2,9″ no em uso. **Nunca rodou com o mount.**
+mount simulado**, com a escala nova e deriva constante de 1,5″/min: com ganho
+0,9, mediana de 1,2″ no braço novo contra 2,9″ no em uso; com 0,35 o teste
+segue exigindo menos de 2″ e menos que o braço em uso. **Nunca rodou com o mount.**
 
 A telemetria já separa os braços pela coluna `regime_controle`, e o resumo da
 sessão guarda os parâmetros do A/B em `control_ab`.
@@ -404,11 +414,12 @@ sessão guarda os parâmetros do A/B em `control_ab`.
    `1..3 | % { $r = iwr https://www.google.com -Method Head -UseBasicParsing; ((Get-Date).ToUniversalTime() - [datetime]::Parse($r.Headers.Date).ToUniversalTime()).TotalSeconds }`.
 2. **CBPF**, fechados o IC Capture e o app da Thorlabs:
    `python programas_principais/registrar_cbpf.py --ajustes-camera --teste`,
-   confere, e então `--horas 10`.
-3. **UFF**, com o Coherent Connection fechado: `python
-   programas_principais/tracker.py --camera ids --horas 8 --blocos-minutos 15`
-   para comparar com e sem correção, ou `--ab-janela-curta 10` para comparar os
-   dois braços do controle. Um por noite.
+   com o pico abaixo de ~200 (a DMK satura em 239), e então `--horas` até
+   ~05:10, antes de o amanhecer subir o fundo.
+3. **UFF**, com o Coherent Connection fechado e o PM mostrando sinal: `python
+   programas_principais/tracker.py --camera ids --horas 7 --blocos-minutos 15
+   --regime lento_janela_curta` para comparar com e sem correção, ou
+   `--ab-janela-curta 10` para comparar os dois braços. Um por noite.
 4. De manhã: `registro.csv` no CBPF e `telemetria.csv` na UFF, cruzados pelo
    instante: `t_unix` no CBPF, e na UFF a coluna `data_hora`, que já vem com
    fuso horário e milissegundos. Os blocos se separam por `correcao_ativa`.
