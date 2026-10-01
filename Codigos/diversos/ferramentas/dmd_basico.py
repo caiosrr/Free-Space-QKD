@@ -39,6 +39,8 @@ Com a janela de PREVIA selecionada (a pequena, na tela principal):
     i       inverte a imagem: preto vira branco e vice-versa
     1 2 3   tudo VERMELHO, VERDE ou AZUL puro (255 num canal so), para ver
             quanto tempo do quadro cada cor ocupa na sequencia do DMD
+    4 5 6   AMARELO (R+G), CIANO (G+B) e MAGENTA (R+B): dois canais em 255,
+            para ver se as cores se somam ou se o processamento as altera
     Esc     sai, deixando o DMD preto
 
 Por que inverter: os espelhos refletem igualmente bem nos dois estados, e
@@ -87,7 +89,7 @@ def tudo(largura: int, altura: int, valor: int) -> np.ndarray:
     return np.full((altura, largura), valor, dtype=np.uint8)
 
 
-def cor_pura(largura: int, altura: int, canal_bgr: int) -> np.ndarray:
+def cor_pura(largura: int, altura: int, canal_bgr: int | tuple[int, ...]) -> np.ndarray:
     """255 num canal so. Os espelhos ligam apenas no segmento daquela cor.
 
     Existe para medir a sequencia do DMD pela camera (2026-09-30): pelo
@@ -96,7 +98,8 @@ def cor_pura(largura: int, altura: int, canal_bgr: int) -> np.ndarray:
     canal chega trocado ou abaixo de 255.
     """
     img = np.zeros((altura, largura, 3), dtype=np.uint8)
-    img[:, :, canal_bgr] = 255
+    for c in np.atleast_1d(canal_bgr):
+        img[:, :, int(c)] = 255
     return img
 
 
@@ -184,11 +187,12 @@ def main() -> int:
                 legenda = f"retangulo lado={lado} px em ({cx}, {cy})"
             elif modo == "l":
                 img, legenda = listras(largura, altura, periodo), f"listras periodo={periodo} px"
-            elif modo in "123":
-                # OpenCV guarda em BGR: 1 = vermelho (canal 2), 3 = azul (canal 0).
-                canal = {"1": 2, "2": 1, "3": 0}[modo]
-                img = cor_pura(largura, altura, canal)
-                legenda = {"1": "tudo VERMELHO", "2": "tudo VERDE", "3": "tudo AZUL"}[modo]
+            elif modo in "123456":
+                # OpenCV guarda em BGR: vermelho e o canal 2, azul o canal 0.
+                canais = {"1": 2, "2": 1, "3": 0, "4": (2, 1), "5": (1, 0), "6": (2, 0)}[modo]
+                img = cor_pura(largura, altura, canais)
+                legenda = {"1": "tudo VERMELHO", "2": "tudo VERDE", "3": "tudo AZUL",
+                           "4": "tudo AMARELO", "5": "tudo CIANO", "6": "tudo MAGENTA"}[modo]
             else:
                 img, legenda = tudo(largura, altura, 0), "tudo preto"
 
@@ -210,7 +214,7 @@ def main() -> int:
             if tecla == -1:
                 continue
             letra = chr(tecla & 0xFF).lower()
-            if letra in "bpmrl123":
+            if letra in "bpmrl123456":
                 modo = letra
             elif letra == "i":
                 invertido = not invertido
