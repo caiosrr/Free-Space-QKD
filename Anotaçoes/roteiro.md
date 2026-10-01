@@ -1470,3 +1470,16 @@ flash e sem comando para trocá-la. Não verificada.
 **Consequências**: com esse controlador, espelhos parados só pelo gerador
 interno (campo sólido, linhas, grade, xadrez). A câmera deve usar exposição em
 múltiplos de 16,667 ms. As mudanças por comando valem até desligar o DMD.
+
+### Calibração de 2026-09-30, 22:13, depois do realinhamento
+
+Validada, resíduo rms 0,50 px, validação independente 0,52 px (5,7 %), número
+de condição 1,04. Todas as 16 referências paradas com 100 % de quadros válidos
+(27 a 28 descartados na espera, nenhum rejeitado): primeira calibração com a
+correção dos quadros velhos funcionando no mount. Exposição 13,9 ms.
+
+Mudou em relação a 2026-09-29: escala 3,14″/px em az e 3,27″/px em alt (antes
+2,98 e 2,80); os eixos da câmera giraram ~170° (az agora ao longo de +x e alt
+de +y, quase sem inclinação); o mount foi reapontado (az −0,25°, alt −0,12°) e
+a lâmpada está em (1894, 710) no sensor. Coerente com o realinhamento do dia
+para acoplar no CBPF.
