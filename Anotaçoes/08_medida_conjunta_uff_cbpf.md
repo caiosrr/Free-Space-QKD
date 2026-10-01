@@ -1,6 +1,6 @@
 # 08. Medida conjunta UFF e CBPF
 
-Conferido contra o commit `3599c1a`, em 2026-10-01.
+Conferido contra o commit `1bc2d04`, em 2026-10-01.
 
 Camada 2 da documentação. Cobre as duas peças do experimento que mede, na
 outra ponta do enlace, o que o tracker faz: os **blocos com e sem correção** no
@@ -415,7 +415,7 @@ deriva, `programas_principais/varrer_apontamento.py` desloca o mount de
 propósito enquanto o registrador do CBPF grava, e os dois se cruzam pelo
 `t_unix`.
 
-`Codigos/programas_principais/varrer_apontamento.py`, linhas 60 a 69
+`Codigos/programas_principais/varrer_apontamento.py`, linhas 62 a 71
 
 ```python
 def plano(pontos, eixos) -> list[tuple[str, float]]:
@@ -434,7 +434,7 @@ Cada ponto fora do centro fica entre duas medidas no centro. A transmissão da
 atmosfera, que varia ±15 % em ondas de uma hora, sai dividindo cada ponto pela
 média dos dois centros vizinhos.
 
-`Codigos/programas_principais/varrer_apontamento.py`, linhas 127 a 135
+`Codigos/programas_principais/varrer_apontamento.py`, linhas 129 a 137
 
 ```python
     finally:
@@ -452,7 +452,12 @@ Aconteça o que acontecer (fim do plano, Ctrl+C ou erro), o mount para e volta �
 posição inicial. Os deslocamentos são limitados a 300″, dez vezes a maior
 excursão de refração medida, e o programa recusa rodar se outro estiver
 comandando o mount: ele grava a posição a cada 0,5 s numa pasta que a trava
-`mount_em_uso` vigia. **Testado com o mount simulado; nunca rodou com o mount.**
+`mount_em_uso` vigia. **Primeira execução no mount em 2026-10-01, de dia, versão
+curta** (±10 e 20″ em azimute, paradas de 10 s): cada passo levou 1 a 3 s,
+chegou a ±1″ do alvo (o passo da leitura de posição do AM5) e o retorno terminou
+com erro de 0″. A curva de potência ainda não foi medida: de dia o fundo de céu na
+fibra (~23 µW, variando ~0,1 µW em 2 min) é maior que o sinal do laser
+(~0,2 µW).
 
 A varredura responde também o que a câmera do CBPF mede. Mover o mount da UFF
 desloca o feixe no CBPF sem mudar o ângulo de chegada lá. Se a mancha da DMK
