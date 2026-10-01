@@ -1584,3 +1584,10 @@ Resumo do que o HDMI faz, medido: ganho fixo por canal (vermelho 1,0, verde
 CCA, CMT, CAIC e formato da entrada. O gerador interno não passa por ele. Uso
 possível hoje: holograma só no vermelho (espelhos parados como no gerador, 33 %
 do quadro no Look 1) ou branco (~72 % da luz, com verde e azul pulsando).
+
+**Divisão do quadro por Look** (cabeçalho 26h, vermelho/verde/azul): Look 0 =
+20/50/30 %, Look 1 (padrão) = 33/47/20 %, Look 2 = 38/45/17 %, Look 3 =
+15/58/27 %. Vermelho puro pelo HDMI, fração ligada: Look 0 0,21, Look 1 0,30,
+Look 2 0,32, acompanhando a fatia do vermelho. Para holograma só no vermelho, o
+Look 2 é o melhor (+15 % de tempo sobre o padrão); a escolha é volátil, então
+o `12_look2.bf` precisa rodar a cada vez que o DMD é ligado.
