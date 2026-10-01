@@ -192,8 +192,9 @@ Para a turbulência, não importa se o espelho pegou a +1 ou a −1: a tela da
 
 ### O parâmetro: $r_0$
 
-A força da turbulência é dada pelo **raio de Fried** $r_0$: o tamanho típico
-de uma "célula" da atmosfera. A teoria de Kolmogorov diz que dois pontos a uma
+A força da turbulência é dada pelo **parâmetro de Fried** $r_0$: o tamanho
+típico de uma "célula" da atmosfera. Ele é um **diâmetro**, não um raio: a
+maior abertura sobre a qual a fase ainda varia cerca de 1 rad rms. A teoria de Kolmogorov diz que dois pontos a uma
 distância $r$ têm fases que diferem, em média quadrática, por
 
 $$D(r) = \langle [\psi(\mathbf{x} + \mathbf{r}) - \psi(\mathbf{x})]^2 \rangle = 6{,}88 \left(\frac{r}{r_0}\right)^{5/3}$$
@@ -285,7 +286,7 @@ congelado" de Taylor), é só ler outra janela dela:
 O espectro cresce como $r_0^{-5/3}$, então a fase cresce como $r_0^{-5/6}$. O
 programa gera a tela uma vez, com $r_0 = 1$ px, e só multiplica:
 
-`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 105 a 112
+`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 138 a 151
 
 ```python
     fase = np.zeros_like(x)
@@ -293,10 +294,47 @@ programa gera a tela uma vez, com $r_0 = 1$ px, e só multiplica:
         fase = fase + fase_oam(x, y, estado.ell)
     if estado.modo in ("t", "c"):
         h, w = x.shape
-        base = tela.janela(x0 + estado.deslocamento, y0, w, h)
-        fase = fase + base * estado.r0 ** (-5.0 / 6.0)
+        turb = tela.janela(x0 + int(estado.deslocamento), y0, w, h) * estado.r0 ** (-5.0 / 6.0)
+        gx, gy = inclinacao(turb, x, y, np.hypot(x, y) <= estado.raio)
+        estado.inclinacao_tela_mrad = (gx * MRAD_POR_RAD_PX, gy * MRAD_POR_RAD_PX)
+        if estado.sem_inclinacao:
+            turb = turb - gx * x - gy * y
+        fase = fase + turb
+    # Mira: uma inclinacao conhecida, para levar a +1 a um angulo escolhido.
+    fase = fase + (estado.mira_x_mrad * x + estado.mira_y_mrad * y) / MRAD_POR_RAD_PX
     return fase
 ```
+
+### A inclinação anda junto com a força
+
+Multiplicar a tela inteira tem uma consequência que se vê na bancada. A maior
+parte da fase de Kolmogorov numa abertura circular é **inclinação** (um plano):
+pela decomposição de Noll (J. Opt. Soc. Am. 66, 207, 1976), da variância total
+$1{,}03\,(D/r_0)^{5/3}$ sobram $0{,}134\,(D/r_0)^{5/3}$ quando a inclinação
+sai, ou seja, ela é 87 % do total. Na tela da semente 0, na abertura de 94 px
+em (856, 615), são 77 %.
+
+Uma inclinação de fase desvia a ordem +1 inteira. Um gradiente $g$ (rad/px)
+vira o ângulo
+
+$$\theta = \frac{g\,\lambda}{2\pi p}$$
+
+com $p = 5{,}4$ µm o passo dos espelhos. Confere com a portadora: $g = 2\pi/7$
+dá $\lambda/(7p) = 16{,}7$ mrad, a separação entre ordens. Como a tela é
+uma só, multiplicada por $r_0^{-5/6}$, a inclinação tem **direção fixa** e cresce
+com a força: apertar `z` empurra a +1 sempre para o mesmo lado. Na tela da
+semente 0, calculado:
+
+| $r_0$ (px) | inclinação da tela (mrad, x e y do DMD) |
+|---|---|
+| 2000 | (−0,04; −0,01) |
+| 23 | (−1,49; −0,53) |
+| 15 | (−2,08; −0,74) |
+
+Com o vento, a janela desliza e a inclinação muda: é a dança do ângulo de
+chegada, justamente o que o tracker corrige. A tecla `i` tira a inclinação
+média, e o que sobra é o que um tracker perfeito deixaria. A legenda mostra a
+inclinação a cada quadro.
 
 > Revisado por Caio: ainda não
 
@@ -305,8 +343,9 @@ programa gera a tela uma vez, com $r_0 = 1$ px, e só multiplica:
 1. Dobrar $r_0$ multiplica a fase por quanto?
 2. Por que as frequências baixas da tela importam mais para o tracker que as
    altas?
-3. Com vento de 2 px por quadro e a tela de 2048 px, depois de quanto tempo a
+3. Com vento de 30 px/s e a tela de 2048 px, depois de quanto tempo a
    turbulência se repete?
+4. Por que tirar só a inclinação média não tira a turbulência toda?
 
 ---
 
@@ -315,7 +354,7 @@ programa gera a tela uma vez, com $r_0 = 1$ px, e só multiplica:
 O holograma é desenhado só dentro de uma **abertura** circular, que você
 centra no feixe. Fora dela o DMD fica preto:
 
-`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 132 a 135
+`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 171 a 174
 
 ```python
     mascara = np.hypot(x, y) <= r
@@ -341,7 +380,48 @@ da ordem +1 na prévia é o que deve aparecer na câmera. A escala: com a ASI585
 2. O espelho da segunda mesa pega **só a +1** e a devolve ao telescópio.
 3. **Modo `o`**: se o ponto na câmera vira anel, você está na ordem certa.
 4. **Modo `t` ou `c`**: a turbulência entra. `z` e `x` mudam a força; `v` liga
-   o vento; `n` sorteia outra tela.
+   o vento, `h` e `j` mudam a velocidade; `i` tira a inclinação; `n` sorteia
+   outra tela.
+
+### Vento pelo relógio
+
+Até 2026-10-01 o vento andava 2 px por volta do laço, e o laço dava umas 16
+voltas por segundo (33 ms para montar o holograma e a prévia, mais 30 ms de
+espera). Na câmera, o padrão levava mais de 1 s para se renovar (roteiro,
+"Primeira turbulência na bancada"). Agora a tela anda em px/s, medidos pelo
+relógio, e a espera caiu para 1 ms:
+
+`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 359 a 368
+
+```python
+            tecla = cv2.waitKeyEx(1 if estado.vento else 0)
+            agora = time.monotonic()
+            dt, anterior = agora - anterior, agora
+            if estado.vento and estado.modo in ("t", "c"):
+                # A tela anda pelo relogio, nao por volta do laco: a velocidade
+                # em px/s vale igual num PC lento e num rapido. O teto de 0,5 s
+                # evita um salto depois de uma espera longa por tecla.
+                estado.deslocamento += estado.vento_px_s * min(dt, 0.5)
+                if dt > 0:
+                    estado.quadros_por_s = 0.9 * estado.quadros_por_s + 0.1 / dt
+```
+
+A legenda mostra o tempo de coerência equivalente, $\tau_0 = 0{,}314\, r_0/v$:
+o tempo que o vento leva para renovar a fase num pedaço do tamanho de $r_0$. O
+teto é o laço: para o padrão mudar inteiro a cada quadro, o vento tem de andar
+cerca de $r_0$ por quadro, por exemplo 20 px × 16 quadros/s ≈ 320 px/s. Mais
+rápido que isso o HDMI não acompanha, e na atmosfera $\tau_0$ é de poucos ms.
+
+### Mira: levar a +1 a um ângulo escolhido
+
+As teclas `4 6 8 2` somam ao holograma uma inclinação conhecida, de 0,25 mrad
+por toque em x ou y do DMD (`5` zera), em qualquer modo. Servem para duas
+coisas: mapear até que ângulo a câmera ainda vê a +1 (o campo útil da
+montagem), e reproduzir sem turbulência a inclinação que a legenda mostra, para
+saber se uma mancha na câmera é a +1 desviada ou outra coisa.
+
+As teclas `h j i 4 6 8 2 5` e o vento pelo relógio **ainda não rodaram na
+bancada**; foram conferidos pelos testes.
 
 ### Guardar o alinhamento
 
@@ -349,7 +429,7 @@ Achar o centro, o raio, o período e o ângulo que funcionam leva tempo, e na
 primeira sessão (2026-10-01) eles se perderam ao fechar o programa. Agora, ao
 sair, o programa imprime o comando que volta a eles:
 
-`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 310 a 314
+`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 379 a 383
 
 ```python
         # O alinhamento custa caro: sai impresso o comando que volta a ele.
@@ -390,13 +470,31 @@ programa avisa quando o período passa de $r_0/3$. Com $r_0 = 18$ px, período
 de 6 px ou menos.
 
 **O espalhamento tem de caber no telescópio.** A turbulência abre o feixe num
-ângulo da ordem de $\lambda/(r_0 p)$: com $r_0 = 18$ px, 6,5 mrad, ou 4 cm a
-6 m. Cabe nos 10 cm do telescópio. Com $r_0$ bem menor, deixa de caber, e a
-câmera veria só parte da turbulência.
+ângulo da ordem de $\lambda/(r_0 p)$: com $r_0 = 18$ px, 6,5 mrad, ou 2 cm nos
+~3 m do DMD ao telescópio (medidos com trena em 2026-10-01). Cabe nos 10 cm do
+telescópio. Com $r_0$ bem menor, deixa de caber, e a câmera veria só parte da
+turbulência.
 
-**O espelho de 1" também tem de caber.** Com turbulência forte a própria ordem
-+1 se abre: com $r_0 = 18$ px, uns 2 cm a 3 m, quase o espelho inteiro. Aí o
-período de 6 px, que afasta as ordens vizinhas 5,9 cm, deixa folga.
+**O espelho de 1" também tem de caber.** Ele fica perto do meio do caminho,
+~1,5 m do DMD. Com $r_0 = 18$ px a +1 chega a ele com ~1 cm, mais o desvio da
+inclinação (seção 4). Com $r_0$ de poucos px, passa de 2,5 cm, e o espelho
+corta: em 2026-10-01 a +1 turbulenta chegou maior que ele.
+
+**O halo tem de ser menor que a separação entre ordens.** Na razão das duas,
+$\lambda/(r_0 p)$ dividido por $\lambda/(\Lambda p)$, sobra $\Lambda/r_0$, com
+$\Lambda$ o período da grade. Com $\Lambda = 7$ px e $r_0 = 8$ px, o halo da +1
+já tem a largura da distância até a ordem 0, e nenhum espelho separa as duas.
+
+**O campo da câmera é estreito.** O sensor da ASI585 tem 3840 × 2160 pixels de
+4,1 µrad: 15,9 × 8,9 mrad. No lado curto, ±4,5 mrad em torno do centro, menos
+que a separação entre ordens.
+
+**Qual elemento deve cortar depende do que se simula.** Para o lado do tracker
+(a câmera vendo uma fonte através da turbulência), a abertura no DMD já faz o
+papel da pupila do telescópio, e tudo depois dela deveria passar inteiro. Para
+o lado do CBPF (feixe de metros sobre uma abertura pequena), o corte deveria
+ser na entrada do telescópio, com uma íris, e não no espelho do meio do
+caminho, que corta em ângulo.
 
 **A potência é pouca, mas basta.** No máximo ~10% da luz que chega à abertura
 vai para a +1: com o HeNe de 0,9 mW, uns 90 µW antes das perdas do DMD.
@@ -419,7 +517,23 @@ em que vale conferir:
 3. A ordem 0 não chega à câmera depois do espelho da segunda mesa. **Conferido
    em 2026-10-01**: ela passa ao lado do espelho de 1".
 4. A prévia do campo distante bate com o que a câmera mostra.
-5. A animação com vento roda fluida na tela do DMD.
+5. A animação com vento roda fluida na tela do DMD. **Visto em 2026-10-01**:
+   roda, mas lenta demais comparada ao enlace (o padrão leva mais de 1 s para
+   se renovar); daí o vento pelo relógio da seção 5.
+6. A turbulência aparece na câmera e na parede. **Visto em 2026-10-01**, com
+   duas coisas ainda sem explicação conferida:
+   - ao apertar `z`, uma segunda mancha, ~1,9 mrad acima da +1 na câmera,
+     cresce aos poucos; as duas convivem, e no $r_0$ em que surge o aviso de
+     período grosso ($r_0 \approx 15$ px) a de baixo some e a de cima fica
+     forte. Ela não desliza, troca. A inclinação calculada da tela nesse $r_0$
+     é de 2,2 mrad, do tamanho do salto. Teste: em modo `g`, levar a +1 com a
+     mira até onde a legenda mostra a inclinação da tela, e ver se ela vai
+     para a mancha de cima; e, em modo `t` com $r_0 \approx 15$ px, tirar a
+     inclinação com `i` e ver se a mancha de baixo volta;
+   - o centro da turbulência sobe na parede quando ela fica mais forte, o que
+     a inclinação da tela explica (seção 4).
+7. Com a mira, até que ângulo a +1 ainda aparece na câmera em cada direção
+   (o campo útil da montagem).
 
 ---
 

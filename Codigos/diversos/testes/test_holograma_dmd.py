@@ -114,6 +114,33 @@ class ProgramaTests(unittest.TestCase):
         quadro, *_ = h.montar_holograma(e, 640, 400, tela)
         self.assertEqual(int(quadro.max()), 0)
 
+    def test_mira_e_inclinacao_da_tela(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ferramentas"))
+        import dmd_holograma as h
+
+        # A escala bate com a portadora: periodo de 7 px da 16,7 mrad entre ordens.
+        self.assertAlmostEqual(2 * np.pi / 7 * h.MRAD_POR_RAD_PX, 633e-9 / (7 * 5.4e-6) * 1e3, places=9)
+        tela = TelaKolmogorov(512, 1.0, semente=0)
+        x, y = coordenadas(161, 161, 80, 80)
+        mascara = np.hypot(x, y) <= 80
+
+        e = h.Estado(modo="g", raio=80, mira_x_mrad=0.5, mira_y_mrad=-0.25)
+        gx, gy = h.inclinacao(h.fase_do_modo(e, x, y, 0, 0, tela), x, y, mascara)
+        self.assertAlmostEqual(gx * h.MRAD_POR_RAD_PX, 0.5, places=9)
+        self.assertAlmostEqual(gy * h.MRAD_POR_RAD_PX, -0.25, places=9)
+
+        e = h.Estado(modo="t", raio=80, r0=10.0, deslocamento=17.6)
+        com = h.fase_do_modo(e, x, y, 0, 0, tela)
+        ix, iy = e.inclinacao_tela_mrad
+        self.assertGreater(np.hypot(ix, iy), 0.01)
+        e.sem_inclinacao = True
+        sem = h.fase_do_modo(e, x, y, 0, 0, tela)
+        gx, gy = h.inclinacao(sem, x, y, mascara)
+        self.assertLess(np.hypot(gx, gy) * h.MRAD_POR_RAD_PX, 1e-9)
+        # Tirar a inclinacao nao mexe no resto: a diferenca e um plano exato.
+        resto = (com - sem)[mascara] - (ix * x + iy * y)[mascara] / h.MRAD_POR_RAD_PX
+        self.assertLess(np.abs(resto - resto.mean()).max(), 1e-9)
+
 
 if __name__ == "__main__":
     unittest.main()

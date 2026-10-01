@@ -27,6 +27,9 @@ Teclas, com a janela de PREVIA selecionada:
     z / x     turbulencia mais FORTE / mais fraca (r0 dividido / multiplicado por 1,5)
     n         nova tela de turbulencia (outra realizacao aleatoria)
     v         vento liga / desliga: a tela anda, como a atmosfera
+    h / j     vento mais lento / mais rapido (velocidade dividida / multiplicada por 1,5)
+    i         tira / devolve a inclinacao media da tela (o que o tracker corrige)
+    4 6 8 2   mira: desvia a ordem +1 de 0,25 mrad em x / y do DMD;  5 zera
     Esc       sai, deixando o DMD preto
 
 ALINHAMENTO, em resumo:
@@ -42,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -88,10 +92,33 @@ class Estado:
     periodo: int = 8
     angulo: float = 0.0
     ell: int = 1
-    r0: float = 40.0         # raio de Fried NO DMD, em pixels
+    # Parametro de Fried NO DMD, em pixels. E um diametro: a abertura de
+    # diametro r0 e a maior com fase ainda coerente (1 rad rms).
+    r0: float = 40.0
     vento: bool = False
-    deslocamento: int = 0
+    vento_px_s: float = 30.0
+    deslocamento: float = 0.0
     semente: int = 0
+    sem_inclinacao: bool = False
+    mira_x_mrad: float = 0.0
+    mira_y_mrad: float = 0.0
+    # Informativos, recalculados a cada quadro para a legenda.
+    inclinacao_tela_mrad: tuple[float, float] = (0.0, 0.0)
+    quadros_por_s: float = 0.0
+
+
+# Gradiente de fase (rad/px) para angulo (mrad): theta = gradiente * lambda / (2 pi pitch).
+# Confere com a portadora: 2 pi / 7 rad/px da 16,7 mrad, a separacao entre ordens.
+MRAD_POR_RAD_PX = LAMBDA_M / (2.0 * np.pi * PITCH_M) * 1e3
+PASSO_MIRA_MRAD = 0.25
+
+
+def inclinacao(fase: np.ndarray, x: np.ndarray, y: np.ndarray,
+               mascara: np.ndarray) -> tuple[float, float]:
+    """Gradiente medio da fase na abertura (rad/px), por minimos quadrados."""
+    a = np.column_stack([x[mascara], y[mascara], np.ones(int(mascara.sum()))])
+    c, *_ = np.linalg.lstsq(a, fase[mascara], rcond=None)
+    return float(c[0]), float(c[1])
 
 
 def fase_do_modo(estado: Estado, x: np.ndarray, y: np.ndarray,
@@ -101,14 +128,26 @@ def fase_do_modo(estado: Estado, x: np.ndarray, y: np.ndarray,
     A tela de turbulencia foi gerada com r0 = 1 px, e aqui e reescalada: a
     fase de Kolmogorov cresce como r0^(-5/6), porque o espectro de potencia
     cresce como r0^(-5/3). Mudar a forca e so multiplicar, sem gerar outra.
+
+    Por isso a inclinacao da tela tem direcao fixa e cresce junto: apertar z
+    empurra a ordem +1 sempre para o mesmo lado. A inclinacao e a maior parte
+    da fase de Kolmogorov numa abertura (87 %, Noll 1976), e e o que o tracker
+    corrige; com sem_inclinacao ela sai, e sobra o que um tracker perfeito
+    deixaria.
     """
     fase = np.zeros_like(x)
     if estado.modo in ("o", "c"):
         fase = fase + fase_oam(x, y, estado.ell)
     if estado.modo in ("t", "c"):
         h, w = x.shape
-        base = tela.janela(x0 + estado.deslocamento, y0, w, h)
-        fase = fase + base * estado.r0 ** (-5.0 / 6.0)
+        turb = tela.janela(x0 + int(estado.deslocamento), y0, w, h) * estado.r0 ** (-5.0 / 6.0)
+        gx, gy = inclinacao(turb, x, y, np.hypot(x, y) <= estado.raio)
+        estado.inclinacao_tela_mrad = (gx * MRAD_POR_RAD_PX, gy * MRAD_POR_RAD_PX)
+        if estado.sem_inclinacao:
+            turb = turb - gx * x - gy * y
+        fase = fase + turb
+    # Mira: uma inclinacao conhecida, para levar a +1 a um angulo escolhido.
+    fase = fase + (estado.mira_x_mrad * x + estado.mira_y_mrad * y) / MRAD_POR_RAD_PX
     return fase
 
 
@@ -184,12 +223,22 @@ def legenda(estado: Estado) -> list[str]:
         f"grade: periodo {estado.periodo} px, angulo {estado.angulo:.0f} graus",
         f"ordens separadas por {ang_ordens * 1e3:.1f} mrad = {ang_ordens * 300:.1f} cm a 3 m",
     ]
+    if estado.mira_x_mrad or estado.mira_y_mrad:
+        linhas.append(f"mira: ({estado.mira_x_mrad:+.2f}, {estado.mira_y_mrad:+.2f}) mrad em x, y do DMD")
     if estado.modo in ("o", "c"):
         linhas.append(f"OAM: ell = {estado.ell}")
     if estado.modo in ("t", "c"):
-        linhas.append(f"turbulencia: r0 = {estado.r0:.1f} px, "
-                      f"feixe/r0 ~ {185 / estado.r0:.1f}"
-                      + ("  (vento)" if estado.vento else ""))
+        ix, iy = estado.inclinacao_tela_mrad
+        # tau0 = 0,314 r0 / v: o tempo que o vento leva para renovar a fase
+        # num pedaco do tamanho de r0. Na atmosfera do enlace, poucos ms.
+        tau0_ms = 0.314 * estado.r0 / estado.vento_px_s * 1e3
+        linhas += [
+            f"turbulencia: r0 = {estado.r0:.1f} px, D/r0 = {2 * estado.raio / estado.r0:.1f}",
+            f"inclinacao da tela: ({ix:+.2f}, {iy:+.2f}) mrad"
+            + ("  REMOVIDA" if estado.sem_inclinacao else ""),
+            f"vento {estado.vento_px_s:.0f} px/s ({'ligado' if estado.vento else 'parado'}), "
+            f"tau0 ~ {tau0_ms:.0f} ms; laco a {estado.quadros_por_s:.0f} quadros/s",
+        ]
         if estado.periodo > estado.r0 / 3:
             linhas.append("ATENCAO: periodo grosso para esse r0; diminua com [")
     return linhas
@@ -198,7 +247,7 @@ def legenda(estado: Estado) -> list[str]:
 def previa(estado: Estado, ligados: np.ndarray, fase: np.ndarray,
            mascara: np.ndarray) -> np.ndarray:
     topo = np.hstack([painel_fase(fase, mascara), painel_campo_distante(ligados, estado)])
-    texto = np.full((24 * 7, topo.shape[1], 3), 20, np.uint8)
+    texto = np.full((24 * 10, topo.shape[1], 3), 20, np.uint8)
     for i, linha in enumerate(legenda(estado)):
         cor = (0, 120, 255) if linha.startswith("ATENCAO") else (230, 230, 230)
         cv2.putText(texto, linha, (8, 20 + 24 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
@@ -245,6 +294,17 @@ def aplicar_tecla(estado: Estado, tecla: int, largura: int, altura: int) -> bool
             estado.r0 = min(2000.0, estado.r0 * 1.5)
         elif letra == "v":
             estado.vento = not estado.vento
+        elif letra == "h":
+            estado.vento_px_s = max(1.0, estado.vento_px_s / 1.5)
+        elif letra == "j":
+            estado.vento_px_s = min(5000.0, estado.vento_px_s * 1.5)
+        elif letra == "i":
+            estado.sem_inclinacao = not estado.sem_inclinacao
+        elif letra in "4682":
+            estado.mira_x_mrad += {"4": -PASSO_MIRA_MRAD, "6": PASSO_MIRA_MRAD}.get(letra, 0.0)
+            estado.mira_y_mrad += {"8": -PASSO_MIRA_MRAD, "2": PASSO_MIRA_MRAD}.get(letra, 0.0)
+        elif letra == "5":
+            estado.mira_x_mrad = estado.mira_y_mrad = 0.0
     estado.cx = int(np.clip(estado.cx, 0, largura - 1))
     estado.cy = int(np.clip(estado.cy, 0, altura - 1))
     return True
@@ -289,20 +349,29 @@ def main() -> int:
 
     abrir_janela_dmd(m["x0"], m["y0"])
     cv2.namedWindow(JANELA_PREVIA, cv2.WINDOW_AUTOSIZE)
+    anterior = time.monotonic()
     try:
         while True:
             quadro, ligados, fase, mascara = montar_holograma(estado, largura, altura, tela)
             cv2.imshow(JANELA_DMD, quadro)
             cv2.imshow(JANELA_PREVIA, previa(estado, ligados, fase, mascara))
-            tecla = cv2.waitKeyEx(30 if estado.vento else 0)
+            # Com vento, o laco roda o mais rapido que der; parado, espera tecla.
+            tecla = cv2.waitKeyEx(1 if estado.vento else 0)
+            agora = time.monotonic()
+            dt, anterior = agora - anterior, agora
+            if estado.vento and estado.modo in ("t", "c"):
+                # A tela anda pelo relogio, nao por volta do laco: a velocidade
+                # em px/s vale igual num PC lento e num rapido. O teto de 0,5 s
+                # evita um salto depois de uma espera longa por tecla.
+                estado.deslocamento += estado.vento_px_s * min(dt, 0.5)
+                if dt > 0:
+                    estado.quadros_por_s = 0.9 * estado.quadros_por_s + 0.1 / dt
             if tecla != -1 and chr(tecla & 0xFF).lower() == "n":
                 estado.semente += 1
                 tela = TelaKolmogorov(TAMANHO_TELA, 1.0, semente=estado.semente)
                 continue
             if not aplicar_tecla(estado, tecla, largura, altura):
                 break
-            if estado.vento and estado.modo in ("t", "c"):
-                estado.deslocamento += 2
     finally:
         # Sair deixa o DMD preto: nenhum espelho ligado mandando luz pela sala.
         cv2.imshow(JANELA_DMD, np.zeros((altura, largura), np.uint8))

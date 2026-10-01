@@ -1591,3 +1591,30 @@ do quadro no Look 1) ou branco (~72 % da luz, com verde e azul pulsando).
 Look 2 0,32, acompanhando a fatia do vermelho. Para holograma só no vermelho, o
 Look 2 é o melhor (+15 % de tempo sobre o padrão); a escolha é volátil, então
 o `12_look2.bf` precisa rodar a cada vez que o DMD é ligado.
+
+## Primeira turbulência na bancada, 2026-10-01
+
+`dmd_holograma.py` em modo `t`, abertura de 94 px em (856, 615), período de
+7 px, ângulo 90°, semente 0; ASI585MC a 50,96 ms e ganho 6. Distância do DMD
+à câmera ~3 m (trena e estimativa), com o espelho de 1" perto do meio.
+Capturas: PNG das 17:38:26 UTC ($r_0$ = 2000 px, com vento) e AVI de 50
+quadros das 17:39 UTC.
+
+**O vento estava lento demais.** O laço dava ~16 voltas/s (33 ms de holograma
+e prévia, medidos no notebook, mais 30 ms de espera) e o vento andava 2 px por
+volta, ~30 px/s. No AVI (quadros a cada 53 ms), a correlação do padrão consigo
+mesmo foi 0,99 depois de 1 quadro, 0,85 depois de 0,5 s e 0,68 depois de 1 s.
+No enlace, a olho, a intensidade alterna entre pontos muito mais rápido. Daí o
+vento em px/s pelo relógio, com a espera de 1 ms.
+
+**Uma segunda mancha toma o lugar da +1.** No PNG ($r_0$ = 2000 px, sem
+turbulência na prática) a +1 é a mancha forte em y ≈ 570 px do canal vermelho,
+com manchas fracas ~235 px acima (~1,9 mrad). Ao apertar `z`, a de cima cresce
+aos poucos, as duas convivem, e no $r_0$ em que surge o aviso de período grosso
+($r_0 \approx 15$ px) a de baixo some. Ela troca, não desliza. A inclinação
+calculada da tela nesse $r_0$ é de 2,2 mrad, do tamanho do salto: a hipótese é
+a +1 desviada pela inclinação, com algo da montagem escondendo o caminho
+entre as duas. Ainda não conferido (teste no documento 07, seção 7).
+
+**A +1 turbulenta chegou ao espelho de 1" maior que ele**, e só parte foi ao
+telescópio.
