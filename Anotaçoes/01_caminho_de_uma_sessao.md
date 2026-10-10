@@ -1,5 +1,7 @@
 # O caminho de uma sessão do tracker
 
+Conferido contra o commit `80b98bc`, em 2026-10-10.
+
 Escrito para quem quer saber **onde procurar**, não para quem vai ler o código
 inteiro. São 25 mil linhas no repositório; este documento cobre o caminho que
 uma sessão percorre e diz qual arquivo faz cada coisa.
@@ -261,8 +263,13 @@ voltar devagar à posição em que a sessão começou; com o mount sem responder
 tentativa só falha e ele fica parado. O único encerramento sem retorno é o
 beacon sumir por tempo demais, porque aí o movimento seria às cegas.
 
-E, fora do processo, `programas_principais/parar_mount_direto.py`, registrado
-como tarefa do Windows na inicialização: fala com o mount pela serial, sem
+A exceção é a sessão com `--sem-correcao`, que substituiu o antigo
+`observar_sem_corrigir.py` em 2026-10-10: ela mede e grava como uma sessão
+normal, com `correcao_ativa` em 0, mas nunca move o mount. Sem pulso, sem
+autoteste e sem retorno no fim. **Nunca rodou em hardware.**
+
+E, fora do processo, `programas_principais/parar_mount.py --via serial`,
+registrado como tarefa do Windows na inicialização: fala com o mount pela serial, sem
 precisar de login. O `MoveAxis` do ASCOM não tem prazo: se o PC morrer no meio
 de um pulso, o eixo anda até alguém mandar zero.
 

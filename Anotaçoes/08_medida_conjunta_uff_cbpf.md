@@ -1,6 +1,6 @@
 # 08. Medida conjunta UFF e CBPF
 
-Conferido contra o commit `df03ee4`, em 2026-10-09.
+Conferido contra o commit `80b98bc`, em 2026-10-10.
 
 Camada 2 da documentação. Cobre as duas peças do experimento que mede, na
 outra ponta do enlace, o que o tracker faz: os **blocos com e sem correção** no
@@ -58,7 +58,7 @@ CORRECTION_BLOCK_SECONDS = float(os.environ.get("QKD_BLOCOS_CORRECAO_S", "900"))
 No laço de controle, o bloco é calculado pelo relógio da sessão; os pares
 corrigem, os ímpares não:
 
-`Codigos/modulos/controle/tracker_loop.py`, linhas 370 a 377
+`Codigos/modulos/controle/tracker_loop.py`, linhas 373 a 380
 
 ```python
                 if CORRECTION_BLOCKS_ENABLED:
@@ -75,7 +75,7 @@ E num bloco sem correção só o comando vai a zero, pelo mesmo caminho de um
 freio. O ciclo de pulso recebe `enabled=False`, que encerra na hora um pulso em
 curso:
 
-`Codigos/modulos/controle/tracker_loop.py`, linhas 601 a 606
+`Codigos/modulos/controle/tracker_loop.py`, linhas 604 a 609
 
 ```python
                 # Bloco sem correcao: os estimadores seguem medindo, a deriva
@@ -100,6 +100,13 @@ nenhum comando sai no bloco sem correção, e a correção volta no seguinte
 
 A telemetria ganha a coluna `correcao_ativa`, 1 ou 0, que é o que a análise usa
 para separar os blocos.
+
+Para a noite inteira sem correção existe `--sem-correcao` (desde 2026-10-10, no
+lugar do antigo `observar_sem_corrigir.py`): é o bloco sem correção do começo
+ao fim, com `correcao_ativa` sempre 0 e `sem_correcao` no `resumo.json`. Ele
+não combina com `--blocos-minutos` nem com `--ab-janela-curta`: o `tracker.py` e
+a configuração recusam os dois juntos. Detalhes no `06_seguranca_do_mount.md`,
+seção 2. **Nunca rodou em hardware.**
 
 > Revisado por Caio: ainda não
 
@@ -314,7 +321,7 @@ difere do regime em uso só na janela e no limiar, que são as duas mudanças qu
 noite de 2026-09-30 sustenta. O 0,9 que a simulação sugeria fica disponível por
 `--ganho-curta 0.9`.
 
-`Codigos/modulos/configuracoes/tracker.py`, linhas 132 a 147
+`Codigos/modulos/configuracoes/tracker.py`, linhas 139 a 154
 
 ```python
 CONTROL_CURTA_WINDOW_SECONDS = 45.0
@@ -367,7 +374,7 @@ def regime_de_controle(nome, *, px_arcsec, atual, lento, curta) -> RegimeDeContr
 Os braços antigos seguem em pixels, como foram medidos. O A/B de hoje alterna
 o regime em uso (`lento_ganho_baixo`) e o novo, os dois corrigindo:
 
-`Codigos/programas_principais/tracker.py`, linhas 156 a 165
+`Codigos/programas_principais/tracker.py`, linhas 225 a 234
 
 ```python
     if args.ab_janela_curta:
