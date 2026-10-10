@@ -60,5 +60,5 @@ mecanica, comunicacao, matriz e acesso a uma parada fisica. `Q`, `Esc` e
 `Ctrl+C` solicitam velocidade zero, mas essa protecao depende de Windows,
 rede, ASCOM e driver ainda responderem.
 
-Detalhes da caracterizacao temporal: consulte
-`../programas_principais/GUIA_CARACTERIZACAO.md`.
+O guia da caracterizacao temporal foi removido com o programa; recupere com
+`git show 8ba06ce:Codigos/programas_principais/GUIA_CARACTERIZACAO.md`.

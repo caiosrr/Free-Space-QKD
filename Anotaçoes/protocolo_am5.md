@@ -80,7 +80,9 @@ O driver considera a escrita aceita quando a resposta é `'1'`.
 **Cuidado que o próprio resultado revelou:** o enlace opera a −0,042°, já abaixo
 do limite inferior atual de 0. Habilitar sem antes baixar o limite deixaria o
 mount fora da própria faixa, e não há documentação do que o firmware faz nesse
-caso. Por isso `limite_altitude_firmware.py` recusa habilitar sem folga.
+caso. Por isso `limite_altitude_firmware.py` recusava habilitar sem folga. Ele foi
+removido; recupere com
+`git show 8ba06ce:Codigos/programas_principais/limite_altitude_firmware.py`.
 
 #### O firmware recusa limite inferior negativo: medido em 2026-09-16
 
