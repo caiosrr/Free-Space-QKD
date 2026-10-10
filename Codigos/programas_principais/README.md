@@ -33,7 +33,7 @@ python .\programas_principais\tracker.py --camera ids --horas 0.5 --sem-autotest
 1. Testar a camera. O programa foi removido; recupere com `git show 8ba06ce:`
    seguido de `Codigos/programas_principais/testar_camera_ids.py` e de
    `Codigos/modulos/controle/cameras/teste_ids.py`.
-2. Caracterizar ou observar o beacon sem movimento.
+2. Observar o beacon sem movimento: `tracker.py --sem-correcao`.
 3. Executar a calibracao.
 4. Executar o tracker.
 

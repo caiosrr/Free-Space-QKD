@@ -17,6 +17,18 @@ arcsec), alternando a cada N minutos; os dois bracos corrigem:
 Blocos com e sem correcao, corrigindo com o braco de janela curta:
 
     python programas_principais/tracker.py --camera ids --horas 7 --blocos-minutos 15 --regime lento_janela_curta
+
+Sessao inteira SEM correcao, para medir a deriva crua com o mount apontado e
+parado. Captura, mede e grava a telemetria como o tracker, com correcao_ativa
+em 0, e nao move o mount: nenhum pulso, nenhum autoteste, nenhum retorno a
+posicao inicial. Substitui o observar_sem_corrigir.py desde 2026-10-10, e
+**nunca rodou em hardware nesta forma**:
+
+    python programas_principais/tracker.py --camera ids --horas 10 --sem-correcao
+    python programas_principais/tracker.py --camera ids --horas 3 --sem-correcao --exposicao-us 9000 --ganho 8
+
+``--exposicao-us`` e ``--ganho`` valem em qualquer sessao e sobrepoem o perfil
+da camera. Na IDS a autoexposicao continua presa a faixa da configuracao.
 """
 
 import sys
@@ -77,7 +89,50 @@ def parse_args() -> argparse.Namespace:
     vigia.add_argument("--vigia", dest="vigia", action="store_true")
     vigia.add_argument("--sem-vigia", dest="vigia", action="store_false")
     parser.set_defaults(vigia=True)
-    return parser.parse_args()
+    parser.add_argument(
+        "--sem-correcao", action="store_true",
+        help="observa a sessao inteira sem mover o mount (sem pulso, autoteste nem retorno)",
+    )
+    parser.add_argument("--exposicao-us", type=float, default=None,
+                        help="exposicao inicial; sobrepoe a do perfil da camera")
+    parser.add_argument("--ganho", type=float, default=None,
+                        help="ganho analogico; sobrepoe o do perfil da camera")
+    args = parser.parse_args()
+    if args.sem_correcao:
+        for opcao, valor in (("--autoteste", args.autoteste),
+                             ("--blocos-minutos", args.blocos_minutos),
+                             ("--ab-janela-curta", args.ab_janela_curta)):
+            if valor:
+                parser.error(f"{opcao} nao combina com --sem-correcao")
+    return args
+
+
+def aplicar_sobreposicoes(args: argparse.Namespace) -> None:
+    """Exposicao e ganho pela linha de comando, sem editar o perfil da camera.
+
+    Precisa rodar DEPOIS de ``aplicar_camera`` e ANTES de qualquer import de
+    ``modulos``: a exposicao e lida do ambiente na hora do import. Cada camera
+    le variaveis com prefixo proprio, entao a sobreposicao segue o backend.
+    Veio do observar_sem_corrigir.py, sem mudanca.
+    """
+    zwo = os.environ.get("QKD_CAMERA_BACKEND") == "zwo_sdk"
+    if args.exposicao_us is not None:
+        if zwo:
+            # No modo de video da ZWO a taxa segue a exposicao sozinha.
+            os.environ["QKD_ZWO_EXPOSURE_US"] = str(args.exposicao_us)
+            print(f"Exposicao inicial {args.exposicao_us:.0f} us.")
+        else:
+            os.environ["QKD_IDS_EXPOSURE_US"] = str(args.exposicao_us)
+            # O limite de aquisicao do perfil (50 fps) e impossivel com
+            # exposicao longa, e a camera recusa a combinacao. 10% de folga.
+            fps = 0.9 / (args.exposicao_us * 1e-6)
+            fps = min(fps, float(os.environ.get("QKD_IDS_FPS", fps)))
+            os.environ["QKD_IDS_FPS"] = str(round(fps, 3))
+            print(f"Exposicao inicial {args.exposicao_us:.0f} us, "
+                  f"taxa limitada a {fps:.2f} fps.")
+    if args.ganho is not None:
+        os.environ["QKD_ZWO_GAIN" if zwo else "QKD_IDS_ANALOG_GAIN"] = str(args.ganho)
+        print(f"Ganho {args.ganho:g}.")
 
 
 def iniciar_vigia() -> subprocess.Popen | None:
@@ -140,6 +195,20 @@ if __name__ == "__main__":
     escolha = args.camera or perguntar_camera({"1": "asi", "2": "ids", "3": "zwo"}, "1")
     camera = aplicar_camera(escolha)
     print(f"Iniciando tracker com {camera}.")
+    aplicar_sobreposicoes(args)
+    if args.sem_correcao:
+        # Lido pela configuracao na hora do import, como os blocos.
+        os.environ["QKD_SEM_CORRECAO"] = "1"
+        args.autoteste = False
+        print("Sessao SEM CORRECAO: o mount nao sera movido em momento nenhum.")
+        # Como o antigo observar_sem_corrigir.py: nao observa por cima de quem
+        # estiver usando o mount.
+        from modulos.controle.mount_em_uso import motivo_de_uso
+
+        uso = motivo_de_uso()
+        if uso:
+            print(f"Camera ou mount em uso ({uso}). Encerre antes de observar.")
+            raise SystemExit(2)
     if args.blocos_minutos:
         # Lido pela configuracao na hora do import: precisa vir antes dele.
         os.environ["QKD_BLOCOS_CORRECAO"] = "1"

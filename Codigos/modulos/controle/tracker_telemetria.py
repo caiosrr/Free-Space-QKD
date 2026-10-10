@@ -35,6 +35,7 @@ from modulos.configuracoes.tracker import (
     CONTROL_AB_BLOCK_SECONDS,
     CONTROL_AB_REGIMES,
     CONTROL_AB_TEST_ENABLED,
+    SESSION_WITHOUT_CORRECTION,
     CONTROL_CURTA_FRACTION,
     CONTROL_CURTA_RELEASE_ARCSEC,
     CONTROL_CURTA_TRIGGER_ARCSEC,
@@ -169,6 +170,9 @@ class TrackerCsvLogger:
             "initial_azimuth_deg": initial_az,
             "initial_altitude_deg": initial_alt,
             "max_session_hours": max_hours,
+            # Sessao sem correcao (tracker.py --sem-correcao): o mount nao foi
+            # comandado, e a coluna correcao_ativa fica em 0 do comeco ao fim.
+            "sem_correcao": SESSION_WITHOUT_CORRECTION,
             "max_offset_az_deg": MAX_OFFSET_AZ_DEG,
             "max_offset_alt_deg": MAX_OFFSET_ALT_DEG,
             "roi_size_px": roi_size_for_backend(backend_name()),

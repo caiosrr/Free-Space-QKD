@@ -27,6 +27,7 @@ from modulos.configuracoes.tracker import (
     MAX_OFFSET_AZ_DEG,
     MAX_SESSION_HOURS,
     RETURN_TO_START_ON_LIMIT,
+    SESSION_WITHOUT_CORRECTION,
     SIGNAL_LOSS_LIMIT_SECONDS,
     SLOW_BIAS_WINDOW_SECONDS,
     SLOW_CORRECTION_PERSISTENCE_SECONDS,
@@ -130,7 +131,15 @@ def main(
 
     Os dois argumentos vem da linha de comando do iniciador; quando sao ``None``
     o programa pergunta, como antes.
+
+    Com ``SESSION_WITHOUT_CORRECTION`` (tracker.py --sem-correcao) a sessao so
+    observa: nao ha autoteste, o mount nao e desestacionado, o laco nao comanda
+    nada e nao ha retorno a posicao inicial no fim.
     """
+    if SESSION_WITHOUT_CORRECTION:
+        if executar_autoteste:
+            raise ValueError("O autoteste move o mount; nao existe na sessao sem correcao.")
+        executar_autoteste = False
     logger = None
     return_result = None
     finish_reason = "encerramento_normal"
@@ -150,7 +159,8 @@ def main(
         # attempts/timeout, entao o lambda descarta o argumento.
         if desligamento_windows.registrar(lambda _evento: stop_axes_safely()):
             print("Parada de emergencia armada para o desligamento do Windows.")
-        ensure_unparked()
+        if not SESSION_WITHOUT_CORRECTION:
+            ensure_unparked()
         ensure_not_tracking()
         connect_camera()
         foco.set_focus_mode("dual")
@@ -246,6 +256,9 @@ def main(
             f"{SIGNAL_LOSS_LIMIT_SECONDS:.0f}s"
         )
         print(f"Telemetria: {display_path(logger.csv_path)}")
+        if SESSION_WITHOUT_CORRECTION:
+            print("SESSAO SEM CORRECAO: o mount nao recebe nenhum comando de movimento,")
+            print("nem autoteste, nem retorno a posicao inicial. Deixe-o apontado e parado.")
         print("Q, Esc ou Ctrl+C encerra com velocidade zero.\n")
 
         # 2. Centraliza a ROI e inicia controle e watchdog independentes.
@@ -343,7 +356,9 @@ def main(
 
         stop_axes_safely()
 
-        if (
+        if safety_reason and SESSION_WITHOUT_CORRECTION:
+            print(f"Sessao sem correcao: sem retorno a posicao inicial (motivo: {safety_reason}).")
+        elif (
             safety_reason
             and initial_position is not None
             and RETURN_TO_START_ON_LIMIT

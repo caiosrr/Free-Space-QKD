@@ -24,8 +24,8 @@ tenta o Alpaca, depois a serial, e se preciso encerra o servidor para soltar a
 porta e repete a serial.
 
 O QUE ELE NAO COBRE: o PC inteiro morrer, porque ele morre junto. Para isso
-existe a tarefa de boot com ``parar_mount.py``. E se o PC nao voltar, nada em
-software resolve -- so um nobreak.
+existe a tarefa de boot com ``parar_mount.py --via serial``. E se o PC nao
+voltar, nada em software resolve -- so um nobreak.
 
 SO AGE DEPOIS DE VER O TRACKER VIVO. Sem isso ele pararia o mount no meio de
 uma calibracao ou de um movimento manual, que e pior que o problema.

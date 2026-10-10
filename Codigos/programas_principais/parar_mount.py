@@ -1,4 +1,14 @@
-"""Para os dois eixos do mount. Nao usa camera e nao depende do tracker.
+"""Para os dois eixos do mount, pelo ASCOM ou pela serial. Sem camera nem tracker.
+
+Dois caminhos, escolhidos com ``--via``. Ate 2026-10-10 eram dois programas; o
+``parar_mount_direto.py`` entrou aqui como ``--via serial``, sem mudar nada do
+que ele faz. Nenhum dos dois caminhos chama o outro: a escada que tenta um e
+depois o outro e a do ``vigia_mount.py``, e fica la.
+
+**A forma fundida nunca rodou em hardware.**
+
+``--via ascom`` (padrao)
+------------------------
 
 Existe para um cenario especifico: o tracker foi morto sem chance de encerrar --
 desligamento do Windows, queda de energia, logoff -- no meio de um pulso. O
@@ -15,17 +25,51 @@ O teto era 0,10 deg/s (360 deg/h) ate 2026-09-16.
 O watchdog de MAX_OFFSET_AZ_DEG/ALT existe, mas roda DENTRO do tracker: morre
 junto com ele e nao protege exatamente do caso que mais assusta.
 
-Uso:
-
-    python programas_principais/parar_mount.py
-
-Feito para ser registrado como tarefa do Windows na INICIALIZACAO: assim,
-qualquer reinicio inesperado para o mount em segundos, sem operador presente.
 Tambem serve para parar o mount a distancia quando algo trava.
 
-Sai com codigo 0 se confirmou a parada dos dois eixos, 1 caso contrario, para
-que a tarefa agendada registre a falha.
+``--via serial``
+----------------
+
+Por que existe: um MoveAxis em curso NAO para quando o servidor ASCOM cai --
+medido neste mount em 2026-09-14, com o servidor fechado no meio de um pulso o
+eixo andou 266 arcsec quando 246 eram previstos. Depois de um reinicio o eixo
+pode seguir andando, e o caminho ASCOM nao alcanca nada enquanto o servidor
+ASCOM nao subir. Como ele e um programa de janela, numa conta com senha isso
+significa esperar alguem fazer login.
+
+Este caminho fala com o AM5 pela porta serial, que nao precisa de desktop nem
+de login. Registrado como tarefa de boot rodando como SYSTEM
+(``diversos/instalacao/registrar_tarefas_seguranca.ps1``), ele para o eixo com a
+maquina trancada.
+
+Identificado em 2026-09-14: AM5N em COM5 a 9600 baud.
+
+A porta sai da configuracao da maquina, de preferencia pela identidade USB do
+mount: num PC compartilhado, nenhum aparelho de outro grupo recebe bytes. Ver
+modulos/configuracoes/serial_mount.py. Precisa de pyserial:
+``python -m pip install pyserial``. No diario, as linhas deste caminho levam a
+marca ``[direto]``, como no programa antigo.
+
+DUAS TRAVAS contra parar o que nao devia:
+
+1. Se houver telemetria sendo escrita, ha uma sessao viva e o programa nao toca
+   em nada: parar seria interromper um rastreio legitimo. Vale nos dois
+   caminhos, antes e durante a espera.
+2. Se o servidor ASCOM estiver no ar, ele segura a porta serial com
+   exclusividade e o caminho serial simplesmente nao abre. Isso e proposital:
+   ele so consegue agir justamente no cenario em que e necessario.
+
+Uso, a partir da pasta Codigos:
+
+    python programas_principais/parar_mount.py
+    python programas_principais/parar_mount.py --via serial
+    python programas_principais/parar_mount.py --via serial --aguardar 600
+
+Sai com codigo 0 se confirmou a parada ou se desistiu por uma trava, 1 caso
+contrario, para que a tarefa agendada registre a falha.
 """
+
+from __future__ import annotations
 
 import argparse
 import sys
@@ -37,11 +81,10 @@ CODIGOS_DIR = Path(__file__).resolve().parent.parent
 if str(CODIGOS_DIR) not in sys.path:
     sys.path.insert(0, str(CODIGOS_DIR))
 
-from modulos.controle.mount_ascom import call, mount_address, stop_axes_safely
 from modulos.controle.mount_em_uso import motivo_de_uso
 
 DIARIO = CODIGOS_DIR / "resultados" / "parar_mount.txt"
-
+BAUD_PADRAO = 9600
 
 
 def anotar(texto: str) -> None:
@@ -61,8 +104,15 @@ def anotar(texto: str) -> None:
         pass
 
 
+def anotar_direto(texto: str) -> None:
+    """A mesma linha, com a marca do caminho serial."""
+    anotar(f"[direto] {texto}")
+
+
 def tentar_parar() -> tuple[bool, str]:
-    """Uma tentativa. Devolve (parou, descricao do que aconteceu)."""
+    """Uma tentativa pelo ASCOM. Devolve (parou, descricao do que aconteceu)."""
+    from modulos.controle.mount_ascom import call, stop_axes_safely  # noqa: PLC0415
+
     # Sonda o servidor antes de mandar parar. Sem isto os dois desfechos ruins
     # sao indistinguiveis: stop_axes_safely engole a excecao de cada eixo e
     # devolve False tanto quando o servidor esta fora do ar quanto quando o
@@ -81,17 +131,8 @@ def tentar_parar() -> tuple[bool, str]:
         return False, f"sem contato com o mount: {type(exc).__name__}: {exc}"
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument(
-        "--aguardar", type=float, default=0.0, metavar="SEGUNDOS",
-        help=(
-            "insiste ate conseguir falar com o mount. No boot o servidor ASCOM"
-            " normalmente ainda nao subiu, e uma tentativa unica falha sempre."
-        ),
-    )
-    parser.add_argument("--intervalo", type=float, default=10.0)
-    args = parser.parse_args()
+def parar_via_ascom(args: argparse.Namespace) -> int:
+    from modulos.controle.mount_ascom import mount_address  # noqa: PLC0415
 
     uso = motivo_de_uso()
     if uso:
@@ -129,6 +170,72 @@ def main() -> int:
         print("Verifique o mount FISICAMENTE.")
     anotar(f"{descricao} (desistiu apos {tentativas} tentativas)")
     return 1
+
+
+def parar_via_serial(args: argparse.Namespace) -> int:
+    from modulos.controle.parada_emergencia import parar_pela_serial  # noqa: PLC0415
+
+    uso = motivo_de_uso()
+    if uso:
+        print(f"Mount em uso ({uso}); nada foi tocado.")
+        anotar_direto(f"abortado: {uso}")
+        return 0
+
+    alvo = args.porta or "a porta que responder"
+    print(f"Parando o mount por {alvo} a {args.baud} baud ...")
+    limite = time.monotonic() + max(0.0, args.aguardar)
+    tentativas = 0
+    while True:
+        tentativas += 1
+        ok, descricao = parar_pela_serial(args.porta, args.baud)
+        print(f"  {descricao}")
+        if ok:
+            anotar_direto(f"{descricao} (tentativa {tentativas})")
+            return 0
+        if time.monotonic() >= limite:
+            break
+        uso = motivo_de_uso()
+        if uso:
+            print(f"Mount passou a ser usado durante a espera ({uso}); desistindo.")
+            anotar_direto(f"abortado na espera: {uso}")
+            return 0
+        time.sleep(max(1.0, args.intervalo))
+
+    anotar_direto(f"{descricao} (desistiu apos {tentativas} tentativas)")
+    print()
+    print("Se a porta estiver ocupada, o servidor ASCOM a esta segurando:")
+    print("nesse caso use parar_mount.py, que fala pelo proprio ASCOM.")
+    return 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--via", choices=["ascom", "serial"], default="ascom",
+                        help="ascom (padrao): pelo servidor ASCOM; serial: LX200 direto")
+    parser.add_argument(
+        "--aguardar", type=float, default=0.0, metavar="SEGUNDOS",
+        help=(
+            "insiste ate conseguir falar com o mount. No boot o servidor ASCOM"
+            " normalmente ainda nao subiu, e uma tentativa unica falha sempre;"
+            " pela serial, insiste enquanto a porta estiver ocupada ou o mount"
+            " nao responder."
+        ),
+    )
+    parser.add_argument("--intervalo", type=float, default=10.0)
+    parser.add_argument("--porta", default=None,
+                        help="so com --via serial; sem isto, a porta configurada na "
+                             "maquina (identidade USB do mount)")
+    parser.add_argument("--baud", type=int, default=None,
+                        help=f"so com --via serial (padrao {BAUD_PADRAO})")
+    args = parser.parse_args()
+
+    if args.via == "serial":
+        if args.baud is None:
+            args.baud = BAUD_PADRAO
+        return parar_via_serial(args)
+    if args.porta is not None or args.baud is not None:
+        parser.error("--porta e --baud valem so com --via serial")
+    return parar_via_ascom(args)
 
 
 if __name__ == "__main__":

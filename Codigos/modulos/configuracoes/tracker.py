@@ -89,6 +89,13 @@ CONTROL_AB_TEST_ENABLED = _chave("QKD_AB_CONTROLE", False)
 # tracker.py com --blocos-minutos.
 CORRECTION_BLOCKS_ENABLED = _chave("QKD_BLOCOS_CORRECAO", False)
 CORRECTION_BLOCK_SECONDS = float(os.environ.get("QKD_BLOCOS_CORRECAO_S", "900"))
+# Sessao inteira sem correcao, para medir a deriva crua. E o bloco sem correcao
+# estendido a sessao toda, com tres diferencas: o laco nao manda nem o zero de
+# manutencao ao mount, nao ha autoteste e nao ha retorno a posicao inicial. As
+# paradas (velocidade zero no fim, no desligamento do Windows e pelo vigia)
+# continuam. Ligado pelo tracker.py com --sem-correcao; substitui o antigo
+# observar_sem_corrigir.py desde 2026-10-10.
+SESSION_WITHOUT_CORRECTION = _chave("QKD_SEM_CORRECAO", False)
 CONTROL_AB_BLOCK_SECONDS = float(os.environ.get("QKD_AB_BLOCO_S", "600"))
 CONTROL_SLOW_WINDOW_SECONDS = 120.0
 CONTROL_SLOW_WARMUP_SECONDS = 60.0
@@ -454,6 +461,8 @@ if (
     raise ValueError("Os limites do autoteste precisam ser positivos.")
 if MAX_SESSION_HOURS <= 0:
     raise ValueError("MAX_SESSION_HOURS precisa ser positivo.")
+if SESSION_WITHOUT_CORRECTION and (CORRECTION_BLOCKS_ENABLED or CONTROL_AB_TEST_ENABLED):
+    raise ValueError("A sessao sem correcao nao combina com blocos nem com o A/B de controle.")
 if MAX_OFFSET_AZ_DEG <= 0 or MAX_OFFSET_ALT_DEG <= 0:
     raise ValueError("Os limites absolutos dos eixos precisam ser positivos.")
 # O teto do tracking precisa caber a velocidade dos micropulsos, senao o proprio
