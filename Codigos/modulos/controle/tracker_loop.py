@@ -25,6 +25,7 @@ from modulos.configuracoes.tracker import (
     CONTROL_CURTA_WINDOW_SECONDS,
     CORRECTION_BLOCK_SECONDS,
     CORRECTION_BLOCKS_ENABLED,
+    SESSION_WITHOUT_CORRECTION,
     CONTROL_REGIME_PADRAO,
     CONTROL_SLOW_FRACTION,
     CONTROL_SLOW_FRACTION_BAIXA,
@@ -271,7 +272,9 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
     ab_block = -1
     ab_bloco_controle = -1
     bloco_correcao = -1
-    corrigindo = True
+    # Sessao sem correcao: o mesmo desligamento de um bloco sem correcao, a
+    # sessao inteira.
+    corrigindo = not SESSION_WITHOUT_CORRECTION
 
     dt_target = 1.0 / CONTROL_HZ
     last_loop_t = time.perf_counter()
@@ -640,12 +643,14 @@ def executar_loop_controle(state: TrackerState, A_inv: np.ndarray) -> None:
                     float(np.clip(cmd_alt, -VEL_MAX_TESTE, VEL_MAX_TESTE))
                 )
 
-                send_az = (
+                # Na sessao sem correcao nada sai para o mount, nem o zero de
+                # manutencao que um bloco sem correcao ainda manda.
+                send_az = not SESSION_WITHOUT_CORRECTION and (
                     last_sent_az is None
                     or abs(cmd_az - last_sent_az) >= MIN_CMD_DELTA_TO_SEND
                     or (loop_t0 - last_sent_az_t) >= CMD_KEEPALIVE_S
                 )
-                send_alt = (
+                send_alt = not SESSION_WITHOUT_CORRECTION and (
                     last_sent_alt is None
                     or abs(cmd_alt - last_sent_alt) >= MIN_CMD_DELTA_TO_SEND
                     or (loop_t0 - last_sent_alt_t) >= CMD_KEEPALIVE_S

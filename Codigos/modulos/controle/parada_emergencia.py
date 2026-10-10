@@ -23,7 +23,7 @@ posicao mudar, o degrau falhou e a escada continua, em vez de declarar vitoria
 porque um comando foi aceito.
 
 Quem usa: ``vigia_mount.py`` (escada inteira, sozinho, de madrugada) e
-``parar_mount_direto.py`` (so o degrau da serial, por escolha do operador).
+``parar_mount.py --via serial`` (so o degrau da serial, por escolha do operador).
 """
 
 from __future__ import annotations

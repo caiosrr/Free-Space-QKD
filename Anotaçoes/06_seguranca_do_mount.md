@@ -1,6 +1,6 @@
 # 06. Segurança do mount
 
-Conferido contra o commit `4fcdaba`, em 2026-10-10.
+Conferido contra o commit `80b98bc`, em 2026-10-10.
 
 Camada 2 da documentação: lê o código de verdade. Para o mapa geral de uma
 sessão, leia antes o `01_caminho_de_uma_sessao.md`. Este documento cobre tudo
@@ -113,13 +113,13 @@ As seções seguem essa ordem.
 A primeira proteção é o próprio laço não mandar nada quando não sabe onde o
 beacon está.
 
-`Codigos/modulos/controle/tracker_loop.py`, linha 77
+`Codigos/modulos/controle/tracker_loop.py`, linha 78
 
 ```python
 SIGNAL_TIMEOUT_S = 0.45
 ```
 
-`Codigos/modulos/controle/tracker_loop.py`, linhas 415 a 425
+`Codigos/modulos/controle/tracker_loop.py`, linhas 418 a 428
 
 ```python
                 measurement_age = (loop_t0 - measurement_ts) if measurement_ts else 1e9
@@ -141,7 +141,7 @@ e uma medida velha é tratada como ausência de medida.
 
 E, aconteça o que acontecer dentro do laço, a saída dele manda zero:
 
-`Codigos/modulos/controle/tracker_loop.py`, linhas 734 a 735
+`Codigos/modulos/controle/tracker_loop.py`, linhas 739 a 740
 
 ```python
         finally:
@@ -154,6 +154,36 @@ medir o efeito do controle na mesma noite. No bloco sem correção o comando vai
 a zero pelo mesmo caminho de um freio, e um pulso em curso termina na hora; os
 estimadores continuam medindo. Testado com o laço real e o mount simulado:
 nenhum comando sai nesse bloco. **Nunca rodou com o mount de verdade.**
+
+O mesmo desligamento vale a sessão inteira com `--sem-correcao`, que desde
+2026-10-10 substitui o antigo `observar_sem_corrigir.py`. Ali o laço vai além do
+bloco: não manda nem o zero de manutenção que o bloco sem correção ainda envia
+a cada poucos segundos.
+
+`Codigos/modulos/controle/tracker_loop.py`, linhas 646 a 657
+
+```python
+                # Na sessao sem correcao nada sai para o mount, nem o zero de
+                # manutencao que um bloco sem correcao ainda manda.
+                send_az = not SESSION_WITHOUT_CORRECTION and (
+                    last_sent_az is None
+                    or abs(cmd_az - last_sent_az) >= MIN_CMD_DELTA_TO_SEND
+                    or (loop_t0 - last_sent_az_t) >= CMD_KEEPALIVE_S
+                )
+                send_alt = not SESSION_WITHOUT_CORRECTION and (
+                    last_sent_alt is None
+                    or abs(cmd_alt - last_sent_alt) >= MIN_CMD_DELTA_TO_SEND
+                    or (loop_t0 - last_sent_alt_t) >= CMD_KEEPALIVE_S
+                )
+```
+
+Nessa sessão também não há autoteste (o `tracker.py` recusa `--autoteste`
+junto), o mount não é desestacionado e não há retorno no fim (seção 3). As
+paradas continuam: o `finally` acima, o aviso de desligamento e o vigia. Um
+teste roda a sessão inteira contra um mount simulado e falha se qualquer
+comando de movimento sair (`diversos/testes/test_tracker_sem_correcao.py`); a
+mesma sessão com correção serve de controle e precisa mover. **A sessão sem
+correção nunca rodou em hardware.**
 
 O `finally` do Python roda na saída normal, numa exceção e no Ctrl+C. **Não
 roda** se o processo for morto de fora. Esse é o limite de tudo que mora dentro
@@ -175,7 +205,7 @@ do tracker, e o motivo de existirem as seções 5 a 9.
 Uma thread separada, a 5 Hz, lê a posição do mount e encerra a sessão em três
 situações.
 
-`Codigos/modulos/configuracoes/tracker.py`, linhas 353 a 358
+`Codigos/modulos/configuracoes/tracker.py`, linhas 360 a 365
 
 ```python
 # Limites da sessao longa.
@@ -240,12 +270,14 @@ a sessão quando o tempo acaba é esta thread, e ela registra
 `tempo_maximo_da_sessao` como **motivo de segurança**. Isso tem uma
 consequência direta no `finally` da sessão:
 
-`Codigos/modulos/controle/tracker_sessao.py`, linhas 344 a 360
+`Codigos/modulos/controle/tracker_sessao.py`, linhas 357 a 375
 
 ```python
         stop_axes_safely()
 
-        if (
+        if safety_reason and SESSION_WITHOUT_CORRECTION:
+            print(f"Sessao sem correcao: sem retorno a posicao inicial (motivo: {safety_reason}).")
+        elif (
             safety_reason
             and initial_position is not None
             and RETURN_TO_START_ON_LIMIT
@@ -263,7 +295,8 @@ consequência direta no `finally` da sessão:
 ```
 
 Ou seja: **quando o tempo acaba, o mount volta à posição em que a sessão
-começou.** Confirmado nos dados: o `resumo.json` da sessão de 10 h de
+começou.** A exceção é a sessão sem correção (seção 2): o primeiro ramo vence,
+e ela nunca volta, qualquer que seja o motivo. Confirmado nos dados: o `resumo.json` da sessão de 10 h de
 2026-09-15 registra `finish_reason = tempo_maximo_da_sessao` e
 `return_to_start.success = True`.
 
@@ -291,7 +324,8 @@ margem (`tracker_seguranca.py`, linhas 133 a 139).
 1. Uma sessão de 3 h termina às 23h. Onde o mount estará apontando às 23h01:
    onde o tracker o deixou às 22h59, ou onde ele estava às 20h?
 2. Você quer centralizar o feixe com o tracker e depois observar sem corrigir.
-   Por que rodar o tracker por 15 minutos e depois o observador **não** resolve?
+   Por que rodar o tracker por 15 minutos e depois o `tracker.py --sem-correcao`
+   **não** resolve?
 3. Por que a leitura de posição tolera 4 falhas seguidas e não para na
    primeira?
 4. O limite de 5° protege do tracker se perder numa correção absurda. Ele
@@ -304,7 +338,7 @@ margem (`tracker_seguranca.py`, linhas 133 a 139).
 Não é uma proteção que age; é a que limita o estrago quando todas as outras
 falham.
 
-`Codigos/modulos/configuracoes/tracker.py`, linhas 360 a 375
+`Codigos/modulos/configuracoes/tracker.py`, linhas 367 a 382
 
 ```python
 # Velocidade maxima durante o tracking. O limite menor reduz a distancia que o
@@ -350,7 +384,7 @@ O Windows avisa programas de console antes de fechá-los, mas o Python ignora
 esses avisos: o processo morre sem rodar nenhum `finally`. O tracker registra
 um handler próprio para aproveitar o aviso e mandar o zero.
 
-`Codigos/modulos/controle/tracker_sessao.py`, linhas 150 a 152
+`Codigos/modulos/controle/tracker_sessao.py`, linhas 159 a 161
 
 ```python
         # attempts/timeout, entao o lambda descarta o argumento.
@@ -413,7 +447,7 @@ continua sendo escrita.
 
 O tracker o sobe sozinho, como processo filho:
 
-`Codigos/programas_principais/tracker.py`, linhas 39 a 43
+`Codigos/programas_principais/tracker.py`, linhas 51 a 55
 
 ```python
 # Folga entre a ultima linha de telemetria e o disparo. Os 25 s padrao do vigia
@@ -423,7 +457,7 @@ O tracker o sobe sozinho, como processo filho:
 VIGIA_DISPARO_S = 60.0
 ```
 
-`Codigos/programas_principais/tracker.py`, linhas 172 a 183
+`Codigos/programas_principais/tracker.py`, linhas 241 a 252
 
 ```python
     vigia = iniciar_vigia() if args.vigia else None
@@ -444,7 +478,7 @@ O arranjo é deliberado nos dois desfechos. Se o tracker termina direito, o
 `finally` encerra o vigia. Se o tracker é morto sem rodar o `finally`, que é o
 caso que o vigia existe para cobrir, o filho **sobrevive** e age sozinho. O
 vigia roda em grupo de processos próprio, para o Ctrl+C do console não chegar
-nele direto (`tracker.py`, linhas 83 a 107).
+nele direto (`tracker.py`, linhas 138 a 162).
 
 O coração do vigia:
 
@@ -658,8 +692,8 @@ verdade:**
 - a descoberta automática de porta encontrando o mount (só foi testada listando
   as portas do notebook, sem mount conectado).
 
-O que já rodou é o equivalente ao degrau 2, pelo `parar_mount_direto.py`, no
-teste de 2026-09-14. Um teste de bancada que vale fazer: tracker rodando,
+O que já rodou é o equivalente ao degrau 2, pelo `parar_mount_direto.py` (hoje
+`parar_mount.py --via serial`), no teste de 2026-09-14. Um teste de bancada que vale fazer: tracker rodando,
 fechar o servidor ASCOM na mão, e conferir no diário se o vigia atravessou até
 o degrau 4.
 
@@ -755,18 +789,28 @@ tarefas, com caminhos diferentes:
 
 | programa | caminho até o mount | precisa de alguém logado? |
 |---|---|---|
-| `parar_mount.py` | Alpaca, pelo servidor ASCOM | **sim**, o servidor é programa de janela |
-| `parar_mount_direto.py` | serial, LX200 | **não**, roda como SYSTEM |
+| `parar_mount.py --via ascom` | Alpaca, pelo servidor ASCOM | **sim**, o servidor é programa de janela |
+| `parar_mount.py --via serial` | serial, LX200 | **não**, roda como SYSTEM |
 
-O `parar_mount.py` insiste até conseguir, porque no boot o servidor ASCOM quase
+Até 2026-10-10 eram dois programas, `parar_mount.py` e `parar_mount_direto.py`.
+Nesse dia o segundo entrou no primeiro como `--via serial`, com o padrão em
+`ascom`. Cada caminho ficou como era: as travas de uso antes e durante a espera,
+o `--aguardar`, o `--intervalo`, as mensagens, os códigos de saída e a marca
+`[direto]` no diário, conferidos lado a lado com os programas antigos num mount
+simulado. Nenhum caminho chama o outro; a escada continua só no vigia (seção
+7). **A forma fundida nunca rodou em hardware.**
+
+O caminho ASCOM insiste até conseguir, porque no boot o servidor ASCOM quase
 nunca subiu ainda. E ele distingue "servidor fora do ar" de "mount ignorou o
 comando", que antes davam o mesmo alarme:
 
-`Codigos/programas_principais/parar_mount.py`, linhas 64 a 81
+`Codigos/programas_principais/parar_mount.py`, linhas 112 a 131
 
 ```python
 def tentar_parar() -> tuple[bool, str]:
-    """Uma tentativa. Devolve (parou, descricao do que aconteceu)."""
+    """Uma tentativa pelo ASCOM. Devolve (parou, descricao do que aconteceu)."""
+    from modulos.controle.mount_ascom import call, stop_axes_safely  # noqa: PLC0415
+
     # Sonda o servidor antes de mandar parar. Sem isto os dois desfechos ruins
     # sao indistinguiveis: stop_axes_safely engole a excecao de cada eixo e
     # devolve False tanto quando o servidor esta fora do ar quanto quando o
@@ -786,8 +830,8 @@ def tentar_parar() -> tuple[bool, str]:
 ```
 
 Numa conta com senha, depois de um reinício ninguém faz login, e o
-`parar_mount.py` nunca alcança o mount. Por isso existe o `parar_mount_direto`,
-que fala pela serial e não precisa de ninguém.
+caminho ASCOM nunca alcança o mount. Por isso existe o `--via serial`, que fala
+pela serial e não precisa de ninguém.
 
 **Em 2026-10-09 ficou só a tarefa direta.** A do logon dependia de alguém
 abrir o servidor ASCOM, que não abre sozinho, em até 10 min depois do login; na
@@ -819,10 +863,21 @@ desligado: é o que transforma um travamento com tela azul em reinício, e
 portanto na tarefa de boot. **A versão de 2026-10-09 nunca rodou num PC de
 verdade.**
 
+**Depois do `git pull` de 2026-10-10, rode o script de novo, como
+administrador, em todo PC que tenha a tarefa de boot.** A tarefa registrada
+antes aponta para `programas_principais\parar_mount_direto.py`, um arquivo que
+deixou de existir: ela continuaria disparando a cada boot e falhando, sem parar
+nada e sem janela que avise. Rodar o script substitui a tarefa pela de
+`parar_mount.py --via serial --aguardar 600`. Agora o script confere com
+`Test-Path` que o programa existe antes de registrar, e sai com erro se não
+existir; e um teste (`diversos/testes/test_tarefas_instalacao.py`) falha se o
+script citar um programa que não existe. No fim, o script mostra o comando que
+ficou registrado. **Essa versão do script nunca rodou num PC de verdade.**
+
 **O aviso pelo Telegram saiu do agendador.** Era uma tarefa a cada 15 min, com
 o `python.exe` de console, e abria uma janela na tela a cada rodada. Agora o
 tracker o sobe ao começar a sessão, sem janela, como faz com o vigia
-(`programas_principais/tracker.py`, linhas 110 a 135). Ele avisa o começo e o
+(`programas_principais/tracker.py`, linhas 165 a 190). Ele avisa o começo e o
 fim da gravação, inclusive o fim por morte do tracker, porque é outro processo,
 e sai sozinho depois de avisar o fim. Token e chat vêm das variáveis
 `QKD_TELEGRAM_TOKEN` e `QKD_TELEGRAM_CHAT`, definidas uma vez com `setx`, sem

@@ -7,7 +7,7 @@
 # O que registra (ver Anotacoes/06_seguranca_do_mount.md, secao 9):
 #
 #   "Parar mount no boot"   como SYSTEM, na inicializacao, SEM precisar de login:
-#                           parar_mount_direto.py --aguardar 600, pela serial.
+#                           parar_mount.py --via serial --aguardar 600.
 #                           E a defesa real contra o reinicio do Windows Update.
 #                           Roda sem janela (SYSTEM nao tem tela).
 #
@@ -26,7 +26,10 @@
 #
 #   powershell -ExecutionPolicy Bypass -File diversos\instalacao\registrar_tarefas_seguranca.ps1
 #
-# Rodar de novo substitui a tarefa (-Force); nao duplica.
+# Rodar de novo substitui a tarefa (-Force); nao duplica. Rode de novo tambem
+# quando o programa da tarefa mudar de nome: em 2026-10-10 o parar_mount_direto.py
+# entrou no parar_mount.py, e a tarefa registrada antes aponta para um arquivo
+# que deixou de existir.
 
 $ErrorActionPreference = "Stop"
 
@@ -41,6 +44,13 @@ $python = Join-Path $codigos ".venv\Scripts\python.exe"
 if (-not (Test-Path $python)) {
     Write-Host "Nao achei o Python do ambiente em $python" -ForegroundColor Red
     Write-Host "Crie o .venv e instale o requirements.txt antes."
+    exit 1
+}
+# A tarefa aponta para um arquivo; se ele nao existir, ela falha em silencio a
+# cada boot. Melhor recusar aqui, com o operador olhando.
+$programa = Join-Path $codigos "programas_principais\parar_mount.py"
+if (-not (Test-Path $programa)) {
+    Write-Host "Nao achei $programa; nada foi registrado." -ForegroundColor Red
     exit 1
 }
 & $python -c "import serial" 2>$null
@@ -77,7 +87,7 @@ $config = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoing
 
 # 1. Boot, como SYSTEM, pela serial: age com a maquina trancada.
 $acao = New-ScheduledTaskAction -Execute $python -WorkingDirectory $codigos `
-    -Argument "programas_principais\parar_mount_direto.py --aguardar 600"
+    -Argument "programas_principais\parar_mount.py --via serial --aguardar 600"
 $gatilho = New-ScheduledTaskTrigger -AtStartup
 $quem = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
 Register-ScheduledTask -TaskName "Parar mount no boot" -Action $acao -Trigger $gatilho `
@@ -112,3 +122,4 @@ Write-Host "num PowerShell COMUM (nao este), com setx; ver publicar_estado_pc.py
 Write-Host "`nConferencia:"
 Get-ScheduledTask -TaskName "Parar mount no boot", "Parar mount no logon", "Publicar estado do PC" `
     -ErrorAction SilentlyContinue | Select-Object TaskName, State | Format-Table -AutoSize
+(Get-ScheduledTask -TaskName "Parar mount no boot").Actions | Select-Object Execute, Arguments | Format-List
