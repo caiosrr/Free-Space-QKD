@@ -11,7 +11,6 @@ CODIGOS_DIR = Path(__file__).resolve().parents[2]
 if str(CODIGOS_DIR) not in sys.path:
     sys.path.insert(0, str(CODIGOS_DIR))
 
-from diversos.legado import calibracao_por_pontos as calibration
 from modulos.visao import detector_ilhas as focus
 
 
@@ -19,7 +18,6 @@ class ManualFocusRoiTests(unittest.TestCase):
     def setUp(self):
         self.previous_raw_frame = focus.LAST_RAW_FRAME
         self.previous_focus_mode = focus.FOCUS_MODE
-        self.previous_calibration_roi = calibration.CALIBRATION_ROI
         focus.LAST_RAW_FRAME = None
         focus.reset_focus_lock()
 
@@ -27,7 +25,6 @@ class ManualFocusRoiTests(unittest.TestCase):
         focus.LAST_RAW_FRAME = self.previous_raw_frame
         focus.FOCUS_MODE = self.previous_focus_mode
         focus.reset_focus_lock()
-        calibration.CALIBRATION_ROI = self.previous_calibration_roi
 
     def test_local_roi_ignores_brighter_region_and_keeps_absolute_coordinates(self):
         frame = np.zeros((160, 300), dtype=np.float32)
@@ -81,62 +78,6 @@ class ManualFocusRoiTests(unittest.TestCase):
         with mock.patch.object(focus, "_centro_foco_principal", return_value=None) as detector:
             focus.centro_massa(np.zeros((20, 20), dtype=np.uint8))
         self.assertAlmostEqual(detector.call_args.args[1], 0.45)
-
-    def test_stable_capture_skips_frames_where_blinking_light_is_off(self):
-        valid_measurement = (20.0, 30.0, 255.0, False)
-        measurements = [None, valid_measurement, None, valid_measurement, valid_measurement]
-        calibration.CALIBRATION_ROI = None
-
-        with (
-            mock.patch.object(
-                calibration,
-                "capture_frame",
-                return_value=np.zeros((40, 40), dtype=np.uint8),
-            ),
-            mock.patch.object(calibration, "centro_massa", side_effect=measurements),
-            mock.patch.object(calibration, "get_focus_debug", return_value={}),
-            mock.patch.object(calibration, "_audit_capture"),
-        ):
-            result = calibration._capture_cm_estavel(0.001, 3, "teste_piscante")
-
-        self.assertIsNotNone(result)
-        self.assertEqual(result.samples, 3)
-        self.assertAlmostEqual(result.x_px, 20.0)
-        self.assertAlmostEqual(result.y_px, 30.0)
-
-    def test_calibration_anchors_once_then_follows_last_valid_light(self):
-        valid_measurement = (20.0, 30.0, 255.0, False)
-        calibration.CALIBRATION_ROI = None
-
-        with (
-            mock.patch.object(
-                calibration,
-                "capture_frame",
-                return_value=np.zeros((40, 40), dtype=np.uint8),
-            ),
-            mock.patch.object(
-                calibration,
-                "centro_massa",
-                side_effect=[valid_measurement, None, valid_measurement],
-            ),
-            mock.patch.object(calibration, "get_focus_debug", return_value={}),
-            mock.patch.object(calibration, "_audit_capture"),
-            mock.patch.object(
-                calibration,
-                "set_focus_expected_position",
-                return_value=True,
-            ) as set_anchor,
-        ):
-            result = calibration._capture_cm_estavel(
-                0.001,
-                2,
-                "continuidade",
-                expected_position=(20.0, 30.0),
-                expected_max_jump_px=45.0,
-            )
-
-        self.assertIsNotNone(result)
-        set_anchor.assert_called_once_with(20.0, 30.0, max_jump_px=45.0)
 
     def test_center_anchor_rejects_similar_light_at_roi_border(self):
         reference = {

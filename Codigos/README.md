@@ -5,13 +5,10 @@ em espaco livre.
 
 ## Onde comecar
 
-Abra `programas_principais/`. Essa pasta contem somente os cinco programas
-usados na operacao e um guia curto com a ordem recomendada.
+Abra `programas_principais/`. Essa pasta contem os programas usados na
+operacao e um guia curto com a ordem recomendada.
 
 ```powershell
-python .\programas_principais\testar_camera_ids.py
-python .\programas_principais\caracterizar_beacon_ids.py --minutes 10
-python .\programas_principais\centro_de_massa.py --camera ids
 python .\programas_principais\calibracao.py --camera ids --perfil robusto
 python .\programas_principais\tracker.py --camera ids --horas 0.5
 ```
@@ -22,9 +19,9 @@ uma sessao por script depois de uma queda de conexao remota.
 
 ## Estrutura
 
-- `programas_principais/`: os cinco iniciadores usados no laboratorio.
+- `programas_principais/`: os iniciadores usados no laboratorio.
 - `modulos/`: implementacao interna, cameras, configuracoes e seguranca.
-- `diversos/`: ferramentas, otimizacao, estudos, testes e legado.
+- `diversos/`: ferramentas, otimizacao e testes.
 - `resultados/`: artefatos locais da ASI e execucoes gerais.
 - `Link UFF/`: documentacao e resultados do enlace UFF-CBPF.
 
