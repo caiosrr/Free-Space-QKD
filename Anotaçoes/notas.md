@@ -153,8 +153,8 @@ Sobre os micropulsos: eles nunca foram conclusivos. Os 8 pulsos de 0,12 s na
 velocidade minima davam 0,45 arcsec, abaixo do quantum de 1 arcsec da
 telemetria e abaixo do ruido de ~2 px. Resultado: 0/8 resolvidos opticamente.
 
-A calibracao por pontos foi preservada apenas como
-`diversos/legado/calibracao_por_pontos.py`.
+A calibracao por pontos foi removida; recupere com
+`git show 8ba06ce:Codigos/diversos/legado/calibracao_por_pontos.py`.
 
 ### Desempenho de camera
 
@@ -358,8 +358,8 @@ permanece parado.
 ### Tracker temporal robusto e oclusoes
 
 O mount deve corrigir deriva lenta do centro medio do beacon, nao perseguir a
-turbulencia rapida. Antes de alterar o controle, usar o caracterizador em
-`programas_principais/caracterizar_beacon_ids.py` para medir a perturbacao e comparar janelas
+turbulencia rapida. Antes de alterar o controle, usar o caracterizador (removido; recupere com
+`git show 8ba06ce:Codigos/programas_principais/caracterizar_beacon_ids.py`) para medir a perturbacao e comparar janelas
 temporais. A primeira versao foi implementada em 26/08/2026 com janela
 deslizante de `2 s`, escolhida a partir da aquisicao noturna de 8 h. A estrategia
 e hibrida:

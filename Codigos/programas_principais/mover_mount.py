@@ -1,11 +1,13 @@
-"""Move o mount por um delta em azimute e altitude, para trabalho de bancada.
+"""Move o mount por um delta ou ate uma posicao absoluta, para trabalho de bancada.
 
-Existe porque o ``ir_para_posicao.py`` e deliberadamente lento e cauteloso: ele
-usa a mesma rotina que o tracker usa ao encerrar uma sessao, com 0,2 deg/s e
-tolerancia de 0,0005 grau. Isso e certo no fim de uma sessao de 10 h e e um
-estorvo na bancada, onde se quer reposicionar varias vezes seguidas.
+Dois modos. Ate 2026-10-10 eram dois programas; o ``ir_para_posicao.py`` entrou
+aqui como o modo ``--para``, sem mudar a rotina que ele usa.
 
-Tres diferencas, e todas sao ajustaveis:
+``--delta AZ ALT``, em graus, e o modo rapido. Existe porque o modo ``--para``
+e deliberadamente lento e cauteloso: ele usa a mesma rotina que o tracker usa
+ao encerrar uma sessao, com 0,2 deg/s e tolerancia de 0,0005 grau. Isso e certo
+no fim de uma sessao de 10 h e e um estorvo na bancada, onde se quer
+reposicionar varias vezes seguidas. Tres diferencas, e todas sao ajustaveis:
 
     velocidade   0,5 deg/s contra 0,2, entao um grau leva 2 s em vez de 5
     tolerancia   0,005 grau contra 0,0005, e a chegada deixa de arrastar
@@ -16,15 +18,27 @@ retorno recusa qualquer deslocamento maior que MAX_OFFSET + 0,5 grau, entao
 depois de uma excursao de 7,3 graus nao havia como voltar num comando so, e a
 recuperacao virava trabalho manual em etapas.
 
-Sem argumentos, pergunta os deltas. Com argumentos, nao pergunta nada alem da
-confirmacao, o que permite usar em sequencia.
+``--para AZ ALT``, em graus, leva a uma posicao absoluta com verificacao. O AM5
+nao aceita ``SlewToAltAz`` (o driver reporta ``CanSlewAltAz = False``), entao
+voltar a mao e trabalhoso. Usa a rotina de retorno do tracker e da calibracao:
+pulsos com realimentacao pelo encoder, repetidos ate ficar dentro da
+tolerancia, respeitando os limites de deslocamento configurados. Termina com
+codigo 1 se nao chegou a tolerancia. Neste modo a confirmacao e sempre pedida:
+``--sim``, ``--velocidade`` e ``--tolerancia`` sao recusados.
+
+Os dois modos recusam mover enquanto ``motivo_de_uso()`` acusar outro programa
+usando o mount. Sem argumentos, pergunta os deltas. Com ``--delta``, nao
+pergunta nada alem da confirmacao, o que permite usar em sequencia.
+
+**A forma fundida nunca rodou em hardware.** O primeiro teste e com o Caio ao
+lado.
 
 Uso, a partir da pasta Codigos, com o servidor ASCOM aberto:
 
     python programas_principais/mover_mount.py
-    python programas_principais/mover_mount.py --az -7.311
-    python programas_principais/mover_mount.py --az 0.5 --alt -0.2 --sim
-    python programas_principais/mover_mount.py --para-az 0 --para-alt 0
+    python programas_principais/mover_mount.py --delta -7.311 0
+    python programas_principais/mover_mount.py --delta 0.5 -0.2 --sim
+    python programas_principais/mover_mount.py --para 0.0203 0.0036
 """
 
 from __future__ import annotations
@@ -48,6 +62,7 @@ from modulos.controle.mount_ascom import (
 )
 from modulos.controle.mount_em_uso import motivo_de_uso
 from modulos.controle.mount_pid import move_axes_pid_2d
+from modulos.controle.tracker_seguranca import retornar_posicao_inicial
 
 VELOCIDADE_PADRAO = 0.5      # deg/s
 TOLERANCIA_PADRAO = 0.005    # graus
@@ -77,27 +92,37 @@ def perguntar(rotulo: str) -> float:
             print("    numero invalido.")
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--az", type=float, default=None, help="delta em azimute, graus")
-    parser.add_argument("--alt", type=float, default=None, help="delta em altitude, graus")
-    parser.add_argument("--para-az", type=float, default=None,
-                        help="azimute ALVO em vez de delta")
-    parser.add_argument("--para-alt", type=float, default=None,
-                        help="altitude ALVO em vez de delta")
-    parser.add_argument("--velocidade", type=float, default=VELOCIDADE_PADRAO,
-                        help=f"deg/s (padrao {VELOCIDADE_PADRAO})")
-    parser.add_argument("--tolerancia", type=float, default=TOLERANCIA_PADRAO,
-                        help=f"graus (padrao {TOLERANCIA_PADRAO})")
-    parser.add_argument("--sim", action="store_true",
-                        help="nao pergunta confirmacao; para uso em sequencia")
-    args = parser.parse_args()
+def ir_para(alvo_az: float, alvo_alt: float) -> int:
+    """Modo --para: posicao absoluta pela rotina de retorno do tracker."""
+    ensure_connected()
+    az_atual, alt_atual = read_altaz()
+    print(f"Mount em {mount_address()}")
+    print(f"  posicao atual: az {az_atual:.5f}  alt {alt_atual:.5f}")
 
-    uso = motivo_de_uso()
-    if uso:
-        print(f"Mount em uso ({uso}). Encerre antes de mover.")
-        return 2
+    print(f"  posicao alvo : az {alvo_az:.5f}  alt {alvo_alt:.5f}")
+    d_az = (alvo_az - az_atual) * 3600.0
+    d_alt = (alvo_alt - alt_atual) * 3600.0
+    print(f"  deslocamento : az {d_az:+.1f}″  alt {d_alt:+.1f}″")
+    print("\nESTE PROGRAMA MOVE O MOUNT.")
+    if input("Digite SIM para continuar: ").strip().upper() != "SIM":
+        print("Cancelado.")
+        return 1
 
+    resultado = retornar_posicao_inicial(alvo_az, alvo_alt)
+    print()
+    for chave in ("success", "attempts", "final_azimuth_deg", "final_altitude_deg", "error"):
+        if chave in resultado:
+            print(f"  {chave:20s} = {resultado[chave]}")
+    if resultado.get("success"):
+        print("\nPosicao restaurada dentro da tolerancia.")
+        return 0
+    print("\nNAO chegou a tolerancia. Rode de novo ou confira o mount.")
+    return 1
+
+
+def mover_delta(delta: list[float] | None, velocidade: float, tolerancia: float,
+                sim: bool) -> int:
+    """Modo --delta: deslocamento rapido, fatiado no limite de seguranca."""
     ensure_connected()
     ensure_unparked()
     ensure_not_tracking()
@@ -105,12 +130,8 @@ def main() -> int:
     print(f"Mount em {mount_address()}")
     print(f"  posicao atual: az {az_atual:+.5f}  alt {alt_atual:+.5f}")
 
-    if args.para_az is not None or args.para_alt is not None:
-        delta_az = (args.para_az - az_atual) if args.para_az is not None else 0.0
-        delta_alt = (args.para_alt - alt_atual) if args.para_alt is not None else 0.0
-    elif args.az is not None or args.alt is not None:
-        delta_az = args.az or 0.0
-        delta_alt = args.alt or 0.0
+    if delta is not None:
+        delta_az, delta_alt = delta
     else:
         print()
         delta_az = perguntar("AZIMUTE")
@@ -130,17 +151,17 @@ def main() -> int:
     print(f"  deslocamento : az {delta_az:+.5f}  alt {delta_alt:+.5f} graus")
     print(f"  destino      : az {az_atual + delta_az:+.5f}  "
           f"alt {alt_atual + delta_alt:+.5f}")
-    print(f"  velocidade   : {args.velocidade} deg/s   "
-          f"tolerancia {args.tolerancia} graus")
+    print(f"  velocidade   : {velocidade} deg/s   "
+          f"tolerancia {tolerancia} graus")
     maior = max(abs(delta_az), abs(delta_alt))
-    print(f"  tempo estimado: ~{maior / args.velocidade:.0f} s")
+    print(f"  tempo estimado: ~{maior / velocidade:.0f} s")
     if n > 1:
         print(f"  EM {n} ETAPAS, porque o limite de seguranca por comando e "
               f"{PASSO_MAXIMO_AZ:g} grau em azimute")
 
     print()
     print("ESTE PROGRAMA MOVE O MOUNT.")
-    if not args.sim and input("Digite SIM para continuar: ").strip().upper() != "SIM":
+    if not sim and input("Digite SIM para continuar: ").strip().upper() != "SIM":
         print("Cancelado; nada foi movido.")
         return 1
 
@@ -150,8 +171,8 @@ def main() -> int:
                 print(f"\n  etapa {i}/{n}: az {passo_az:+.5f}  alt {passo_alt:+.5f}")
             move_axes_pid_2d(
                 True, passo_az, passo_alt,
-                max_velocity_deg_s=args.velocidade,
-                tolerance_deg=args.tolerancia,
+                max_velocity_deg_s=velocidade,
+                tolerance_deg=tolerancia,
             )
     except KeyboardInterrupt:
         print("\n  interrompido; parando os eixos.")
@@ -168,6 +189,42 @@ def main() -> int:
     print(f"  erro do movimento: az {erro_az * 3600:+.1f}  "
           f"alt {erro_alt * 3600:+.1f} arcsec")
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    modo = parser.add_mutually_exclusive_group()
+    modo.add_argument("--delta", type=float, nargs=2, metavar=("AZ", "ALT"),
+                      help="desloca por AZ e ALT, em graus")
+    modo.add_argument("--para", type=float, nargs=2, metavar=("AZ", "ALT"),
+                      help="leva a posicao absoluta AZ e ALT, em graus, pela rotina de retorno")
+    parser.add_argument("--velocidade", type=float, default=None,
+                        help=f"deg/s, so com --delta (padrao {VELOCIDADE_PADRAO})")
+    parser.add_argument("--tolerancia", type=float, default=None,
+                        help=f"graus, so com --delta (padrao {TOLERANCIA_PADRAO})")
+    parser.add_argument("--sim", action="store_true",
+                        help="nao pergunta confirmacao; so com --delta, para uso em sequencia")
+    args = parser.parse_args()
+
+    if args.para is not None and (
+        args.sim or args.velocidade is not None or args.tolerancia is not None
+    ):
+        parser.error("--sim, --velocidade e --tolerancia valem so com --delta; "
+                     "--para usa a rotina de retorno e sempre pede confirmacao")
+
+    uso = motivo_de_uso()
+    if uso:
+        print(f"Mount em uso ({uso}). Encerre antes de mover.")
+        return 2
+
+    if args.para is not None:
+        return ir_para(*args.para)
+    return mover_delta(
+        args.delta,
+        VELOCIDADE_PADRAO if args.velocidade is None else args.velocidade,
+        TOLERANCIA_PADRAO if args.tolerancia is None else args.tolerancia,
+        args.sim,
+    )
 
 
 if __name__ == "__main__":

@@ -106,7 +106,8 @@ class ProgramaTests(unittest.TestCase):
 
         tela = TelaKolmogorov(512, 1.0, semente=0)
         for modo in "gotc":
-            e = h.Estado(modo=modo, cx=300, cy=200, raio=80, r0=20.0)
+            # Invertido de proposito: a inversao das telas simples nao vale aqui.
+            e = h.Estado(modo=modo, cx=300, cy=200, raio=80, r0=20.0, invertido=True)
             quadro, *_ = h.montar_holograma(e, 640, 400, tela)
             yy, xx = np.nonzero(quadro)
             self.assertTrue(np.all(np.hypot(xx - 300, yy - 200) <= 80.0 + 1e-9), modo)
