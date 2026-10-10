@@ -86,13 +86,29 @@ $config = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoing
     -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 
 # 1. Boot, como SYSTEM, pela serial: age com a maquina trancada.
-$acao = New-ScheduledTaskAction -Execute $python -WorkingDirectory $codigos `
-    -Argument "programas_principais\parar_mount.py --via serial --aguardar 600"
-$gatilho = New-ScheduledTaskTrigger -AtStartup
-$quem = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-Register-ScheduledTask -TaskName "Parar mount no boot" -Action $acao -Trigger $gatilho `
-    -Principal $quem -Settings $config -Force | Out-Null
-Write-Host "ok  Parar mount no boot (SYSTEM, serial)"
+#    SEM NADA CONFIGURADO, NAO registra: a parada cairia na descoberta, que
+#    pergunta :GVP# em todas as portas a cada boot, antes de o programa do outro
+#    grupo abrir as dele. Achado em 2026-10-12 no PC da UFF, que estava assim
+#    desde 2026-09-29. Uma tarefa ja registrada e removida.
+if ($como -eq "nada") {
+    if (Get-ScheduledTask -TaskName "Parar mount no boot" -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName "Parar mount no boot" -Confirm:$false
+        Write-Host "ok  Parar mount no boot REMOVIDA (nada configurado)" -ForegroundColor Yellow
+    }
+    Write-Host "--  Parar mount no boot NAO registrada: sem serial_mount_local.py ela" -ForegroundColor Yellow
+    Write-Host "    mandaria bytes a todas as portas seriais. Configure a identidade USB"
+    Write-Host "    do mount (com ele ligado) e rode este script de novo ANTES da"
+    Write-Host "    proxima sessao do tracker: ate la, nada para o mount depois de um"
+    Write-Host "    reinicio do PC."
+} else {
+    $acao = New-ScheduledTaskAction -Execute $python -WorkingDirectory $codigos `
+        -Argument "programas_principais\parar_mount.py --via serial --aguardar 600"
+    $gatilho = New-ScheduledTaskTrigger -AtStartup
+    $quem = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    Register-ScheduledTask -TaskName "Parar mount no boot" -Action $acao -Trigger $gatilho `
+        -Principal $quem -Settings $config -Force | Out-Null
+    Write-Host "ok  Parar mount no boot (SYSTEM, serial)"
+}
 
 # 2. As tarefas antigas, que abriam janela na sessao de quem estivesse logado.
 foreach ($nome in "Parar mount no logon", "Publicar estado do PC") {
@@ -122,4 +138,5 @@ Write-Host "num PowerShell COMUM (nao este), com setx; ver publicar_estado_pc.py
 Write-Host "`nConferencia:"
 Get-ScheduledTask -TaskName "Parar mount no boot", "Parar mount no logon", "Publicar estado do PC" `
     -ErrorAction SilentlyContinue | Select-Object TaskName, State | Format-Table -AutoSize
-(Get-ScheduledTask -TaskName "Parar mount no boot").Actions | Select-Object Execute, Arguments | Format-List
+$boot = Get-ScheduledTask -TaskName "Parar mount no boot" -ErrorAction SilentlyContinue
+if ($boot) { $boot.Actions | Select-Object Execute, Arguments | Format-List }

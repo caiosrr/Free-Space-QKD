@@ -858,7 +858,13 @@ powershell -ExecutionPolicy Bypass -File diversos\instalacao\registrar_tarefas_s
 Ele registra a tarefa de boot e **remove** as duas antigas, a do logon e a do
 aviso pelo Telegram, se existirem. Confere se a identidade USB do mount está
 configurada (seção 7) e, se não estiver, lista os aparelhos do PC sem abrir
-nenhuma porta. E liga o **reinício automático após tela azul**, se estiver
+nenhuma porta. **Sem configuração nenhuma** (nem identidade USB nem porta
+fixa), ele **não registra** a tarefa de boot, e remove a que existir: ela
+cairia na descoberta, que pergunta `:GVP#` em todas as portas seriais a cada
+boot, antes de o programa do outro grupo abrir as dele. Foi o que se achou no
+PC da UFF em 2026-10-12: sem `serial_mount_local.py` desde a troca de PC, em
+2026-09-29. Nesse caso, até a identidade ser configurada, nada para o mount
+depois de um reinício. E liga o **reinício automático após tela azul**, se estiver
 desligado: é o que transforma um travamento com tela azul em reinício, e
 portanto na tarefa de boot. **A versão de 2026-10-09 nunca rodou num PC de
 verdade.**

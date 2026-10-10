@@ -1642,3 +1642,11 @@ nenhuma; sem o mount, nada é tocado. Detalhes no documento 06, seções 7 e 9.
 Falta, com a senha de administrador: ler a identidade do AM5 no PC da UFF,
 configurar `serial_mount_local.py`, rodar o script de instalação e testar a
 parada direta à mão com o mount parado.
+
+**Achado no PC da UFF, 2026-10-12:** não existia `serial_mount_local.py`. A
+tarefa de boot, registrada desde a troca de PC (2026-09-29), estava portanto no
+modo de descoberta: a cada inicialização, `:GVP#` em todas as portas seriais,
+inclusive as dos lasers OBIS do outro grupo, antes de o Coherent abri-las. O
+script de instalação passou a recusar registrar a tarefa sem configuração
+nenhuma. Até a identidade USB do mount ser configurada (com ele ligado), o PC
+fica sem a tarefa de boot.
