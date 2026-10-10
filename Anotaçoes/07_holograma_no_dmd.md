@@ -1,6 +1,6 @@
 # 07. Holograma de fase no DMD
 
-Conferido contra o commit `f8608cf`, em 2026-10-01.
+Conferido contra o commit `4fcdaba`, em 2026-10-10.
 
 Camada 2 da documentação. Cobre `modulos/dmd/holograma.py`, a física, e
 `diversos/ferramentas/dmd_holograma.py`, o programa de bancada. A base teórica
@@ -593,27 +593,8 @@ o verde fica ligado ~0,68 do tempo que deveria e o azul ~0,50, e o branco pulsa.
 A medida usa o obturador rolante da ASI: com a luz do DMD espalhada sobre o
 sensor inteiro e exposição de 32 µs, cada linha é um instante de tempo.
 
-`Codigos/diversos/ferramentas/dmd_piscada.py`, linhas 50 a 66
-
-```python
-def medir_quadro(img: np.ndarray, bayer: bool = True) -> dict:
-    """Fracao ligada e trocas por 100 linhas, num quadro com a luz cobrindo o sensor."""
-    r = img.astype(np.float64)
-    if r.ndim == 3:
-        r = r.mean(axis=2)
-    if bayer:
-        r = r[0::2, 0::2]  # vermelho do RGGB: o HeNe so acende esse canal
-    col = r.mean(axis=0)
-    colunas = col > 0.5 * col.max()
-    perfil = _suavizar(r[:, colunas].mean(axis=1), 3)
-    env = _suavizar(_max_movel(perfil, 151), 151)
-    uteis = env > 0.25 * env.max()
-    ligado = float(perfil[uteis].sum() / env[uteis].sum())
-    on = (perfil > 0.5 * env) & uteis
-    trocas = float(np.sum(np.diff(on.astype(int)) != 0) / max(uteis.sum(), 1) * 100)
-    return {"ligado": ligado, "trocas": trocas, "linhas": int(uteis.sum()),
-            "saturados": float(np.mean(r >= 250))}
-```
+Programa removido em 2026-10-10, commit `4fcdaba`; o resultado está no roteiro,
+seção "DMD: por que os espelhos piscam no vídeo HDMI".
 
 O número `ligado` depende da forma da mancha desfocada, então só vale comparado
 com outro grupo de quadros **na mesma montagem**, de preferência o gerador
