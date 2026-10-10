@@ -91,6 +91,52 @@ def descobrir_porta(baud: int = BAUD_PADRAO, timeout: float = 1.0) -> str | None
     return None
 
 
+def porta_pela_identidade(vid: int, pid: int, serie: str | None,
+                          aparelhos=None) -> tuple[str | None, str]:
+    """A porta do unico aparelho USB com esse fabricante, produto e serie.
+
+    So LE a lista do Windows: nenhuma porta e aberta, nenhum byte sai. Devolve
+    (porta, descricao); porta None quando nenhum ou mais de um aparelho bate,
+    e nesse caso quem chamou nao deve tocar em porta nenhuma.
+    """
+    if aparelhos is None:
+        try:
+            from serial.tools import list_ports  # noqa: PLC0415
+        except ImportError:
+            return None, "pyserial ausente: python -m pip install pyserial"
+        aparelhos = list_ports.comports()
+    achados = [a for a in aparelhos
+               if a.vid == vid and a.pid == pid
+               and (serie is None or (a.serial_number or "") == serie)]
+    alvo = f"USB {vid:04X}:{pid:04X}" + (f" serie {serie}" if serie else "")
+    if not achados:
+        return None, f"mount ({alvo}) nao esta ligado a este PC; nenhuma porta tocada"
+    if len(achados) > 1:
+        portas = ", ".join(a.device for a in achados)
+        return None, (f"{len(achados)} aparelhos batem com {alvo} ({portas}); "
+                      "defina USB_SERIE. Nenhuma porta tocada")
+    return achados[0].device, f"mount ({alvo}) em {achados[0].device}"
+
+
+def porta_do_mount(baud: int = BAUD_PADRAO) -> tuple[str | None, str]:
+    """Qual porta abrir, pela configuracao da maquina. Ver configuracoes/serial_mount.py.
+
+    A identidade USB vem primeiro: com ela, um aparelho de outro grupo nunca
+    recebe bytes, nem se o Windows trocar o numero das portas. O numero fixo
+    vem depois, e a descoberta, que pergunta a todas as portas, por ultimo.
+    """
+    from modulos.configuracoes import serial_mount as cfg  # noqa: PLC0415
+
+    if cfg.USB_VID is not None and cfg.USB_PID is not None:
+        return porta_pela_identidade(cfg.USB_VID, cfg.USB_PID, cfg.USB_SERIE)
+    if cfg.PORTA_SERIAL is not None:
+        return cfg.PORTA_SERIAL, f"porta fixa {cfg.PORTA_SERIAL}, sem conferir a identidade USB"
+    porta = descobrir_porta(baud)
+    if porta is None:
+        return None, "nenhuma porta serial respondeu ao LX200"
+    return porta, f"descoberta em {porta}"
+
+
 def parar_pela_serial(
     porta: str | None = None,
     baud: int = BAUD_PADRAO,
@@ -102,15 +148,9 @@ def parar_pela_serial(
     except ImportError:
         return False, "pyserial ausente: python -m pip install pyserial"
     if porta is None:
-        # Porta configurada na maquina vem antes da descoberta: com ela, nenhuma
-        # outra porta recebe bytes. Ver modulos/configuracoes/serial_mount.py.
-        from modulos.configuracoes.serial_mount import PORTA_SERIAL  # noqa: PLC0415
-
-        porta = PORTA_SERIAL
-    if porta is None:
-        porta = descobrir_porta(baud)
+        porta, como = porta_do_mount(baud)
         if porta is None:
-            return False, "nenhuma porta serial respondeu ao LX200"
+            return False, como
     try:
         with serial.Serial(porta, baud, timeout=timeout) as s:
             for comando in PARADAS:

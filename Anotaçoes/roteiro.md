@@ -1624,3 +1624,21 @@ com o espelho realinhado passou quase toda.
 mínimo e as mesmas configurações do holograma, só a +1. O filtro participa
 da mancha de cima (reflexo fantasma ou corte pela borda); a inclinação da
 tela não explica isso sozinha. Teste seguinte: o ND 0,6 sozinho.
+
+## PC da UFF: menos tarefas agendadas, mount pela identidade USB, 2026-10-09
+
+O pessoal do laboratório reclamou de uma janela de console abrindo de tempos em
+tempos no PC compartilhado. Eram duas tarefas na sessão do usuário, com o
+Python de console: o aviso pelo Telegram, a cada 15 min, e a parada pelo ASCOM
+no logon, que esperava 10 min por um servidor que não abre sozinho. A do logon
+saiu; o aviso passou a ser subido pelo tracker, sem janela, só durante a
+sessão. Fica só a tarefa de boot, como SYSTEM, sem tela.
+
+Na mesma conversa: a tarefa de boot mandava os comandos de parada para a COM4
+fixa, sem conferir quem estava do outro lado. Se o Windows trocasse o número, um
+laser OBIS do outro grupo os receberia. Agora a porta é achada pela identidade
+USB do mount (fabricante, produto, número de série), lida sem abrir porta
+nenhuma; sem o mount, nada é tocado. Detalhes no documento 06, seções 7 e 9.
+Falta, com a senha de administrador: ler a identidade do AM5 no PC da UFF,
+configurar `serial_mount_local.py`, rodar o script de instalação e testar a
+parada direta à mão com o mount parado.

@@ -102,7 +102,7 @@ cenário que o anterior não alcança.
 | 6 | vigia externo | processo filho | tracker morto, Windows de pé | PC inteiro morto |
 | 7 | escada de parada | dentro do vigia | servidor ASCOM morto ou travado | PC inteiro morto |
 | 8 | trava de uso | todos os que param | parar um uso legítimo por engano | nada, é o contrário |
-| 9 | tarefas de boot | agendador do Windows | PC reiniciou | PC que não volta |
+| 9 | tarefa de boot | agendador do Windows | PC reiniciou | PC que não volta |
 
 As seções seguem essa ordem.
 
@@ -119,7 +119,7 @@ beacon está.
 SIGNAL_TIMEOUT_S = 0.45
 ```
 
-`Codigos/modulos/controle/tracker_loop.py`, linhas 390 a 400
+`Codigos/modulos/controle/tracker_loop.py`, linhas 415 a 425
 
 ```python
                 measurement_age = (loop_t0 - measurement_ts) if measurement_ts else 1e9
@@ -141,7 +141,7 @@ e uma medida velha é tratada como ausência de medida.
 
 E, aconteça o que acontecer dentro do laço, a saída dele manda zero:
 
-`Codigos/modulos/controle/tracker_loop.py`, linhas 705 a 706
+`Codigos/modulos/controle/tracker_loop.py`, linhas 734 a 735
 
 ```python
         finally:
@@ -175,7 +175,7 @@ do tracker, e o motivo de existirem as seções 5 a 9.
 Uma thread separada, a 5 Hz, lê a posição do mount e encerra a sessão em três
 situações.
 
-`Codigos/modulos/configuracoes/tracker.py`, linhas 314 a 319
+`Codigos/modulos/configuracoes/tracker.py`, linhas 353 a 358
 
 ```python
 # Limites da sessao longa.
@@ -304,7 +304,7 @@ margem (`tracker_seguranca.py`, linhas 133 a 139).
 Não é uma proteção que age; é a que limita o estrago quando todas as outras
 falham.
 
-`Codigos/modulos/configuracoes/tracker.py`, linhas 321 a 336
+`Codigos/modulos/configuracoes/tracker.py`, linhas 360 a 375
 
 ```python
 # Velocidade maxima durante o tracking. O limite menor reduz a distancia que o
@@ -413,7 +413,7 @@ continua sendo escrita.
 
 O tracker o sobe sozinho, como processo filho:
 
-`Codigos/programas_principais/tracker.py`, linhas 28 a 32
+`Codigos/programas_principais/tracker.py`, linhas 39 a 43
 
 ```python
 # Folga entre a ultima linha de telemetria e o disparo. Os 25 s padrao do vigia
@@ -423,12 +423,15 @@ O tracker o sobe sozinho, como processo filho:
 VIGIA_DISPARO_S = 60.0
 ```
 
-`Codigos/programas_principais/tracker.py`, linhas 99 a 107
+`Codigos/programas_principais/tracker.py`, linhas 172 a 183
 
 ```python
     vigia = iniciar_vigia() if args.vigia else None
     if vigia is not None:
         print(f"Vigia do mount ativo (pid {vigia.pid}), saida em {VIGIA_LOG}.")
+    aviso = iniciar_aviso_telegram()
+    if aviso is not None:
+        print(f"Aviso pelo Telegram ativo (pid {aviso.pid}), saida em {AVISO_LOG}.")
     try:
         main(session_hours=args.horas, executar_autoteste=args.autoteste)
     finally:
@@ -441,7 +444,7 @@ O arranjo é deliberado nos dois desfechos. Se o tracker termina direito, o
 `finally` encerra o vigia. Se o tracker é morto sem rodar o `finally`, que é o
 caso que o vigia existe para cobrir, o filho **sobrevive** e age sozinho. O
 vigia roda em grupo de processos próprio, para o Ctrl+C do console não chegar
-nele direto (`tracker.py`, linhas 68 a 78).
+nele direto (`tracker.py`, linhas 83 a 107).
 
 O coração do vigia:
 
@@ -522,7 +525,7 @@ Os dois caminhos têm furos complementares:
 
 Encadeá-los fecha os dois:
 
-`Codigos/modulos/controle/parada_emergencia.py`, linhas 208 a 236
+`Codigos/modulos/controle/parada_emergencia.py`, linhas 248 a 276
 
 ```python
     # 1. Alpaca, o caminho normal e o unico que respeita o driver.
@@ -562,7 +565,7 @@ a porta serial, para o degrau 4 poder falar com o mount.
 
 ### A parada pela serial confere pela posição
 
-`Codigos/modulos/controle/parada_emergencia.py`, linhas 115 a 128
+`Codigos/modulos/controle/parada_emergencia.py`, linhas 155 a 168
 
 ```python
         with serial.Serial(porta, baud, timeout=timeout) as s:
@@ -601,18 +604,49 @@ depois de 99″, e a altitude lida pela serial bateu com a do ASCOM.
 
 ### Dois cuidados de implementação
 
-**A porta serial é configurada por máquina, ou descoberta.** O mount responde
-em `COM5` num PC, `COM6` em outro e `COM4` no novo da UFF. Com a porta
-definida em `serial_mount_local.py`, fora do git, só ela é aberta. Sem ela, a
-escada pergunta `:GVP#` em cada porta do sistema e usa a primeira que
-responder. **No PC compartilhado da UFF a porta configurada é obrigatória**:
-ele tem um laser de 405 nm de outro grupo, e a descoberta mandaria bytes ao
-controlador dele no boot, antes de o programa do laser abrir a porta. A
-descoberta, quando usada, fica (`parada_emergencia.py`, linhas 74 a 91).
+**A porta do mount é achada pela identidade USB.** O mount respondeu em
+`COM5` num PC, `COM6` em outro e `COM4` no novo da UFF, e esse número o Windows
+pode trocar: basta o mount ir para outra entrada USB, ou um aparelho de outro
+grupo ser ligado antes. No PC compartilhado da UFF os lasers OBIS de outro
+grupo também são portas seriais USB, e um número fixo errado mandaria a eles os
+comandos de parada no boot. Por isso, desde 2026-10-09, a configuração da
+máquina (`serial_mount_local.py`, fora do git) guarda o fabricante, o produto e
+o número de série USB do mount, e a parada só abre a porta do aparelho que bate
+com os três. O Windows informa esses números sem que porta nenhuma seja aberta:
+
+`Codigos/modulos/controle/parada_emergencia.py`, linhas 121 a 137
+
+```python
+def porta_do_mount(baud: int = BAUD_PADRAO) -> tuple[str | None, str]:
+    """Qual porta abrir, pela configuracao da maquina. Ver configuracoes/serial_mount.py.
+
+    A identidade USB vem primeiro: com ela, um aparelho de outro grupo nunca
+    recebe bytes, nem se o Windows trocar o numero das portas. O numero fixo
+    vem depois, e a descoberta, que pergunta a todas as portas, por ultimo.
+    """
+    from modulos.configuracoes import serial_mount as cfg  # noqa: PLC0415
+
+    if cfg.USB_VID is not None and cfg.USB_PID is not None:
+        return porta_pela_identidade(cfg.USB_VID, cfg.USB_PID, cfg.USB_SERIE)
+    if cfg.PORTA_SERIAL is not None:
+        return cfg.PORTA_SERIAL, f"porta fixa {cfg.PORTA_SERIAL}, sem conferir a identidade USB"
+    porta = descobrir_porta(baud)
+    if porta is None:
+        return None, "nenhuma porta serial respondeu ao LX200"
+    return porta, f"descoberta em {porta}"
+```
+
+Se nenhum aparelho bater, ou mais de um, nada é aberto e o motivo vai para o
+diário (`parada_emergencia.py`, linhas 94 a 118). O número fixo e a descoberta
+por `:GVP#` em todas as portas (linhas 74 a 91) continuam para máquinas sem a
+identidade configurada; o script de instalação avisa quando ela falta e lista
+os aparelhos. **A parada pela identidade nunca rodou com o mount de verdade**;
+foi conferida por testes com aparelhos simulados
+(`diversos/testes/test_porta_e_aviso.py`).
 
 **O servidor é localizado por quem escuta na porta do Alpaca**, via `netstat`,
 e não pelo nome do programa, que muda conforme seja ASCOM Remote, driver
-nativo ou simulador (`parada_emergencia.py`, linhas 129 a 155).
+nativo ou simulador (`parada_emergencia.py`, linhas 175 a 201).
 
 ### O que nunca rodou em hardware
 
@@ -652,7 +686,7 @@ e uma parada direta rodada durante uma **calibração** passou reto, porque a
 calibração não escreve telemetria de tracker. A pergunta certa é "alguém está
 comandando o mount?", e não "o tracker está gravando?".
 
-`Codigos/modulos/controle/mount_em_uso.py`, linhas 50 a 63
+`Codigos/modulos/controle/mount_em_uso.py`, linhas 55 a 72
 
 ```python
 def motivo_de_uso() -> str | None:
@@ -668,12 +702,17 @@ def motivo_de_uso() -> str | None:
     if marca is not None and agora - marca < CALIBRACAO_VIVA_S:
         return f"calibracao escreveu ha {agora - marca:.0f} s"
 
+    marca = _mais_recente(VARREDURA_RUNS, "*/varredura.csv")
+    if marca is not None and agora - marca < VARREDURA_VIVA_S:
+        return f"varredura de apontamento gravando ha {agora - marca:.0f} s"
+
     return None
 ```
 
 As janelas são diferentes de propósito: o tracker escreve a cada segundo, então
 30 s cobrem qualquer engasgo; a calibração grava por varredura, e cada
-varredura leva dezenas de segundos, então precisa de 180 s.
+varredura leva dezenas de segundos, então precisa de 180 s. A varredura de
+apontamento (`varrer_apontamento.py`) grava a posição a cada 0,5 s e usa 30 s.
 
 Na dúvida, a trava responde que **não** está em uso: deixar de parar um mount à
 deriva é pior do que uma leitura de disco que falhou.
@@ -708,11 +747,11 @@ Testado só em software: os três perfis de câmera gravam onde o vigia olha.
 
 ---
 
-## 9. As tarefas de boot
+## 9. A tarefa de boot
 
-Tudo até aqui depende de o Windows estar de pé. Se o PC reinicia, sobram as
-tarefas agendadas para rodar na inicialização. São duas, com caminhos
-diferentes:
+Tudo até aqui depende de o Windows estar de pé. Se o PC reinicia, sobra o que
+estiver agendado para rodar na inicialização. Até 2026-10-09 eram duas
+tarefas, com caminhos diferentes:
 
 | programa | caminho até o mount | precisa de alguém logado? |
 |---|---|---|
@@ -748,7 +787,14 @@ def tentar_parar() -> tuple[bool, str]:
 
 Numa conta com senha, depois de um reinício ninguém faz login, e o
 `parar_mount.py` nunca alcança o mount. Por isso existe o `parar_mount_direto`,
-que fala pela serial e não precisa de ninguém. A janela de reação do boot é de
+que fala pela serial e não precisa de ninguém.
+
+**Em 2026-10-09 ficou só a tarefa direta.** A do logon dependia de alguém
+abrir o servidor ASCOM, que não abre sozinho, em até 10 min depois do login; na
+prática ficava esse tempo com uma janela de console aberta na tela de quem
+estivesse no PC compartilhado, e desistia. O pessoal do laboratório reclamou
+das janelas, e ela não protegia nada que a direta não proteja. A direta roda
+como SYSTEM, sem tela, e não abre janela nenhuma. A janela de reação do boot é de
 60 a 120 s, ou 4 a 8 arcmin na velocidade do micropulso.
 
 Todos os que param deixam rastro no mesmo diário,
@@ -763,13 +809,25 @@ script registra tudo de uma vez, num PowerShell de administrador, a partir de
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File diversos\instalacao\registrar_tarefas_seguranca.ps1
-egistrar_tarefas_seguranca.ps1
 ```
 
-Ele registra as duas tarefas, e o aviso pelo Telegram quando recebe o token.
-E liga o **reinício automático após tela azul**, se estiver desligado: é o que
-transforma um travamento com tela azul em reinício, e portanto na tarefa de
-boot. **Nunca rodou num PC de verdade.**
+Ele registra a tarefa de boot e **remove** as duas antigas, a do logon e a do
+aviso pelo Telegram, se existirem. Confere se a identidade USB do mount está
+configurada (seção 7) e, se não estiver, lista os aparelhos do PC sem abrir
+nenhuma porta. E liga o **reinício automático após tela azul**, se estiver
+desligado: é o que transforma um travamento com tela azul em reinício, e
+portanto na tarefa de boot. **A versão de 2026-10-09 nunca rodou num PC de
+verdade.**
+
+**O aviso pelo Telegram saiu do agendador.** Era uma tarefa a cada 15 min, com
+o `python.exe` de console, e abria uma janela na tela a cada rodada. Agora o
+tracker o sobe ao começar a sessão, sem janela, como faz com o vigia
+(`programas_principais/tracker.py`, linhas 110 a 135). Ele avisa o começo e o
+fim da gravação, inclusive o fim por morte do tracker, porque é outro processo,
+e sai sozinho depois de avisar o fim. Token e chat vêm das variáveis
+`QKD_TELEGRAM_TOKEN` e `QKD_TELEGRAM_CHAT`, definidas uma vez com `setx`, sem
+administrador. **Nunca rodou numa sessão real**; o laço foi conferido por
+testes.
 
 Para conferir o que está registrado:
 
@@ -781,7 +839,7 @@ schtasks /query /fo LIST /v | Select-String -Pattern "parar_mount" -Context 0,12
 
 **Para conferir**
 
-1. Por que as duas tarefas, e não só a direta, que funciona sem login?
+1. Por que a tarefa do logon podia sair sem perder proteção?
 2. O PC reinicia às 3h por Windows Update com o tracker rodando. Siga a
    sequência: quais proteções das seções 2 a 9 disparam, e quais não?
 

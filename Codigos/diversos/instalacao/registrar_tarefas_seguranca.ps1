@@ -1,4 +1,4 @@
-# Registra as tarefas agendadas de seguranca do mount num PC novo.
+# Registra a tarefa agendada de seguranca do mount num PC novo.
 #
 # Existe porque em 2026-09-29 a bancada da UFF mudou de PC, e tudo que parava o
 # mount depois de um reinicio tinha sido registrado a mao no PC antigo, sem os
@@ -9,10 +9,15 @@
 #   "Parar mount no boot"   como SYSTEM, na inicializacao, SEM precisar de login:
 #                           parar_mount_direto.py --aguardar 600, pela serial.
 #                           E a defesa real contra o reinicio do Windows Update.
-#   "Parar mount no logon"  no login do usuario: parar_mount.py --aguardar 600,
-#                           pelo servidor ASCOM, que so sobe com alguem logado.
-#   "Publicar estado do PC" a cada 15 min, avisa pelo Telegram se a sessao do
-#                           tracker parou. So e registrada se o token for dado.
+#                           Roda sem janela (SYSTEM nao tem tela).
+#
+# O que REMOVE, se existir (mudanca de 2026-10-09, a pedido do laboratorio, que
+# via um console abrindo de tempos em tempos no PC compartilhado):
+#
+#   "Parar mount no logon"  esperava o servidor ASCOM, que nao abre sozinho:
+#                           na pratica ficava 10 min com uma janela e desistia.
+#   "Publicar estado do PC" o aviso pelo Telegram a cada 15 min. Agora o tracker
+#                           o sobe sem janela, so durante a sessao.
 #
 # E confere o reinicio automatico apos tela azul, que transforma um travamento
 # com tela azul em reinicio, e portanto na tarefa de boot.
@@ -20,14 +25,8 @@
 # Uso, num PowerShell COMO ADMINISTRADOR, da pasta Codigos:
 #
 #   powershell -ExecutionPolicy Bypass -File diversos\instalacao\registrar_tarefas_seguranca.ps1
-#   powershell -ExecutionPolicy Bypass -File diversos\instalacao\registrar_tarefas_seguranca.ps1 -TelegramToken "123:ABC" -TelegramChat "456"
 #
-# Rodar de novo substitui as tarefas (-Force); nao duplica.
-
-param(
-    [string]$TelegramToken = "",
-    [string]$TelegramChat = ""
-)
+# Rodar de novo substitui a tarefa (-Force); nao duplica.
 
 $ErrorActionPreference = "Stop"
 
@@ -50,12 +49,25 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "Rode: $python -m pip install -r requirements.txt"
     exit 1
 }
-$portaLocal = Join-Path $codigos "modulos\configuracoes\serial_mount_local.py"
-if (-not (Test-Path $portaLocal)) {
-    Write-Host "ATENCAO: porta serial do mount nao configurada ($portaLocal)." -ForegroundColor Yellow
-    Write-Host "  Sem ela a parada de emergencia pergunta a identidade em TODAS as portas"
-    Write-Host "  seriais, inclusive as de equipamentos de outros grupos. Num PC compartilhado,"
-    Write-Host "  crie o arquivo a partir de serial_mount_local.exemplo.py antes de seguir.`n"
+
+# Como a parada vai achar o mount. So a identidade USB garante que nenhum
+# aparelho de outro grupo recebe bytes; ver modulos\configuracoes\serial_mount.py.
+Push-Location $codigos
+$como = & $python -c "from modulos.configuracoes import serial_mount as c; print('usb' if c.USB_VID and c.USB_PID else ('porta' if c.PORTA_SERIAL else 'nada'))"
+Pop-Location
+if ($como -ne "usb") {
+    Write-Host "ATENCAO: a identidade USB do mount nao esta configurada." -ForegroundColor Yellow
+    if ($como -eq "porta") {
+        Write-Host "  Hoje a parada usa um numero de porta fixo, que o Windows pode trocar."
+    } else {
+        Write-Host "  Sem ela a parada pergunta a identidade em TODAS as portas seriais,"
+        Write-Host "  inclusive as de equipamentos de outros grupos."
+    }
+    Write-Host "  Aparelhos deste PC (so listados, nenhuma porta aberta):`n"
+    & $python -m serial.tools.list_ports -v
+    Write-Host "`n  Copie a linha do mount (VID:PID e SER) para"
+    Write-Host "  modulos\configuracoes\serial_mount_local.py, como no .exemplo.py ao lado,"
+    Write-Host "  e rode este script de novo.`n"
 }
 Write-Host "Codigos : $codigos"
 Write-Host "Python  : $python`n"
@@ -72,32 +84,17 @@ Register-ScheduledTask -TaskName "Parar mount no boot" -Action $acao -Trigger $g
     -Principal $quem -Settings $config -Force | Out-Null
 Write-Host "ok  Parar mount no boot (SYSTEM, serial)"
 
-# 2. Logon, na sessao do usuario, pelo ASCOM.
-$usuario = "$env:USERDOMAIN\$env:USERNAME"
-$acao = New-ScheduledTaskAction -Execute $python -WorkingDirectory $codigos `
-    -Argument "programas_principais\parar_mount.py --aguardar 600"
-$gatilho = New-ScheduledTaskTrigger -AtLogOn -User $usuario
-$quem = New-ScheduledTaskPrincipal -UserId $usuario -LogonType Interactive -RunLevel Limited
-Register-ScheduledTask -TaskName "Parar mount no logon" -Action $acao -Trigger $gatilho `
-    -Principal $quem -Settings $config -Force | Out-Null
-Write-Host "ok  Parar mount no logon ($usuario, ASCOM)"
-
-# 3. Aviso pelo Telegram, so com o token.
-if ($TelegramToken -and $TelegramChat) {
-    $acao = New-ScheduledTaskAction -Execute $python -WorkingDirectory $codigos `
-        -Argument "programas_principais\publicar_estado_pc.py --telegram-token $TelegramToken --telegram-chat $TelegramChat"
-    $gatilho = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 15)
-    # Limited e na sessao do usuario de proposito: como SYSTEM a tarefa nao
-    # enxergaria a ociosidade do teclado.
-    $quem = New-ScheduledTaskPrincipal -UserId $usuario -LogonType Interactive -RunLevel Limited
-    Register-ScheduledTask -TaskName "Publicar estado do PC" -Action $acao -Trigger $gatilho `
-        -Principal $quem -Settings $config -Force | Out-Null
-    Write-Host "ok  Publicar estado do PC (a cada 15 min)"
-} else {
-    Write-Host "--  Publicar estado do PC NAO registrada: faltou -TelegramToken e -TelegramChat"
+# 2. As tarefas antigas, que abriam janela na sessao de quem estivesse logado.
+foreach ($nome in "Parar mount no logon", "Publicar estado do PC") {
+    if (Get-ScheduledTask -TaskName $nome -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $nome -Confirm:$false
+        Write-Host "ok  $nome REMOVIDA"
+    } else {
+        Write-Host "--  $nome nao existia"
+    }
 }
 
-# 4. Tela azul vira reinicio, e o reinicio aciona a tarefa de boot. Sem isto um
+# 3. Tela azul vira reinicio, e o reinicio aciona a tarefa de boot. Sem isto um
 #    travamento com tela azul deixaria o PC parado na tela de erro, e o mount
 #    andando. Costuma vir ligado, mas num PC novo ninguem conferiu.
 $recuperacao = Get-CimInstance Win32_OSRecoveryConfiguration
@@ -107,6 +104,10 @@ if (-not $recuperacao.AutoReboot) {
 } else {
     Write-Host "ok  Reinicio automatico apos tela azul: ja estava ligado"
 }
+
+Write-Host "`nAviso pelo Telegram: agora o tracker o sobe sozinho, sem janela, se as"
+Write-Host "variaveis QKD_TELEGRAM_TOKEN e QKD_TELEGRAM_CHAT existirem. Defina uma vez,"
+Write-Host "num PowerShell COMUM (nao este), com setx; ver publicar_estado_pc.py."
 
 Write-Host "`nConferencia:"
 Get-ScheduledTask -TaskName "Parar mount no boot", "Parar mount no logon", "Publicar estado do PC" `

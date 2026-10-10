@@ -34,6 +34,8 @@ from programas_principais._iniciador import aplicar_camera, perguntar_camera
 
 VIGIA = CODIGOS_DIR / "programas_principais" / "vigia_mount.py"
 VIGIA_LOG = CODIGOS_DIR / "resultados" / "vigia_mount.log"
+AVISO = CODIGOS_DIR / "programas_principais" / "publicar_estado_pc.py"
+AVISO_LOG = CODIGOS_DIR / "resultados" / "estado_pc" / "acompanhante.log"
 # Folga entre a ultima linha de telemetria e o disparo. Os 25 s padrao do vigia
 # podem cair em cima do retorno a posicao inicial, que roda DEPOIS de a
 # telemetria parar: na sessao de 2026-09-15 o retorno levou 2 s, mas precisou de
@@ -105,6 +107,34 @@ def iniciar_vigia() -> subprocess.Popen | None:
         return None
 
 
+def iniciar_aviso_telegram() -> subprocess.Popen | None:
+    """Sobe o aviso pelo Telegram, sem janela, so durante esta sessao.
+
+    Ao contrario do vigia, ele NAO e encerrado no fim: e ele que avisa o fim,
+    e sai sozinho depois de avisar. Por ser outro processo, avisa tambem quando
+    o tracker morre. Sem janela de proposito: ate 2026-10 o aviso era uma
+    tarefa agendada que abria um console a cada 15 min no PC compartilhado da
+    UFF. Token e chat vem das variaveis de ambiente (ver publicar_estado_pc.py).
+    """
+    if not (os.environ.get("QKD_TELEGRAM_TOKEN") and os.environ.get("QKD_TELEGRAM_CHAT")):
+        print("Aviso pelo Telegram desligado: faltam QKD_TELEGRAM_TOKEN e QKD_TELEGRAM_CHAT.")
+        return None
+    try:
+        AVISO_LOG.parent.mkdir(parents=True, exist_ok=True)
+        saida = AVISO_LOG.open("a", encoding="utf-8", buffering=1)
+        return subprocess.Popen(
+            [sys.executable, "-u", str(AVISO), "--acompanhar-sessao"],
+            cwd=str(CODIGOS_DIR), stdout=saida, stderr=subprocess.STDOUT,
+            # Sem console proprio: nao abre janela, e fechar a janela do
+            # tracker no X nao o leva junto.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+        )
+    except Exception as exc:
+        print(f"AVISO: nao consegui iniciar o aviso pelo Telegram ({type(exc).__name__}: {exc}).")
+        return None
+
+
 if __name__ == "__main__":
     args = parse_args()
     escolha = args.camera or perguntar_camera({"1": "asi", "2": "ids", "3": "zwo"}, "1")
@@ -142,6 +172,9 @@ if __name__ == "__main__":
     vigia = iniciar_vigia() if args.vigia else None
     if vigia is not None:
         print(f"Vigia do mount ativo (pid {vigia.pid}), saida em {VIGIA_LOG}.")
+    aviso = iniciar_aviso_telegram()
+    if aviso is not None:
+        print(f"Aviso pelo Telegram ativo (pid {aviso.pid}), saida em {AVISO_LOG}.")
     try:
         main(session_hours=args.horas, executar_autoteste=args.autoteste)
     finally:

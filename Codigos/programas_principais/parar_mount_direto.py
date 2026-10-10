@@ -13,6 +13,10 @@ com a maquina trancada.
 
 Identificado em 2026-09-14: AM5N em COM5 a 9600 baud.
 
+A porta sai da configuracao da maquina, de preferencia pela identidade USB do
+mount: num PC compartilhado, nenhum aparelho de outro grupo recebe bytes. Ver
+modulos/configuracoes/serial_mount.py.
+
 DUAS TRAVAS contra parar o que nao devia:
 
 1. Se houver telemetria sendo escrita, ha uma sessao viva e o programa nao toca
@@ -41,7 +45,6 @@ CODIGOS_DIR = Path(__file__).resolve().parent.parent
 if str(CODIGOS_DIR) not in sys.path:
     sys.path.insert(0, str(CODIGOS_DIR))
 
-PORTA_PADRAO = "COM5"
 BAUD_PADRAO = 9600
 
 from modulos.controle.mount_em_uso import motivo_de_uso
@@ -64,7 +67,7 @@ def anotar(texto: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--porta", default=None,
-                        help="sem isto, descobre qual porta responde")
+                        help="sem isto, a porta configurada na maquina (identidade USB do mount)")
     parser.add_argument("--baud", type=int, default=BAUD_PADRAO)
     parser.add_argument(
         "--aguardar", type=float, default=0.0, metavar="SEGUNDOS",

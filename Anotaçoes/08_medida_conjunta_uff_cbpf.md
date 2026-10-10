@@ -367,7 +367,7 @@ def regime_de_controle(nome, *, px_arcsec, atual, lento, curta) -> RegimeDeContr
 Os braços antigos seguem em pixels, como foram medidos. O A/B de hoje alterna
 o regime em uso (`lento_ganho_baixo`) e o novo, os dois corrigindo:
 
-`Codigos/programas_principais/tracker.py`, linhas 126 a 135
+`Codigos/programas_principais/tracker.py`, linhas 156 a 165
 
 ```python
     if args.ab_janela_curta:

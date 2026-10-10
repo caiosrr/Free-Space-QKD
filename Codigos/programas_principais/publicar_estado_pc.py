@@ -28,8 +28,15 @@ Uso, a partir da pasta Codigos:
 
     # tambem grava os arquivos numa pasta sincronizada
     python programas_principais/publicar_estado_pc.py --saida "G:/Meu Drive/uff"
-Para rodar sozinho, registre como tarefa agendada repetindo a cada 1 minuto.
-As instrucoes ficam no final deste arquivo.
+    # acompanha uma sessao e sai quando ela termina; e assim que o tracker o usa
+    python programas_principais/publicar_estado_pc.py --acompanhar-sessao
+
+O token e o chat tambem podem vir das variaveis QKD_TELEGRAM_TOKEN e
+QKD_TELEGRAM_CHAT. Para o tracker avisar sozinho, defina as duas uma vez, num
+PowerShell comum (sem administrador), e abra um terminal novo:
+
+    setx QKD_TELEGRAM_TOKEN "TOKEN"
+    setx QKD_TELEGRAM_CHAT "ID"
 """
 
 from __future__ import annotations
@@ -42,6 +49,7 @@ import os
 import socket
 import subprocess
 import sys
+import time
 import urllib.parse
 import urllib.request
 from ctypes import wintypes
@@ -49,6 +57,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 CODIGOS_DIR = Path(__file__).resolve().parent.parent
+# Um minuto entre rodadas: o fim da sessao chega ao Telegram em ate ~2,5 min
+# (90 s sem telemetria para declarar parado, mais uma rodada).
+INTERVALO_PADRAO_S = 60.0
+ESPERA_INICIO_S = 20 * 60.0
 # Roda como tarefa agendada, direto pelo caminho do arquivo: sem isto a pasta
 # Codigos nao entra no caminho de importacao e ``modulos`` nao e encontrado.
 if str(CODIGOS_DIR) not in sys.path:
@@ -263,6 +275,11 @@ def main() -> int:
             "compartilhada, avise o pessoal do laboratorio antes de ligar."
         ),
     )
+    parser.add_argument(
+        "--acompanhar-sessao", action="store_true",
+        help="repete a cada --intervalo s e sai quando a sessao do tracker termina",
+    )
+    parser.add_argument("--intervalo", type=float, default=INTERVALO_PADRAO_S)
     args = parser.parse_args()
     if args.testar_telegram:
         if not (args.telegram_token and args.telegram_chat):
@@ -275,18 +292,69 @@ def main() -> int:
         )
         print("Mensagem enviada." if ok else f"NAO enviou: {detalhe}")
         return 0 if ok else 1
+    if args.acompanhar_sessao:
+        return acompanhar(args)
+    publicar(args)
+    return 0
 
+
+def acompanhar(args: argparse.Namespace) -> int:
+    """Acompanha UMA sessao do tracker e sai quando ela termina.
+
+    E o modo que o tracker usa: ele sobe este programa sem janela ao comecar, e
+    este avisa no Telegram o comeco e o fim da gravacao, inclusive o fim por
+    morte do tracker, porque e outro processo e sobrevive a ele. Fora das
+    sessoes nada roda: ate 2026-10 isto era uma tarefa agendada a cada 15 min,
+    que abria uma janela de console no PC compartilhado da UFF.
+
+    Sai depois de AVISAR o fim (se o aviso falhar, insiste a cada rodada), ou se
+    a gravacao nao comecar em ESPERA_INICIO_S. Um segundo acompanhante, de uma
+    sessao reaberta logo depois, ve o arquivo de vida deste e desiste, para o
+    mesmo fim nao ser avisado duas vezes.
+    """
+    pasta = args.saida or (CODIGOS_DIR / "resultados" / "estado_pc")
+    pasta.mkdir(parents=True, exist_ok=True)
+    vida = pasta / ".acompanhante_vivo"
+    if vida.exists() and time.time() - vida.stat().st_mtime < 3 * args.intervalo:
+        print("Outro acompanhante esta ativo; saindo.")
+        return 0
+    inicio = time.monotonic()
+    viu_gravando = False
+    try:
+        while True:
+            vida.write_text(str(os.getpid()), encoding="utf-8")
+            atual, avisado = publicar(args)
+            viu_gravando = viu_gravando or atual == "gravando"
+            if viu_gravando and atual == "parado" and avisado == "parado":
+                return 0
+            if not viu_gravando and time.monotonic() - inicio > ESPERA_INICIO_S:
+                if args.telegram_token and args.telegram_chat:
+                    avisar_telegram(
+                        args.telegram_token, args.telegram_chat,
+                        f"Tracker NAO comecou a gravar em {ESPERA_INICIO_S / 60:.0f} min",
+                    )
+                return 1
+            time.sleep(args.intervalo)
+    finally:
+        vida.unlink(missing_ok=True)
+
+
+def publicar(args: argparse.Namespace) -> tuple[str, str]:
+    """Uma rodada: le o estado, grava os arquivos, avisa se mudou.
+
+    Devolve (estado atual, estado ja avisado). Os dois diferem quando o aviso
+    de uma mudanca falhou e continua pendente.
+    """
     estado = montar(args.incluir_ociosidade)
     # Sem --saida so o Telegram avisa, mas ainda e preciso um lugar para o
     # marcador de estado: sem ele o programa nao sabe o que mudou.
     somente_aviso = args.saida is None
-    if somente_aviso:
-        args.saida = CODIGOS_DIR / "resultados" / "estado_pc"
-    args.saida.mkdir(parents=True, exist_ok=True)
+    saida = CODIGOS_DIR / "resultados" / "estado_pc" if somente_aviso else args.saida
+    saida.mkdir(parents=True, exist_ok=True)
 
     if not somente_aviso:
         # Escrita atomica: um leitor na nuvem nunca pega o arquivo pela metade.
-        destino = args.saida / "estado_pc_uff.json"
+        destino = saida / "estado_pc_uff.json"
         temporario = destino.with_suffix(".json.tmp")
         temporario.write_text(
             json.dumps(estado, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -321,13 +389,13 @@ def main() -> int:
     else:
         linhas.append(f"tracker            : parado ({t.get('motivo', 'ultima sessao encerrada')})")
     if not somente_aviso:
-        (args.saida / "estado_pc_uff.txt").write_text("\n".join(linhas) + "\n", encoding="utf-8")
+        (saida / "estado_pc_uff.txt").write_text("\n".join(linhas) + "\n", encoding="utf-8")
 
     print("\n".join(linhas))
 
     # Avisa apenas quando o estado MUDA. Uma mensagem por minuto viraria ruido
     # e o operador deixaria de ler justamente a que importa.
-    marcador = args.saida / ".ultimo_estado"
+    marcador = saida / ".ultimo_estado"
     anterior = marcador.read_text(encoding="utf-8").strip() if marcador.exists() else ""
     atual = "gravando" if t.get("gravando") else "parado"
 
@@ -367,30 +435,16 @@ def main() -> int:
 
     # Uma linha por execucao. E o unico lugar onde da para descobrir por que um
     # aviso nao chegou, ja que a tarefa agendada joga fora a saida do programa.
-    diario = args.saida / "diario.txt"
+    diario = saida / "diario.txt"
     if diario.exists() and diario.stat().st_size > 1_000_000:
         recentes = diario.read_text(encoding="utf-8").splitlines()[-2000:]
         diario.write_text("\n".join(recentes) + "\n", encoding="utf-8")
     with diario.open("a", encoding="utf-8") as arquivo:
         arquivo.write(f"{estado['momento']}  {nota}\n")
-    return 0
+    avisado = marcador.read_text(encoding="utf-8").strip() if marcador.exists() else ""
+    return atual, avisado
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
 
-
-# ---------------------------------------------------------------------------
-# Para rodar sozinho a cada minuto, no PowerShell da maquina de bancada:
-#
-#   $acao = New-ScheduledTaskAction -Execute "python" `
-#     -Argument 'programas_principais\publicar_estado_pc.py --saida "C:\Users\SEU\Meu Drive\uff"' `
-#     -WorkingDirectory "C:\caminho\para\Free-Space-QKD\Codigos"
-#   $gatilho = New-ScheduledTaskTrigger -Once -At (Get-Date) `
-#     -RepetitionInterval (New-TimeSpan -Minutes 1)
-#   Register-ScheduledTask -TaskName "Publicar estado do PC" -Action $acao `
-#     -Trigger $gatilho -RunLevel Limited
-#
-# RunLevel Limited de proposito: a tarefa precisa rodar na sessao do usuario
-# para enxergar a ociosidade do teclado. Como SYSTEM ela leria sempre zero.
-# ---------------------------------------------------------------------------

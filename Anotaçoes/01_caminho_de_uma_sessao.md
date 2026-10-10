@@ -261,9 +261,10 @@ voltar devagar à posição em que a sessão começou; com o mount sem responder
 tentativa só falha e ele fica parado. O único encerramento sem retorno é o
 beacon sumir por tempo demais, porque aí o movimento seria às cegas.
 
-E, fora do processo, `programas_principais/parar_mount.py`, feito para ser
-tarefa do Windows na inicialização. O `MoveAxis` do ASCOM não tem prazo: se o
-PC morrer no meio de um pulso, o eixo anda até alguém mandar zero.
+E, fora do processo, `programas_principais/parar_mount_direto.py`, registrado
+como tarefa do Windows na inicialização: fala com o mount pela serial, sem
+precisar de login. O `MoveAxis` do ASCOM não tem prazo: se o PC morrer no meio
+de um pulso, o eixo anda até alguém mandar zero.
 
 Todas as proteções, inclusive o vigia externo e a escada de parada, estão lidas
 em detalhe no `06_seguranca_do_mount.md`.
