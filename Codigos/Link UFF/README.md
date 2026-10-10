@@ -19,14 +19,11 @@ uso exclusivo.
 A partir da pasta `Codigos`:
 
 ```powershell
-python .\programas_principais\testar_camera_ids.py
-python .\programas_principais\caracterizar_beacon_ids.py --minutes 10
-python .\programas_principais\centro_de_massa.py --camera ids
 python .\programas_principais\calibracao.py --camera ids --perfil robusto
 python .\programas_principais\tracker.py --camera ids --horas 0.5
 ```
 
-Nos tres ultimos, `--camera ids` substitui a pergunta inicial. Todos tambem
+Nos dois, `--camera ids` substitui a pergunta inicial. Todos tambem
 podem ser abertos e executados pelo botao Play do VS Code, respondendo aos
 prompts.
 

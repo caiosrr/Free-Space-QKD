@@ -1,6 +1,6 @@
 # 06. Segurança do mount
 
-Conferido contra o commit `df03ee4`, em 2026-10-09.
+Conferido contra o commit `4fcdaba`, em 2026-10-10.
 
 Camada 2 da documentação: lê o código de verdade. Para o mapa geral de uma
 sessão, leia antes o `01_caminho_de_uma_sessao.md`. Este documento cobre tudo
@@ -113,7 +113,7 @@ As seções seguem essa ordem.
 A primeira proteção é o próprio laço não mandar nada quando não sabe onde o
 beacon está.
 
-`Codigos/modulos/controle/tracker_loop.py`, linha 69
+`Codigos/modulos/controle/tracker_loop.py`, linha 77
 
 ```python
 SIGNAL_TIMEOUT_S = 0.45
@@ -724,7 +724,7 @@ grava. Até 2026-09-23 isso só valia para a IDS: com a ASI, o tracker gravava a
 telemetria em outra pasta, e numa sessão com ela o vigia nunca teria armado.
 Agora os dois lados leem os caminhos de um lugar só:
 
-`Codigos/modulos/configuracoes/saidas.py`, linhas 35 e 36
+`Codigos/modulos/configuracoes/saidas.py`, linhas 39 e 40
 
 ```python
 TRACKER_SESSOES_DIR = TRACKER_OUTPUT_DIR / "sessoes"

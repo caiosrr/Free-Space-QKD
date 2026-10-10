@@ -1,1 +1,1 @@
-"""Ferramentas, estudos, testes e codigo historico."""
+"""Ferramentas, otimizacao e testes."""

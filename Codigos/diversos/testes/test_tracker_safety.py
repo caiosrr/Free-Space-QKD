@@ -33,7 +33,6 @@ from modulos.controle.tracker_controle import (
 from modulos.controle.tracker_medicao import TemporalFrameEstimator
 from modulos.controle.tracker_telemetria import TrackerCsvLogger
 from modulos.visao import detector_ilhas
-import diversos.legado.calibracao_por_pontos as calibracao
 
 
 class TrackerSafetyTests(unittest.TestCase):
@@ -767,36 +766,6 @@ class TrackerSafetyTests(unittest.TestCase):
             self.assertEqual(summary["event_images_saved"], 1)
             self.assertEqual(summary["event_images_suppressed"], 1)
             self.assertIn("evento_terminal_", summary["terminal_event_frame"])
-
-    def test_multiscale_fit_uses_every_radius(self):
-        expected = np.array([[2000.0, 2500.0], [2600.0, -2000.0]])
-        records = []
-        for radius in (0.004, 0.008, 0.016):
-            for label, sign_az, sign_alt in calibracao.DIRECTIONS:
-                delta_az = radius * sign_az
-                delta_alt = radius * sign_alt
-                pixels = expected @ np.array([delta_az, delta_alt])
-                records.append(
-                    calibracao.RegistroDual(
-                        "fine",
-                        f"{label}@{radius}",
-                        radius,
-                        delta_az,
-                        delta_alt,
-                        0, 0, 1, 1,
-                        0, 0, 1, 1,
-                        pixels[0], pixels[1], 1, 1,
-                        pixels[0], pixels[1],
-                        0, 1, 0.5,
-                    )
-                )
-
-        selected, rejected, excluded = calibracao._prepare_fit_records(records, "fine")
-        self.assertEqual(len(selected), 24)
-        self.assertFalse(rejected)
-        self.assertFalse(excluded)
-        fitted = calibracao._fit_robusto_sem_intercepto(selected, "fine")
-        self.assertTrue(np.allclose(fitted["A"], expected))
 
     def test_return_pid_accepts_a_separate_speed_limit(self):
         parameters = inspect.signature(mount_pid.move_axes_pid_2d).parameters

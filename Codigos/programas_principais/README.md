@@ -5,9 +5,6 @@ arquivos daqui sao iniciadores; a implementacao fica nas pastas internas.
 
 | Programa | Funcao | Move o mount? |
 |---|---|---|
-| `testar_camera_ids.py` | Testa aquisicao, ganho, exposicao e FPS da IDS | Nao |
-| `caracterizar_beacon_ids.py` | Mede posicao, forma e intensidade do beacon ao longo do tempo | Nao |
-| `centro_de_massa.py` | Seleciona a ilha e abre observacao/alinhamento de baixa frequencia | Depende da opcao escolhida |
 | `calibracao.py` | Gera a matriz angular-pixel com ZWO SDK ou IDS | Sim |
 | `tracker.py` | Executa o tracker principal com ASI/ASCOM ou IDS | Sim |
 | `diagnosticar.py` | Mede sinal, SNR, escala e pixels defeituosos | Nao |
@@ -15,7 +12,6 @@ arquivos daqui sao iniciadores; a implementacao fica nas pastas internas.
 Cada programa aceita argumentos e, sem eles, pergunta o que precisa:
 
 ```powershell
-python .\programas_principais\centro_de_massa.py --camera ids
 python .\programas_principais\calibracao.py --camera ids --perfil robusto
 python .\programas_principais\tracker.py --camera ids --horas 0.5 --sem-autoteste
 ```
@@ -47,8 +43,8 @@ Durante a sessao, mudancas bruscas no tamanho, intensidade ou forma da ilha sao
 tratadas como anomalia optica: esses frames nao entram na media e o mount fica
 parado ate a luz permanecer normal por alguns segundos.
 
-Para usar o botao Play, abra o arquivo desejado. `calibracao.py`,
-`centro_de_massa.py` e `tracker.py` perguntam qual camera usar.
+Para usar o botao Play, abra o arquivo desejado. `calibracao.py` e
+`tracker.py` perguntam qual camera usar.
 
 Antes de qualquer programa que mova o telescopio, confirme folga mecanica,
 matriz correta, comunicacao com o mount e acesso a uma parada fisica. `Q`,
