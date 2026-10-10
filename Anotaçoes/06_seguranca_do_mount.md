@@ -1,6 +1,6 @@
 # 06. Segurança do mount
 
-Conferido contra o commit `80b98bc`, em 2026-10-10.
+Conferido contra o commit `06197f6`, em 2026-10-12.
 
 Camada 2 da documentação: lê o código de verdade. Para o mapa geral de uma
 sessão, leia antes o `01_caminho_de_uma_sessao.md`. Este documento cobre tudo
