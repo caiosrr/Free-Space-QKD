@@ -1,6 +1,6 @@
 # 07. Holograma de fase no DMD
 
-Conferido contra o commit `4fcdaba`, em 2026-10-10.
+Conferido contra o commit `88edd17`, em 2026-10-10.
 
 Camada 2 da documentação. Cobre `modulos/dmd/holograma.py`, a física, e
 `diversos/ferramentas/dmd_holograma.py`, o programa de bancada. A base teórica
@@ -288,7 +288,7 @@ congelado" de Taylor), é só ler outra janela dela:
 O espectro cresce como $r_0^{-5/3}$, então a fase cresce como $r_0^{-5/6}$. O
 programa gera a tela uma vez, com $r_0 = 1$ px, e só multiplica:
 
-`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 152 a 166
+`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 207 a 221
 
 ```python
     fase = np.zeros_like(x)
@@ -357,7 +357,7 @@ inclinação a cada quadro.
 O holograma é desenhado só dentro de uma **abertura** circular, que você
 centra no feixe. Fora dela o DMD fica preto:
 
-`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 186 a 189
+`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 266 a 269
 
 ```python
     mascara = x * x + y * y <= r * r
@@ -394,7 +394,7 @@ espera). Na câmera, o padrão levava mais de 1 s para se renovar (roteiro,
 "Primeira turbulência na bancada"). Agora a tela anda em px/s, medidos pelo
 relógio, e a espera caiu para 1 ms:
 
-`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 386 a 395
+`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 503 a 512
 
 ```python
             tecla = cv2.waitKeyEx(1 if estado.vento else 0)
@@ -456,7 +456,7 @@ Achar o centro, o raio, o período e o ângulo que funcionam leva tempo, e na
 primeira sessão (2026-10-01) eles se perderam ao fechar o programa. Agora, ao
 sair, o programa imprime o comando que volta a eles:
 
-`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 406 a 410
+`Codigos/diversos/ferramentas/dmd_holograma.py`, linhas 523 a 527
 
 ```python
         # O alinhamento custa caro: sai impresso o comando que volta a ele.
@@ -474,6 +474,24 @@ A configuração que mostrou a ordem +1 e o anel do OAM em 2026-10-01:
 
 As opções `--raio`, `--periodo` e `--angulo` **ainda não rodaram na bancada**;
 foram conferidas só pelo `--help` e pelos testes.
+
+### Telas simples
+
+Desde 2026-10-10 o programa traz também as telas do antigo `dmd_basico.py`,
+para achar o feixe e medir a sequência de cores (seção 8): `m` metade, `r`
+retângulo, `e` listras, `q` cores puras, `y` candidatos a branco em YCbCr, e
+`u` inverte. O mapa completo de teclas está no docstring do programa. A
+inversão vale só para essas telas:
+
+`Codigos/diversos/ferramentas/dmd_holograma.py`, linha 248
+
+```python
+    return 255 - img if estado.invertido else img
+```
+
+Num holograma, inverter acenderia o DMD inteiro fora da abertura. Os quadros
+conferem pixel a pixel com os do programa antigo, em simulação; **a forma
+fundida nunca rodou no DMD**.
 
 > Revisado por Caio: ainda não
 
