@@ -2,7 +2,7 @@
 
 O app do Zotero no tablet abre PDF, mas nao Markdown. Este programa converte os
 documentos numerados de Anotacoes/ (01_, 02_, ...) com pandoc e XeLaTeX, e grava
-em Arquivos/estudo/, que fica fora do git.
+em Mestrado/Arquivos/estudo/, fora do repositorio.
 
 Cada PDF e uma FOTOGRAFIA do documento: o topo diz contra qual commit ele foi
 conferido. Quando um documento muda, gere de novo e substitua o anexo no
@@ -25,7 +25,7 @@ from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[3]
 ANOTACOES = RAIZ / "Anotaçoes"
-SAIDA = RAIZ / "Arquivos" / "estudo"
+SAIDA = RAIZ.parent / "Arquivos" / "estudo"  # Mestrado/Arquivos, fora do repositorio
 
 # Fontes do Windows, com os simbolos que os documentos usam (graus, segundos de
 # arco, letras gregas). A fonte padrao do LaTeX nao tem varios deles.

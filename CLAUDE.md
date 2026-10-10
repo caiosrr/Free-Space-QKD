@@ -40,7 +40,7 @@ Regras:
 8. **Depois de mudar um documento, gere o PDF de novo** com
    `python diversos/ferramentas/gerar_pdf_estudo.py`, a partir de `Codigos`. O
    Caio lê e anota os documentos no tablet, pelo Zotero, e o app só abre PDF.
-   Os PDFs ficam em `Arquivos/estudo/`, fora do git.
+   Os PDFs ficam em `Mestrado/Arquivos/estudo/`, fora do repositório.
 
 ## Segurança do mount: regras fixas
 

@@ -96,7 +96,7 @@ tentar acompanhar. Esses numeros justificam a janela inicial de `2 s`, mas sao
 de uma unica noite e precisam ser comparados com outras condicoes.
 
 A analise completa e os graficos estao em
-`Arquivos/beacon_8h_2026-08-25/beacon_2026-08-25_21-59-27/analise/`.
+`Mestrado/Dados/1_principais/beacon_8h_2026-08-25/beacon_2026-08-25_21-59-27/analise/`.
 
 ### Calibracao atual
 

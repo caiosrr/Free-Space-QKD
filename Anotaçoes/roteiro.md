@@ -159,7 +159,7 @@ estimativa lenta, não substituir toda a medição de 2 s por uma média muito
 atrasada.
 
 A análise sombra da sessão de 6 h fica em
-`Arquivos/Tracker 6h 2026-08-26/Controle zero sombra/`. Ela identifica onde o
+`Mestrado/Arquivos/Tracker 6h 2026-08-26/Controle zero sombra/`. Ela identifica onde o
 erro lento permaneceu deslocado, mas não prevê quantos comandos seriam enviados:
 uma correção real alteraria todas as medições posteriores.
 
@@ -1349,7 +1349,7 @@ Mount parado. Na UFF, `observar_sem_corrigir.py` com a IDS (a lâmpada do CBPF);
 no CBPF, `registrar_cbpf.py` com a DMK (o laser de 637 nm da UFF), sem power
 meter. Relógios a menos de 0,6 s um do outro (medido pelo cabeçalho de hora de
 um servidor HTTPS, antes do início). Figura:
-`Arquivos/analises/noite_2026-09-30_uff_cbpf.png`, fora do git.
+`Mestrado/Arquivos/analises/noite_2026-09-30_uff_cbpf.png`, fora do git.
 
 **A elevação aparente da lâmpada, vista da UFF, variou 28″** (de +3″ a −25″ em
 torno da mediana, pior às 00:54), e a horizontal menos de 1,5″. Movimento só na
@@ -1490,7 +1490,7 @@ para acoplar no CBPF.
 limiar 1″, ganho 0,35), 22:34 a 05:19, com o registrador do CBPF e o power
 meter. Relógios a menos de 0,5 s um do outro no início e no fim. Alvo presente
 em 99,8 % do tempo, retorno à posição inicial confirmado. Figura:
-`Arquivos/analises/noite_2026-10-01_blocos.png`.
+`Mestrado/Arquivos/analises/noite_2026-10-01_blocos.png`.
 
 **O tracker reduz o erro de apontamento.** Erro radial (média temporal de 2 s,
 em arcsec, sem os 2 primeiros minutos de cada bloco): nos blocos sem correção
