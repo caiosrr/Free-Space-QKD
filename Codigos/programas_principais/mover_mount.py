@@ -35,8 +35,9 @@ regra do CLAUDE.md ("pede confirmacao digitada antes do primeiro movimento"),
 decidida pelo Caio em 2026-10-10 para reposicionar varias vezes seguidas na
 bancada. Nao remover sem perguntar. Sem ``--sim``, a confirmacao e pedida.
 
-**A forma fundida nunca rodou em hardware.** O primeiro teste e com o Caio ao
-lado.
+**Em hardware:** o ``--para`` rodou em 2026-10-13 na UFF, de volta a direcao do
+CBPF depois de ~25" de afastamento, e parou a 1" do alvo nos dois eixos (lido
+no app do mount). O ``--delta`` da forma fundida ainda nunca rodou.
 
 Uso, a partir da pasta Codigos, com o servidor ASCOM aberto:
 
